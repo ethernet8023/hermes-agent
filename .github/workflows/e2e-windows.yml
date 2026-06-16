@@ -178,6 +178,8 @@ jobs:
           # Start ffmpeg with stdin redirected so the teardown step can send 'q'
           # and let it finalize the container cleanly. Killing ffmpeg outright
           # leaves MP4/MKV files unplayable because the header is never written.
+          # PowerShell's -RedirectStandardInput requires the file to exist first.
+          New-Item -ItemType File -Path "$PWD\ffmpeg.stdin" -Force | Out-Null
           $ffmpeg = Start-Process ffmpeg -ArgumentList "-y -f gdigrab -framerate 15 -i desktop -c:v libx264 -preset ultrafast recording.mkv" `
             -RedirectStandardInput ffmpeg.stdin `
             -RedirectStandardOutput ffmpeg.log `

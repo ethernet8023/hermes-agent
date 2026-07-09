@@ -203,8 +203,6 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
   }
 
   const visibleSystemTools = systemTools.filter(tool => !tool.hidden)
-  const settingsTool = visibleSystemTools.find(tool => tool.id === 'settings')
-  const visibleSystemToolsBeforeSettings = visibleSystemTools.filter(tool => tool.id !== 'settings')
   const visiblePaneTools = tools.filter(tool => !tool.hidden)
 
   return (
@@ -243,10 +241,9 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
         aria-label={t.shell.appControls}
         className="fixed right-(--titlebar-tools-right) top-(--titlebar-controls-top) z-70 flex flex-row items-center justify-end gap-x-1 pointer-events-auto select-none [-webkit-app-region:no-drag]"
       >
-        {visibleSystemToolsBeforeSettings.map(tool => (
+        {visibleSystemTools.map(tool => (
           <TitlebarToolButton key={tool.id} navigate={navigate} tool={tool} />
         ))}
-        {settingsTool && <TitlebarToolButton navigate={navigate} tool={settingsTool} />}
         <TitlebarToolButton navigate={navigate} tool={rightSidebarTool} />
       </div>
     </>

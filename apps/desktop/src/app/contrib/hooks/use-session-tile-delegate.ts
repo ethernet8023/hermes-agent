@@ -43,9 +43,10 @@ export function useSessionTileDelegate({
       },
       resumeTile: async storedSessionId => {
         const existing = runtimeIdByStoredSessionIdRef.current.get(storedSessionId)
+        const cached = existing ? sessionStateByRuntimeIdRef.current.get(existing) : undefined
 
-        if (existing && sessionStateByRuntimeIdRef.current.get(existing)?.storedSessionId === storedSessionId) {
-          publishSessionState(existing, sessionStateByRuntimeIdRef.current.get(existing)!)
+        if (existing && cached?.storedSessionId === storedSessionId) {
+          publishSessionState(existing, cached)
 
           return existing
         }
@@ -67,9 +68,7 @@ export function useSessionTileDelegate({
             ...state,
             busy: Boolean(resumed?.info?.running),
             messages:
-              state.messages.length > 0
-                ? state.messages
-                : toChatMessages(prefetch?.messages ?? resumed?.messages ?? [])
+              state.messages.length > 0 ? state.messages : toChatMessages(prefetch?.messages ?? resumed?.messages ?? [])
           }),
           storedSessionId
         )
@@ -81,5 +80,11 @@ export function useSessionTileDelegate({
       },
       updateSession: (runtimeId, updater) => updateSessionState(runtimeId, updater)
     })
-  }, [executeSlashCommand, requestGateway, runtimeIdByStoredSessionIdRef, sessionStateByRuntimeIdRef, updateSessionState])
+  }, [
+    executeSlashCommand,
+    requestGateway,
+    runtimeIdByStoredSessionIdRef,
+    sessionStateByRuntimeIdRef,
+    updateSessionState
+  ])
 }

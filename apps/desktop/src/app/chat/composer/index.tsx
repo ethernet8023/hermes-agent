@@ -217,8 +217,6 @@ export function ChatBar({
   // into a tool result) and never for a slash command (those execute inline).
   const canSteer = busy && !!onSteer && attachments.length === 0 && isSteerableText
 
-  const showHelpHint = isHelpHint
-
   // The submit engine — the orchestration seam where draft + queue meet. Owns
   // the submit decision tree, the send-with-restore primitive, and steer.
   const { steerDraft, submitDraft } = useComposerSubmit({
@@ -865,7 +863,7 @@ export function ChatBar({
               : undefined
           }
         >
-          {showHelpHint && <HelpHint />}
+          {isHelpHint && <HelpHint />}
           {trigger && !argStageEmpty && (
             <ComposerTriggerPopover
               activeIndex={triggerActive}

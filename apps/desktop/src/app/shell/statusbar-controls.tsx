@@ -109,7 +109,7 @@ function StatusbarItemView({ item, navigate }: { item: StatusbarItem; navigate: 
     </>
   )
 
-  if (item.variant === 'menu' && (item.menuContent || (item.menuItems && item.menuItems.length > 0))) {
+  if (item.variant === 'menu' && (item.menuContent || !!item.menuItems?.length)) {
     // The `Tip` helper can't wrap a menu: its TooltipTrigger needs a DOM child,
     // but DropdownMenu's Root renders no element, so the hover listeners never
     // land on the button and the tooltip silently never shows. Compose the two

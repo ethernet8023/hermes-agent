@@ -1,4 +1,4 @@
-import { atom, computed, type ReadableAtom } from 'nanostores'
+import { atom, computed, type ReadableAtom, type WritableAtom } from 'nanostores'
 
 import { Codecs, persistentAtom } from '@/lib/persisted'
 import { arraysEqual, insertUniqueId } from '@/lib/storage'
@@ -248,10 +248,16 @@ export function setSidebarAgentsGrouped(grouped: boolean) {
   $sidebarAgentsGrouped.set(grouped)
 }
 
-export function setSidebarSessionOrderIds(ids: string[]) {
-  if (!arraysEqual($sidebarSessionOrderIds.get(), ids)) {
-    $sidebarSessionOrderIds.set(ids)
+// Write an order list only when it actually changed, so an identical drag
+// result keeps the same array reference and subscribers don't churn.
+function setOrderIds($atom: WritableAtom<string[]>, ids: string[]) {
+  if (!arraysEqual($atom.get(), ids)) {
+    $atom.set(ids)
   }
+}
+
+export function setSidebarSessionOrderIds(ids: string[]) {
+  setOrderIds($sidebarSessionOrderIds, ids)
 }
 
 export function setSidebarSessionOrderManual(manual: boolean) {
@@ -261,21 +267,15 @@ export function setSidebarSessionOrderManual(manual: boolean) {
 }
 
 export function setSidebarWorkspaceOrderIds(ids: string[]) {
-  if (!arraysEqual($sidebarWorkspaceOrderIds.get(), ids)) {
-    $sidebarWorkspaceOrderIds.set(ids)
-  }
+  setOrderIds($sidebarWorkspaceOrderIds, ids)
 }
 
 export function setSidebarWorkspaceParentOrderIds(ids: string[]) {
-  if (!arraysEqual($sidebarWorkspaceParentOrderIds.get(), ids)) {
-    $sidebarWorkspaceParentOrderIds.set(ids)
-  }
+  setOrderIds($sidebarWorkspaceParentOrderIds, ids)
 }
 
 export function setSidebarProjectOrderIds(ids: string[]) {
-  if (!arraysEqual($sidebarProjectOrderIds.get(), ids)) {
-    $sidebarProjectOrderIds.set(ids)
-  }
+  setOrderIds($sidebarProjectOrderIds, ids)
 }
 
 export function setSidebarResizing(resizing: boolean) {
@@ -284,20 +284,15 @@ export function setSidebarResizing(resizing: boolean) {
 
 export function pinSession(sessionId: string, index?: number) {
   const prev = $pinnedSessionIds.get()
-  const next = insertUniqueId(prev, sessionId, index ?? prev.filter(id => id !== sessionId).length)
 
-  if (!arraysEqual(prev, next)) {
-    $pinnedSessionIds.set(next)
-  }
+  setOrderIds($pinnedSessionIds, insertUniqueId(prev, sessionId, index ?? prev.filter(id => id !== sessionId).length))
 }
 
 export function unpinSession(sessionId: string) {
-  const prev = $pinnedSessionIds.get()
-  const next = prev.filter(id => id !== sessionId)
-
-  if (!arraysEqual(prev, next)) {
-    $pinnedSessionIds.set(next)
-  }
+  setOrderIds(
+    $pinnedSessionIds,
+    $pinnedSessionIds.get().filter(id => id !== sessionId)
+  )
 }
 
 // Replace the whole pinned order at once (drag-reorder hands back the new order

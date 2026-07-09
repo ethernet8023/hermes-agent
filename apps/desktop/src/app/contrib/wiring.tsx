@@ -10,16 +10,7 @@
 
 import { useStore } from '@nanostores/react'
 import { useQueryClient } from '@tanstack/react-query'
-import {
-  type CSSProperties,
-  lazy,
-  type ReactNode,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef
-} from 'react'
+import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { formatRefValue } from '@/components/assistant-ui/directive-text'
@@ -32,12 +23,7 @@ import { FloatingPet } from '@/components/pet/floating-pet'
 import { RemoteDisplayBanner } from '@/components/remote-display-banner'
 import { emitGatewayEvent } from '@/contrib/events'
 import { getSessionMessages, triggerCronJob } from '@/hermes'
-import {
-  type ChatMessage,
-  chatMessageText,
-  preserveLocalAssistantErrors,
-  toChatMessages
-} from '@/lib/chat-messages'
+import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
 import { sessionMessagesSignature } from '@/lib/session-signatures'
 import { isMessagingSource } from '@/lib/session-source'
 import { latestSessionTodos } from '@/lib/todos'
@@ -83,12 +69,7 @@ import { PetGenerateOverlay } from '../pet-generate/pet-generate-overlay'
 import { FileActionDialogs } from '../right-sidebar/file-actions'
 import { RemoteFolderPicker } from '../right-sidebar/files/remote-picker'
 import { PersistentTerminal } from '../right-sidebar/terminal/persistent'
-import {
-  CRON_ROUTE,
-  routeSessionId,
-  sessionRoute,
-  SETTINGS_ROUTE
-} from '../routes'
+import { CRON_ROUTE, routeSessionId, sessionRoute, SETTINGS_ROUTE } from '../routes'
 import { SessionPickerOverlay } from '../session-picker-overlay'
 import { SessionSwitcher } from '../session-switcher'
 import { useContextSuggestions } from '../session/hooks/use-context-suggestions'
@@ -127,13 +108,6 @@ const CronView = lazy(async () => ({ default: (await import('../cron')).CronView
 const ProfilesView = lazy(async () => ({ default: (await import('../profiles')).ProfilesView }))
 const SettingsView = lazy(async () => ({ default: (await import('../settings')).SettingsView }))
 const StarmapView = lazy(async () => ({ default: (await import('../starmap')).StarmapView }))
-
-// Cron sessions are written by a background scheduler tick, messaging turns by
-// the background gateway (Telegram, WeChat, Discord, …) — neither signals the
-// desktop websocket, so poll the bounded lists while the app is visible.
-const CRON_POLL_INTERVAL_MS = 30_000
-const MESSAGING_POLL_INTERVAL_MS = 10_000
-const ACTIVE_MESSAGING_SESSION_POLL_INTERVAL_MS = 5_000
 
 function sessionMatchesStoredId(session: { id: string; _lineage_root_id?: null | string }, id: string): boolean {
   return session.id === id || session._lineage_root_id === id
@@ -266,9 +240,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
         return
       }
 
-      const storedProfile = $sessions
-        .get()
-        .find(session => session.id === storedSessionId || session._lineage_root_id === storedSessionId)?.profile
+      const storedProfile = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))?.profile
 
       for (let index = 0; index < Math.max(1, attempts); index += 1) {
         try {
@@ -673,7 +645,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       return
     }
 
-    const session = $sessions.get().find(s => s.id === sessionId || s._lineage_root_id === sessionId)
+    const session = $sessions.get().find(s => sessionMatchesStoredId(s, sessionId))
     const pinId = session ? sessionPinId(session) : sessionId
 
     if ($pinnedSessionIds.get().includes(pinId)) {
@@ -764,12 +736,21 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   // surface's own atom subscriptions. A wiring tick that doesn't touch a
   // node's keys leaves its element reference intact, so `WiredPane` (memoized)
   // bails on that pane subtree — panes render independently of one another.
-  const sidebarNode = useMemo(() => <SidebarSurface actions={actions} currentView={currentView} />, [actions, currentView])
+  const sidebarNode = useMemo(
+    () => <SidebarSurface actions={actions} currentView={currentView} />,
+    [actions, currentView]
+  )
+
   const terminalNode = useMemo(() => <TerminalSurface />, [])
 
   const statusbarNode = useMemo(
     () => (
-      <StatusbarSurface actions={actions} agentsOpen={agentsOpen} chatOpen={chatOpen} commandCenterOpen={commandCenterOpen} />
+      <StatusbarSurface
+        actions={actions}
+        agentsOpen={agentsOpen}
+        chatOpen={chatOpen}
+        commandCenterOpen={commandCenterOpen}
+      />
     ),
     [actions, agentsOpen, chatOpen, commandCenterOpen]
   )
@@ -920,7 +901,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
       {cronOpen && (
         <Suspense fallback={null}>
-          <CronView onClose={closeOverlayToPreviousRoute} onOpenSession={sessionId => navigate(sessionRoute(sessionId))} />
+          <CronView
+            onClose={closeOverlayToPreviousRoute}
+            onOpenSession={sessionId => navigate(sessionRoute(sessionId))}
+          />
         </Suspense>
       )}
 

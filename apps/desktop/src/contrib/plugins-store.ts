@@ -73,14 +73,17 @@ function saveDecisions(next: Record<string, boolean>) {
 
 export const $pluginRecords = atom<Record<string, PluginRecord>>({})
 
+/** Loader-owned lifecycle controls for a plugin (activate/deactivate). */
+interface PluginHandle {
+  activate: () => Promise<void> | void
+  deactivate: () => void
+}
+
 /** Loader-owned lifecycle handles, keyed by plugin id. */
-const handles = new Map<string, { activate: () => Promise<void> | void; deactivate: () => void }>()
+const handles = new Map<string, PluginHandle>()
 
 /** Publish/refresh a plugin's record + its activate/deactivate handles. */
-export function publishPlugin(
-  record: PluginRecord,
-  handle?: { activate: () => Promise<void> | void; deactivate: () => void }
-): void {
+export function publishPlugin(record: PluginRecord, handle?: PluginHandle): void {
   $pluginRecords.set({ ...$pluginRecords.get(), [record.id]: record })
 
   if (handle) {

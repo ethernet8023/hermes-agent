@@ -92,7 +92,9 @@ export const $layoutTree = atom<LayoutNode | null>(loadPersisted())
  * rearranges anything. Drives the picker's active highlight.
  */
 export const $activePresetId = atom<string>(
-  typeof window === 'undefined' ? 'default' : (window.localStorage.getItem('hermes.desktop.layoutPreset.active') ?? 'default')
+  typeof window === 'undefined'
+    ? 'default'
+    : (window.localStorage.getItem('hermes.desktop.layoutPreset.active') ?? 'default')
 )
 
 export function markActivePreset(id: string) {
@@ -116,19 +118,29 @@ export const $treeDragging = atom<string | null>(null)
  */
 export const $hiddenTreePanes = atom<ReadonlySet<string>>(new Set())
 
-export function setTreePaneHidden(paneId: string, hidden: boolean) {
-  const current = $hiddenTreePanes.get()
-
-  if (current.has(paneId) === hidden) {
-    return
+/** Add/remove `item` in a readonly set, returning a fresh set — or null when
+ *  membership already matches `present` (so callers can early-out on a no-op). */
+function toggledSet<T>(set: ReadonlySet<T>, item: T, present: boolean): Set<T> | null {
+  if (set.has(item) === present) {
+    return null
   }
 
-  const next = new Set(current)
+  const next = new Set(set)
 
-  if (hidden) {
-    next.add(paneId)
+  if (present) {
+    next.add(item)
   } else {
-    next.delete(paneId)
+    next.delete(item)
+  }
+
+  return next
+}
+
+export function setTreePaneHidden(paneId: string, hidden: boolean) {
+  const next = toggledSet($hiddenTreePanes.get(), paneId, hidden)
+
+  if (!next) {
+    return
   }
 
   $hiddenTreePanes.set(next)
@@ -177,21 +189,11 @@ function saveDismissed(next: ReadonlySet<string>) {
 }
 
 function setDismissed(paneId: string, dismissed: boolean) {
-  const current = $dismissedPanes.get()
+  const next = toggledSet($dismissedPanes.get(), paneId, dismissed)
 
-  if (current.has(paneId) === dismissed) {
-    return
+  if (next) {
+    saveDismissed(next)
   }
-
-  const next = new Set(current)
-
-  if (dismissed) {
-    next.add(paneId)
-  } else {
-    next.delete(paneId)
-  }
-
-  saveDismissed(next)
 }
 
 const paneClosers: Record<string, () => void> = {}
@@ -277,21 +279,11 @@ export const $collapsedTreeSides = atom<ReadonlySet<TreeSide>>(new Set())
 const sideOpeners: Partial<Record<TreeSide, (open: boolean) => void>> = {}
 
 export function setTreeSideCollapsed(side: TreeSide, collapsed: boolean) {
-  const current = $collapsedTreeSides.get()
+  const next = toggledSet($collapsedTreeSides.get(), side, collapsed)
 
-  if (current.has(side) === collapsed) {
-    return
+  if (next) {
+    $collapsedTreeSides.set(next)
   }
-
-  const next = new Set(current)
-
-  if (collapsed) {
-    next.add(side)
-  } else {
-    next.delete(side)
-  }
-
-  $collapsedTreeSides.set(next)
 }
 
 /** Bind a side's visibility to an app store (mirror of bindPaneVisibility). */
@@ -486,7 +478,10 @@ function adoptContributedPanes(): void {
   }
 
   const panes = registry.getArea('panes')
-  const dataOf = (paneId: string) => panes.find(c => c.id === paneId)?.data as { placement?: string; dock?: PaneDockHint } | undefined
+
+  const dataOf = (paneId: string) =>
+    panes.find(c => c.id === paneId)?.data as { placement?: string; dock?: PaneDockHint } | undefined
+
   const placementOf = (paneId: string) => dataOf(paneId)?.placement
   const mainId = panes.find(c => placementOf(c.id) === 'main')?.id
   const inTree = new Set(allPaneIds(tree))

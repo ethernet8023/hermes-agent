@@ -1,5 +1,3 @@
-import type { Contribution } from '../types'
-
 import { ContribBoundary } from './boundary'
 import { useContributions } from './use-contributions'
 
@@ -18,7 +16,7 @@ export function Slot({ area }: SlotProps) {
 
   return (
     <>
-      {items.map((c: Contribution) => (
+      {items.map(c => (
         <ContribBoundary id={c.id} key={`${c.source ?? 'core'}:${c.id}`} variant="chip">
           {c.render?.()}
         </ContribBoundary>

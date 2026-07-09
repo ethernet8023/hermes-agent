@@ -17,7 +17,14 @@ import { ContribBoundary } from '@/contrib/react/boundary'
 import { useContributions } from '@/contrib/react/use-contributions'
 import { sessionTitle as storedSessionTitle } from '@/lib/chat-runtime'
 import { $pinnedSessionIds } from '@/store/layout'
-import { $activeSessionId, $freshDraftReady, $gatewayState, $selectedStoredSessionId, $sessions, sessionPinId } from '@/store/session'
+import {
+  $activeSessionId,
+  $freshDraftReady,
+  $gatewayState,
+  $selectedStoredSessionId,
+  $sessions,
+  sessionPinId
+} from '@/store/session'
 
 import { ChatView } from '../chat'
 import { ChatSidebar } from '../chat/sidebar'
@@ -70,11 +77,8 @@ function SessionTitleDropdown({
   const title = stored ? storedSessionTitle(stored) : 'New session'
 
   // Pins live on the durable lineage-root id (survives auto-compression).
-  const pinned = stored
-    ? pinnedSessionIds.includes(sessionPinId(stored))
-    : selectedStoredSessionId
-      ? pinnedSessionIds.includes(selectedStoredSessionId)
-      : false
+  const pinId = stored ? sessionPinId(stored) : selectedStoredSessionId
+  const pinned = pinId ? pinnedSessionIds.includes(pinId) : false
 
   // A brand-new draft has nothing to rename/pin/delete.
   if (!selectedStoredSessionId && !activeSessionId && !isRoutedSessionView) {

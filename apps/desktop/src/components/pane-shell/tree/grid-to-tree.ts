@@ -12,17 +12,10 @@ import { modelToZones } from './grid-model'
 import { group, type LayoutNode, normalize, split } from './model'
 
 function cutCandidates(zones: GridZone[], axis: 'x' | 'y'): number[] {
-  const coords = new Set<number>()
-
-  for (const zone of zones) {
-    coords.add(axis === 'x' ? zone.left : zone.top)
-    coords.add(axis === 'x' ? zone.right : zone.bottom)
-  }
-
-  const sorted = [...coords].sort((a, b) => a - b)
+  const coords = new Set(zones.flatMap(z => (axis === 'x' ? [z.left, z.right] : [z.top, z.bottom])))
 
   // Interior lines only.
-  return sorted.slice(1, -1)
+  return [...coords].sort((a, b) => a - b).slice(1, -1)
 }
 
 function isValidCut(zones: GridZone[], axis: 'x' | 'y', at: number): boolean {
@@ -56,7 +49,10 @@ function cut(zones: GridZone[], assignPane: (zoneIndex: number) => string[]): La
     for (let i = 0; i < lines.length - 1; i++) {
       const lo = lines[i]
       const hi = lines[i + 1]
-      const slice = zones.filter(zone => (axis === 'x' ? zone.left >= lo && zone.right <= hi : zone.top >= lo && zone.bottom <= hi))
+
+      const slice = zones.filter(zone =>
+        axis === 'x' ? zone.left >= lo && zone.right <= hi : zone.top >= lo && zone.bottom <= hi
+      )
 
       if (slice.length === 0) {
         continue

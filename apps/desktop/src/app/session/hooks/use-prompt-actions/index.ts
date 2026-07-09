@@ -396,6 +396,13 @@ export function usePromptActions({
         return { error: inlineErrorMessage(err, copy.handoff.failed(target)), ok: false }
       }
 
+      const markCompleted = (): HandoffResult => {
+        appendSessionTextMessage(sid, 'system', copy.handoff.systemNote(target))
+        notify({ kind: 'success', message: copy.handoff.success(target) })
+
+        return { ok: true }
+      }
+
       const deadline = Date.now() + 60_000
       let lastState = 'pending'
 
@@ -418,10 +425,7 @@ export function usePromptActions({
         }
 
         if (state === 'completed') {
-          appendSessionTextMessage(sid, 'system', copy.handoff.systemNote(target))
-          notify({ kind: 'success', message: copy.handoff.success(target) })
-
-          return { ok: true }
+          return markCompleted()
         }
 
         if (state === 'failed') {
@@ -435,10 +439,7 @@ export function usePromptActions({
       }).catch(() => null)
 
       if (cleanup?.state === 'completed') {
-        appendSessionTextMessage(sid, 'system', copy.handoff.systemNote(target))
-        notify({ kind: 'success', message: copy.handoff.success(target) })
-
-        return { ok: true }
+        return markCompleted()
       }
 
       return { error: copy.handoff.timedOut, ok: false }

@@ -723,15 +723,17 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
       return
     }
 
+    const next = withEnabled(servers[serverName], enabled)
+
     try {
-      if (!(await persist({ ...servers, [serverName]: withEnabled(servers[serverName], enabled) }))) {
+      if (!(await persist({ ...servers, [serverName]: next }))) {
         return
       }
 
       if (dirty) {
         patchDraft(doc => (doc[serverName] ? { ...doc, [serverName]: withEnabled(doc[serverName], enabled) } : doc))
       } else {
-        resetDraft({ ...servers, [serverName]: withEnabled(servers[serverName], enabled) })
+        resetDraft({ ...servers, [serverName]: next })
       }
 
       if (enabled) {

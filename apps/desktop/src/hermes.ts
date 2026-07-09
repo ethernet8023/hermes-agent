@@ -205,6 +205,20 @@ export interface PluginRestOptions {
   timeoutMs?: number
 }
 
+// Normalize `path` to a leading-slash suffix relative to `/api/plugins/<id>`.
+// The namespace is the boundary — reject `..` so a relative segment can't
+// normalize out into another plugin's API or a core route. Check the path
+// portion only (before any query/hash).
+function pluginPathSuffix(caller: string, path: string): string {
+  const suffix = path.startsWith('/') ? path : `/${path}`
+
+  if (suffix.split(/[?#]/, 1)[0].split('/').includes('..')) {
+    throw new Error(`${caller}: illegal path traversal in "${path}"`)
+  }
+
+  return suffix
+}
+
 /** The plugin REST door. Every call is scoped BY CONSTRUCTION to the plugin's
  *  own backend namespace — `path` is relative to `/api/plugins/<pluginId>`
  *  ('/board' → `/api/plugins/kanban/board`), so a plugin can't address another
@@ -216,14 +230,7 @@ export async function pluginRest<T>(pluginId: string, path: string, opts: Plugin
     throw new Error('Hermes desktop bridge unavailable')
   }
 
-  // The namespace is the boundary — reject `..` so a relative segment can't
-  // normalize out of `/api/plugins/<id>` into another plugin's API or a core
-  // route. Check the path portion only (before any query/hash).
-  const suffix = path.startsWith('/') ? path : `/${path}`
-
-  if (suffix.split(/[?#]/, 1)[0].split('/').includes('..')) {
-    throw new Error(`pluginRest: illegal path traversal in "${path}"`)
-  }
+  const suffix = pluginPathSuffix('pluginRest', path)
 
   return window.hermesDesktop.api<T>({
     path: `/api/plugins/${pluginId}${suffix}`,
@@ -241,16 +248,8 @@ export async function pluginRest<T>(pluginId: string, path: string, opts: Plugin
  *  credential the app's own sockets use; OAuth remotes resolve null (callers
  *  keep their polling fallback — every consumer must have one anyway, since a
  *  socket can drop). Auto-reconnects with backoff until disposed. */
-export function pluginSocket(
-  pluginId: string,
-  path: string,
-  onMessage: (data: unknown) => void
-): () => void {
-  const suffix = path.startsWith('/') ? path : `/${path}`
-
-  if (suffix.split(/[?#]/, 1)[0].split('/').includes('..')) {
-    throw new Error(`pluginSocket: illegal path traversal in "${path}"`)
-  }
+export function pluginSocket(pluginId: string, path: string, onMessage: (data: unknown) => void): () => void {
+  const suffix = pluginPathSuffix('pluginSocket', path)
 
   let socket: null | WebSocket = null
   let disposed = false
@@ -267,7 +266,9 @@ export function pluginSocket(
 
     const base = connection.baseUrl.replace(/^http/, 'ws')
     const join = suffix.includes('?') ? '&' : '?'
-    socket = new WebSocket(`${base}/api/plugins/${pluginId}${suffix}${join}token=${encodeURIComponent(connection.token)}`)
+    socket = new WebSocket(
+      `${base}/api/plugins/${pluginId}${suffix}${join}token=${encodeURIComponent(connection.token)}`
+    )
 
     socket.onmessage = event => {
       attempt = 0

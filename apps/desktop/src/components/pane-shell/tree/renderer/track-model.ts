@@ -114,8 +114,19 @@ export const cssMax = (values: (string | null | undefined)[]): string | undefine
  * content (237px, or 474px when review is visible) instead of taking a
  * fraction of the window.
  */
+/** A minimized zone IS its strip: the vertical rail (row) / header (column)
+ *  are both 28px thick. */
+export const MINIMIZED_TRACK = '1.75rem'
+
 export function fixedTrackSize(node: LayoutNode, axis: 'row' | 'column', ctx: TrackContext): string | null {
   if (node.type === 'group') {
+    // Ancestor splits must size a minimized zone as its strip, not as its
+    // panes' declared widths — otherwise the outer track keeps reserving the
+    // full sidebar width and the collapsed rail floats in a dead column.
+    if (node.minimized) {
+      return MINIMIZED_TRACK
+    }
+
     const overrideKey = axis === 'row' ? 'widthOverride' : 'heightOverride'
 
     const declared = (id: string) => {

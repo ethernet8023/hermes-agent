@@ -116,7 +116,15 @@ function ZoneMenu({
   )
 }
 
-export function TreeGroup({ node, parentAxis }: { node: GroupNode; parentAxis?: 'column' | 'row' }) {
+export function TreeGroup({
+  node,
+  parentAxis,
+  railSide = 'left'
+}: {
+  node: GroupNode
+  parentAxis?: 'column' | 'row'
+  railSide?: 'left' | 'right'
+}) {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
@@ -273,14 +281,20 @@ export function TreeGroup({ node, parentAxis }: { node: GroupNode; parentAxis?: 
       )}
 
       {/* Minimized in a ROW: a narrow vertical rail — width collapses to the
-          strip, tabs read top-to-bottom. Click a tab to restore + activate;
-          click anywhere else on the rail to just restore. */}
+          strip, tabs read top-to-bottom in the SAME visual language as the
+          horizontal PaneTab strip (gutter bg, quaternary separators, hover
+          wash, strip line on the content-facing edge). Click a tab to
+          restore + activate; click anywhere else on the rail to restore. */}
       {verticalCollapse && (
         <ZoneMenu {...zoneMenu}>
           <div
             className={cn(
               'flex h-full w-7 shrink-0 cursor-pointer select-none flex-col items-stretch bg-(--pane-tab-strip-bg) [--pane-tab-strip-bg:var(--theme-card-seed)]',
-              'shadow-[inset_-1px_0_0_var(--ui-stroke-tertiary)]'
+              // The strip line (PANE_TAB_STRIP_LINE rotated): the divider
+              // faces the content the zone collapsed away from.
+              railSide === 'right'
+                ? 'shadow-[inset_1px_0_0_var(--ui-stroke-tertiary)]'
+                : 'shadow-[inset_-1px_0_0_var(--ui-stroke-tertiary)]'
             )}
             onClick={() => toggleTreeGroupMinimized(node.id, false)}
             title={t.zones.restore}
@@ -296,8 +310,13 @@ export function TreeGroup({ node, parentAxis }: { node: GroupNode; parentAxis?: 
                   <button
                     aria-selected={paneId === activeId}
                     className={cn(
-                      'flex max-h-40 shrink-0 items-center justify-center border-b border-b-(--ui-stroke-quaternary) px-1.5 py-2.5 text-[0.6875rem] font-medium [writing-mode:vertical-rl] hover:text-foreground',
-                      paneId === activeId ? 'text-(--ui-text-secondary)' : 'text-(--ui-text-tertiary)'
+                      // PaneTab's idle recipe, rotated 90°: gutter bg,
+                      // quaternary separators between tabs, tertiary text
+                      // with the 4% translucent hover wash.
+                      'flex max-h-48 w-full shrink-0 items-center justify-center bg-(--tab-bg) px-1.5 py-2.5 text-[0.6875rem] font-medium [-webkit-app-region:no-drag] [writing-mode:vertical-rl]',
+                      'not-first:border-t not-first:border-t-(--ui-stroke-quaternary)',
+                      'text-(--ui-text-tertiary) [--tab-bg:var(--pane-tab-strip-bg,var(--theme-card-seed))] hover:shadow-[inset_0_0_0_100vmax_color-mix(in_srgb,var(--ui-base)_4%,transparent)] hover:text-(--ui-text-secondary)',
+                      paneId === activeId && 'text-(--ui-text-secondary)'
                     )}
                     data-tree-tab={paneId}
                     key={paneId}

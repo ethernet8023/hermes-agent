@@ -402,6 +402,17 @@ export function TreeSplit({ node, root }: { node: SplitNode; root?: boolean }) {
     return -1
   }
 
+  // Which half of this row a visible child sits in — a minimized zone's rail
+  // hugs the app edge it collapsed toward, so its divider stroke must face
+  // the content side (left rail → stroke right, right rail → stroke left).
+  const visibleOrder = tracks.map((t, j) => (t.collapsed ? -1 : j)).filter(j => j >= 0)
+
+  const railSideFor = (i: number): 'left' | 'right' => {
+    const pos = visibleOrder.indexOf(i)
+
+    return pos >= 0 && (pos + 0.5) / visibleOrder.length > 0.5 ? 'right' : 'left'
+  }
+
   return (
     <div
       className={cn('flex min-h-0 min-w-0 flex-1', horizontal ? 'flex-row' : 'flex-col')}
@@ -448,7 +459,9 @@ export function TreeSplit({ node, root }: { node: SplitNode; root?: boolean }) {
                 onPointerDown={e => startSash(partner, i, e)}
               />
             )}
-            {!narrowCollapsed && <TreeNode node={child} parentAxis={axis} />}
+            {!narrowCollapsed && (
+              <TreeNode node={child} parentAxis={axis} railSide={horizontal ? railSideFor(i) : undefined} />
+            )}
           </div>
         )
       })}

@@ -358,7 +358,13 @@ def _trajectory_normalize_msg(msg: Dict[str, Any]) -> Dict[str, Any]:
     return msg
 
 
-def make_tool_result_message(name: str, content: Any, tool_call_id: str) -> dict:
+def make_tool_result_message(
+    name: str,
+    content: Any,
+    tool_call_id: str,
+    *,
+    effect_disposition: str | None = None,
+) -> dict:
     """Build a tool-result message dict with both the OpenAI-format ``name``
     field (required by the wire format and provider adapters) and the internal
     ``tool_name`` field (written to the session DB messages table).
@@ -379,13 +385,16 @@ def make_tool_result_message(name: str, content: Any, tool_call_id: str) -> dict
     callers should compare by value, not by ``is``.
     """
     wrapped = _maybe_wrap_untrusted(name, content)
-    return {
+    message = {
         "role": "tool",
         "name": name,
         "tool_name": name,
         "content": wrapped,
         "tool_call_id": tool_call_id,
     }
+    if effect_disposition is not None:
+        message["effect_disposition"] = effect_disposition
+    return message
 
 
 # Tools whose results carry attacker-controllable content.  Wrapping their

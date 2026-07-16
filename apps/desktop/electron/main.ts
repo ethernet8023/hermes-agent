@@ -29,7 +29,12 @@ import {
 import nodePty from 'node-pty'
 
 import { stopBackendChild as stopBackendChildImpl } from './backend-child'
-import { type BackendInstallType, dashboardFallbackArgs, routeBackendSpawn, sourceDeclaresServe } from './backend-command'
+import {
+  type BackendInstallType,
+  dashboardFallbackArgs,
+  routeBackendSpawn,
+  sourceDeclaresServe
+} from './backend-command'
 import { buildDesktopBackendEnv, normalizeHermesHomeRoot } from './backend-env'
 import { canImportHermesCli, verifyHermesCli } from './backend-probes'
 import { waitForDashboardPortAnnouncement } from './backend-ready'
@@ -1984,6 +1989,7 @@ function resolveUpdateRoot() {
   } catch {
     // Not a managed slot install; continue through checkout resolution.
   }
+
   const candidates = [
     process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT),
     !IS_PACKAGED && isHermesSourceRoot(SOURCE_REPO_ROOT) ? SOURCE_REPO_ROOT : null,
@@ -2092,9 +2098,7 @@ async function runUpdaterStatusCheck(updaterBinary: string): Promise<unknown> {
           'status',
           '--check',
           '--json',
-          ...(process.env.HERMES_DESKTOP_UPDATE_SOURCE
-            ? ['--source', process.env.HERMES_DESKTOP_UPDATE_SOURCE]
-            : [])
+          ...(process.env.HERMES_DESKTOP_UPDATE_SOURCE ? ['--source', process.env.HERMES_DESKTOP_UPDATE_SOURCE] : [])
         ],
         hiddenWindowsChildOptions({
           cwd: HERMES_HOME,
@@ -2104,6 +2108,7 @@ async function runUpdaterStatusCheck(updaterBinary: string): Promise<unknown> {
       )
     } catch {
       resolve(null)
+
       return
     }
 
@@ -2552,10 +2557,12 @@ async function applyUpdates(opts = {}) {
 
   try {
     const updateRoot = resolveUpdateRoot()
+
     const installType = resolveInstallType(HERMES_HOME, ACTIVE_HERMES_ROOT, {
       directoryExists,
       fileExists
     })
+
     // Internal E2E fixture hook. Production installs intentionally omit this
     // and use the updater's canonical release endpoint.
     const route = routeApplyDecision(installType, process.env.HERMES_DESKTOP_UPDATE_SOURCE)
@@ -2574,10 +2581,12 @@ async function applyUpdates(opts = {}) {
 
         if (!legacyUpdater) {
           emitUpdateProgress({ stage: 'manual', message: 'hermes update', percent: null })
+
           return { ok: true, manual: true, command: 'hermes update', hermesRoot: updateRoot }
         }
 
         rememberLog('[updates] slot layout but no hermes-updater; falling back to legacy hermes-setup')
+
         return await applyUpdatesLegacyHandoff(legacyUpdater, updateRoot)
       }
 
@@ -2634,9 +2643,12 @@ async function applyUpdates(opts = {}) {
         writeUpdateMarker(HERMES_HOME, child.pid)
       }
 
-      rememberLog(`[updates] launched hermes-updater: ${updaterBinary} ${updaterArgs.join(' ')}; exiting desktop for handoff`)
+      rememberLog(
+        `[updates] launched hermes-updater: ${updaterBinary} ${updaterArgs.join(' ')}; exiting desktop for handoff`
+      )
 
       isQuittingForHandoff = true
+
       if (!process.env.HERMES_DESKTOP_E2E_VERSION_FILE) {
         setTimeout(() => {
           app.quit()
@@ -2655,6 +2667,7 @@ async function applyUpdates(opts = {}) {
 
       if (!hermes) {
         emitUpdateProgress({ stage: 'manual', message: 'hermes update', percent: null })
+
         return { ok: true, manual: true, command: 'hermes update', hermesRoot: updateRoot }
       }
 
@@ -2704,7 +2717,12 @@ async function applyUpdates(opts = {}) {
       })) as any
 
       if (updated.code !== 0) {
-        emitUpdateProgress({ stage: 'error', message: 'hermes update failed.', error: updated.error || 'update-failed' })
+        emitUpdateProgress({
+          stage: 'error',
+          message: 'hermes update failed.',
+          error: updated.error || 'update-failed'
+        })
+
         return { ok: false, error: 'hermes update failed' }
       }
 
@@ -2733,6 +2751,7 @@ async function applyUpdates(opts = {}) {
         `[updates] gui/backend skew: execPath ${process.execPath} not a slot install; ` +
           'GUI package unchanged (AppImage/.deb/.rpm)'
       )
+
       return { ok: true, backendUpdated: false, guiUpdated: false, guiSkew: true }
     }
 
@@ -2796,7 +2815,9 @@ async function applyUpdatesLegacyHandoff(updater: string, updateRoot: string) {
     writeUpdateMarker(HERMES_HOME, child.pid)
   }
 
-  rememberLog(`[updates] launched legacy updater: ${updater} ${updaterArgs.join(' ')}; exiting desktop to release venv shim`)
+  rememberLog(
+    `[updates] launched legacy updater: ${updater} ${updaterArgs.join(' ')}; exiting desktop to release venv shim`
+  )
 
   isQuittingForHandoff = true
   setTimeout(() => {

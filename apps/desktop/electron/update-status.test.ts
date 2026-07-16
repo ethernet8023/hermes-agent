@@ -10,10 +10,10 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import {
+  type InstallType,
   interpretUpdaterStatus,
   resolveInstallType,
   routeApplyDecision,
-  type InstallType,
   type UpdaterStatusJson
 } from './update-status'
 
@@ -115,6 +115,7 @@ test('interpretUpdaterStatus: invalid JSON returns fetch-failed', () => {
 
 test('interpretUpdaterStatus: changelog timestamps in ms are not doubled', () => {
   const msTimestamp = 1700000000000 // already ms
+
   const json: UpdaterStatusJson = {
     update_available: true,
     behind: 1,
@@ -154,7 +155,7 @@ test('interpretUpdaterStatus: changelog entries with missing fields are tolerate
   const json: UpdaterStatusJson = {
     update_available: true,
     behind: 1,
-    changelog: [{ version: '1.0' }]  // missing sha, summary, author, at
+    changelog: [{ version: '1.0' }] // missing sha, summary, author, at
   }
 
   const result = interpretUpdaterStatus(json)
@@ -213,6 +214,7 @@ test('routeApplyDecision: package routes to gui-skew with message', () => {
   const route = routeApplyDecision('package')
 
   assert.equal(route.route, 'gui-skew')
+
   if (route.route === 'gui-skew') {
     assert.ok(route.message.length > 0, 'gui-skew has a message')
     assert.ok(
@@ -281,5 +283,3 @@ test('resolveInstallType: slot takes precedence over checkout', () => {
 
   assert.equal(resolveInstallType('/home/u/.hermes', '/home/u/.hermes/hermes-agent', probes), 'slot')
 })
-
-

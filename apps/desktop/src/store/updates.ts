@@ -6,13 +6,13 @@
 import { atom } from 'nanostores'
 
 import type {
+  DesktopInstallType,
   DesktopUpdateApplyOptions,
   DesktopUpdateApplyResult,
   DesktopUpdateProgress,
   DesktopUpdateStage,
   DesktopUpdateStatus,
-  DesktopVersionInfo,
-  DesktopInstallType
+  DesktopVersionInfo
 } from '@/global'
 import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
 import { translateNow } from '@/i18n'

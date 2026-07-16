@@ -97,10 +97,7 @@ export interface UpdaterChangelogEntry {
  *   error: 'fetch-failed'` so the renderer shows a retryable state — the
  *   install is valid, only the network check failed.
  */
-export function interpretUpdaterStatus(
-  json: unknown,
-  opts: { fetchedAt?: number } = {}
-): DesktopUpdateStatus {
+export function interpretUpdaterStatus(json: unknown, opts: { fetchedAt?: number } = {}): DesktopUpdateStatus {
   const fetchedAt = opts.fetchedAt ?? Date.now()
 
   // --- Guard: non-object or null ---
@@ -131,12 +128,8 @@ export function interpretUpdaterStatus(
   }
 
   const updateAvailable = Boolean(data.update_available)
-  const behind =
-    typeof data.behind === 'number' && data.behind >= 0
-      ? data.behind
-      : updateAvailable
-        ? 1
-        : 0
+
+  const behind = typeof data.behind === 'number' && data.behind >= 0 ? data.behind : updateAvailable ? 1 : 0
 
   // Map the changelog entries to DesktopUpdateCommit shape.
   const commits: DesktopUpdateCommit[] = Array.isArray(data.changelog)
@@ -144,11 +137,12 @@ export function interpretUpdaterStatus(
         sha: typeof entry?.sha === 'string' ? entry.sha : '',
         summary: typeof entry?.summary === 'string' ? entry.summary : '',
         author: typeof entry?.author === 'string' ? entry.author : '',
-        at: typeof entry?.at === 'number'
-          ? entry.at < 1e12
-            ? entry.at * 1000 // seconds → ms (git convention)
-            : entry.at // already ms
-          : 0
+        at:
+          typeof entry?.at === 'number'
+            ? entry.at < 1e12
+              ? entry.at * 1000 // seconds → ms (git convention)
+              : entry.at // already ms
+            : 0
       }))
     : []
 
@@ -225,11 +219,11 @@ export function routeApplyDecision(installType: InstallType, releaseSource?: str
           'Backend updated, but the desktop app package was not changed. ' +
           'Update or reinstall the Hermes desktop app to match.'
       }
-
     default: {
       // Exhaustive guard — if a new InstallType is added without a case,
       // the build fails.
       const _exhaustive: never = installType
+
       return _exhaustive
     }
   }
@@ -267,6 +261,7 @@ export function resolveInstallType(
 
   // Checkout: a .git dir or .git file (worktree) inside the active root.
   const gitDir = path_join(activeHermesRoot, '.git')
+
   if (probes.directoryExists(gitDir) || probes.fileExists(gitDir)) {
     return 'checkout'
   }

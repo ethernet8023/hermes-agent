@@ -7,7 +7,7 @@ on:
 jobs:
   workspaces:
     name: List npm workspaces
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     timeout-minutes: 20
     outputs:
       checks: ${{ steps.set-matrix.outputs.checks }}
@@ -56,7 +56,7 @@ jobs:
   check:
     name: ${{ matrix.package }} / ${{ matrix.script }}
     needs: workspaces
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     timeout-minutes: 20
     strategy:
       matrix:

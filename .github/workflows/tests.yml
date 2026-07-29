@@ -125,11 +125,14 @@ jobs:
         #
         # File list is pre-computed by the generate job (--generate-slices)
         # which runs LPT distribution once and passes the file list to each
-        # matrix job via --files. Previously each job re-discovered files and
-        # re-ran LPT independently — redundant N times.
-        run: |
-          source .venv/bin/activate
-          scripts/run_tests.sh --files '${{ matrix.slice.files }}'
+        # matrix job via --files. Previously each job re-discovered files
+        # and re-ran LPT independently — redundant N times.
+        uses: ./.github/actions/profile
+        with:
+          label: tests-slice-${{ matrix.slice.index }}
+          command: |
+            source .venv/bin/activate
+            scripts/run_tests.sh --files '${{ matrix.slice.files }}'
         env:
           # Ensure tests don't accidentally call real APIs
           OPENROUTER_API_KEY: ""
@@ -242,9 +245,12 @@ jobs:
         run: uv cache prune --ci
 
       - name: Run e2e tests
-        run: |
-          source .venv/bin/activate
-          python -m pytest tests/e2e/ -v --tb=short
+        uses: ./.github/actions/profile
+        with:
+          label: tests-e2e
+          command: |
+            source .venv/bin/activate
+            python -m pytest tests/e2e/ -v --tb=short
         env:
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""

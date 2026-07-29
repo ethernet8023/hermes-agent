@@ -49,5 +49,8 @@ jobs:
         working-directory: website
 
       - name: Build Docusaurus
-        run: npm run build
-        working-directory: website
+        uses: ./.github/actions/profile
+        with:
+          label: docs-site-build
+          working-directory: website
+          command: npm run build

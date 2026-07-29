@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -418,6 +419,153 @@ def compute_stats(timings: dict, baseline: dict | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Resource profile loading + bottleneck analysis
+# ---------------------------------------------------------------------------
+
+def load_resource_profiles(directory: str) -> dict[str, dict]:
+    """Load all resource-profile-*/resource-profile.json artifacts.
+
+    Returns {label: profile_dict}. Labels are derived from the artifact
+    directory name (resource-profile-<label> → <label>).
+    """
+    profiles: dict[str, dict] = {}
+    if not directory or not os.path.isdir(directory):
+        return profiles
+
+    for path in glob.glob(os.path.join(directory, "**", "resource-profile.json"), recursive=True):
+        try:
+            with open(path, encoding="utf-8") as f:
+                profile = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        label = profile.get("label") or os.path.basename(os.path.dirname(path))
+        profiles[label] = profile
+
+    return profiles
+
+
+def classify_bottleneck(timings: dict, profiles: dict[str, dict]) -> str:
+    """Return a one-line bottleneck classification.
+
+    Examines wall time, compute time, wait time, and resource profiles
+    to identify the dominant constraint.
+
+    Possible verdicts:
+      - "CPU-bound: <job> at <pct>% CPU for <dur>"
+      - "Memory-bound: <job> peaked at <mb> MB"
+      - "Disk IO-bound: <job> at <ops>/s for <dur>"
+      - "Wait-bound: <wait>s idle waiting for dependencies"
+      - "Evenly distributed: no single bottleneck"
+      - "Insufficient data: <reason>"
+    """
+    stats = compute_stats(timings, None)
+    jobs = [j for j in timings.get("jobs", []) if not is_skipped(j)]
+
+    if not jobs:
+        return "Insufficient data: no jobs in timings"
+
+    # --- Wait-bound: if total wait > 50% of wall time ---
+    wall = stats["wall"]
+    total_wait = stats["total_wait"]
+    if wall > 0 and total_wait > 0:
+        wait_pct = total_wait / wall * 100
+        if wait_pct > 50:
+            return (f"Wait-bound: {fmt_dur(total_wait)} idle "
+                    f"({wait_pct:.0f}% of {fmt_dur(wall)} wall) waiting for dependencies")
+
+    # --- Resource-bound: check profiles for CPU/mem/disk extremes ---
+    if profiles:
+        cpu_hotspot = None
+        mem_hotspot = None
+        disk_hotspot = None
+        max_cpu = 0.0
+        max_mem_frac = 0.0
+        max_disk_ops = 0.0
+
+        for label, p in profiles.items():
+            cpu_info = p.get("cpu", {})
+            mem_info = p.get("memory", {})
+            disk_info = p.get("disk", {})
+
+            cpu_avg = cpu_info.get("avg_usage_pct", 0)
+            cpu_peak = cpu_info.get("peak_usage_pct", 0)
+            if cpu_avg > max_cpu:
+                max_cpu = cpu_avg
+                cpu_hotspot = (label, cpu_avg, cpu_peak, p.get("duration_s", 0))
+
+            # Memory is USED MB. Compare against the machine's total when the
+            # profile carries it; otherwise fall back to an absolute floor.
+            mem_peak = mem_info.get("peak_mb", 0)
+            mem_total = mem_info.get("total_mb", 0)
+            mem_frac = (mem_peak / mem_total) if mem_total > 0 else (mem_peak / 16000.0)
+            if mem_frac > max_mem_frac:
+                max_mem_frac = mem_frac
+                mem_hotspot = (label, mem_peak, mem_total)
+
+            disk_ops = disk_info.get("avg_ops_per_s", 0)
+            disk_mb = disk_info.get("total_mb", 0)
+            if disk_ops > max_disk_ops:
+                max_disk_ops = disk_ops
+                disk_hotspot = (label, disk_ops, disk_mb, p.get("duration_s", 0))
+
+        # Classify: pick the most extreme dimension.
+        # Each candidate's sort key is normalized to roughly 0-100 so the
+        # dimensions are comparable:
+        #   CPU   — avg usage pct (bound when > 80)
+        #   Disk  — avg completed IOs/s / 10 (bound when > 500 ops/s)
+        #   Mem   — peak used as pct of total (bound when > 85%)
+
+        candidates = []
+        if cpu_hotspot and cpu_hotspot[1] > 80:
+            candidates.append((
+                cpu_hotspot[1],  # sort key
+                f"CPU-bound: {cpu_hotspot[0]} at {cpu_hotspot[1]:.0f}% avg CPU "
+                f"(peak {cpu_hotspot[2]:.0f}%) for {fmt_dur(cpu_hotspot[3])}"
+            ))
+        if disk_hotspot and disk_hotspot[1] > 500:
+            candidates.append((
+                disk_hotspot[1] / 10,
+                f"Disk IO-bound: {disk_hotspot[0]} at {disk_hotspot[1]:.0f} ops/s "
+                f"({disk_hotspot[2]:.0f} MB total) for {fmt_dur(disk_hotspot[3])}"
+            ))
+        if mem_hotspot and max_mem_frac > 0.85:
+            total_note = f" of {mem_hotspot[2]:.0f} MB" if mem_hotspot[2] else ""
+            candidates.append((
+                max_mem_frac * 100,
+                f"Memory-bound: {mem_hotspot[0]} peaked at "
+                f"{mem_hotspot[1]:.0f} MB used{total_note}"
+            ))
+
+        if candidates:
+            candidates.sort(reverse=True)
+            return candidates[0][1]
+
+    # --- No resource profiles, but check wall vs compute ---
+    compute = stats["compute"]
+    if wall > 0 and compute > 0:
+        parallelism = compute / wall
+        if parallelism < 1.2 and len(jobs) > 2:
+            # Low parallelism ratio means jobs are serial
+            slowest = max(jobs, key=lambda j: j.get("duration_s") or 0)
+            slow_dur = slowest.get("duration_s") or 0
+            slow_pct = slow_dur / wall * 100 if wall > 0 else 0
+            if slow_pct > 40:
+                return (f"Serial bottleneck: {slowest['name']} takes "
+                        f"{fmt_dur(slow_dur)} ({slow_pct:.0f}% of wall)")
+
+    # --- Fallback: the single slowest job ---
+    slowest = max(jobs, key=lambda j: j.get("duration_s") or 0)
+    slow_dur = slowest.get("duration_s") or 0
+    if slow_dur > 0 and wall > 0:
+        slow_pct = slow_dur / wall * 100
+        if slow_pct > 40 and len(jobs) > 1:
+            return (f"Dominated by {slowest['name']}: "
+                    f"{fmt_dur(slow_dur)} ({slow_pct:.0f}% of wall)")
+
+    return "Evenly distributed: no single bottleneck"
+
+
+# ---------------------------------------------------------------------------
 # HTML generation
 # ---------------------------------------------------------------------------
 
@@ -810,7 +958,56 @@ def _regressions(timings: dict, baseline: dict | None) -> str:
     )
 
 
-def generate_html(timings: dict, baseline: dict | None = None) -> str:
+def _resource_table(profiles: dict[str, dict]) -> str:
+    """Render per-job resource usage as an HTML table."""
+    if not profiles:
+        return ""
+
+    rows = []
+    for label in sorted(profiles):
+        p = profiles[label]
+        cpu = p.get("cpu", {})
+        mem = p.get("memory", {})
+        disk = p.get("disk", {})
+
+        rows.append(
+            f'<tr>'
+            f'<td class="job-name">{escape(label)}</td>'
+            f'<td class="num">{fmt_dur(p.get("duration_s"))}</td>'
+            f'<td class="num">{cpu.get("avg_usage_pct", 0):.0f}%</td>'
+            f'<td class="num">{cpu.get("peak_usage_pct", 0):.0f}%</td>'
+            f'<td class="num">{mem.get("avg_mb", 0):.0f}</td>'
+            f'<td class="num">{mem.get("peak_mb", 0):.0f}</td>'
+            f'<td class="num">{disk.get("total_mb", 0):.0f}</td>'
+            f'<td class="num">{disk.get("avg_ops_per_s", 0):.0f}</td>'
+            f'</tr>'
+        )
+
+    return (
+        '<table><thead><tr>'
+        '<th>Job</th><th class="num">Duration</th>'
+        '<th class="num">CPU avg</th><th class="num">CPU peak</th>'
+        '<th class="num">Mem avg (MB)</th><th class="num">Mem peak (MB)</th>'
+        '<th class="num">Disk (MB)</th><th class="num">Disk ops/s</th>'
+        '</tr></thead><tbody>' + "".join(rows) + '</tbody></table>'
+    )
+
+
+def _bottleneck_box(timings: dict, profiles: dict[str, dict]) -> str:
+    """Render the bottleneck analysis as a callout box."""
+    verdict = classify_bottleneck(timings, profiles)
+    return (
+        f'<div style="background:#161b22;border:1px solid #30363d;'
+        f'border-radius:8px;padding:16px;margin-bottom:24px">'
+        f'<div style="font-size:12px;color:#8b949e;text-transform:uppercase;'
+        f'letter-spacing:0.5px;margin-bottom:4px">Bottleneck Analysis</div>'
+        f'<div style="font-size:16px;font-weight:500">{escape(verdict)}</div>'
+        f'</div>'
+    )
+
+
+def generate_html(timings: dict, baseline: dict | None = None,
+                  profiles: dict[str, dict] | None = None) -> str:
     stats = compute_stats(timings, baseline)
 
     sha_short = (timings.get("head_sha") or "")[:7]
@@ -837,6 +1034,12 @@ def generate_html(timings: dict, baseline: dict | None = None) -> str:
     html += '<h2>Global Stats</h2>\n'
     html += _stats_cards(stats)
 
+    html += _bottleneck_box(timings, profiles or {})
+
+    if profiles:
+        html += '<h2>Resource Usage</h2>\n'
+        html += _resource_table(profiles)
+
     if baseline:
         html += '<h2>Top Regressions & Improvements</h2>\n'
         html += _regressions(timings, baseline)
@@ -858,11 +1061,17 @@ def generate_html(timings: dict, baseline: dict | None = None) -> str:
 # Markdown summary for $GITHUB_STEP_SUMMARY
 # ---------------------------------------------------------------------------
 
-def generate_summary(timings: dict, baseline: dict | None = None) -> str:
+def generate_summary(timings: dict, baseline: dict | None = None,
+                     profiles: dict[str, dict] | None = None) -> str:
     stats = compute_stats(timings, baseline)
     bl_map = {j["name"]: j for j in (baseline or {}).get("jobs", [])}
 
     lines = ["## CI Timing Summary\n"]
+
+    # Bottleneck analysis
+    bottleneck = classify_bottleneck(timings, profiles or {})
+    lines.append(f"**Bottleneck:** {bottleneck}")
+    lines.append("")
 
     # Global stats table
     lines.append("| Metric | Current | Baseline | Delta |")
@@ -905,7 +1114,8 @@ _TIMINGS_WARN_PCT = 0.25
 
 
 def generate_review_status(
-    timings: dict, baseline: dict | None, report_url: str | None = None
+    timings: dict, baseline: dict | None, report_url: str | None = None,
+    profiles: dict[str, dict] | None = None
 ) -> list[dict]:
     """Produce a review_status JSON array for the CI timings review section.
 
@@ -916,6 +1126,7 @@ def generate_review_status(
     fragment.
     """
     stats = compute_stats(timings, baseline)
+    bottleneck = classify_bottleneck(timings, profiles or {})
 
     if baseline is None:
         severity = "debug"
@@ -941,6 +1152,8 @@ def generate_review_status(
         if stats["unchanged"]:
             wall_str += f" {stats['unchanged']} unchanged."
         summary = wall_str
+
+    summary += f" Bottleneck: {bottleneck}"
 
     # Per-job delta detail (top 5 by absolute change)
     detail_lines: list[str] = []
@@ -1001,7 +1214,12 @@ def main():
                         help="If set, write a review-status JSON for the unified PR comment.")
     parser.add_argument("--review-status-only", action="store_true",
                         help="Write review status from existing timings without regenerating the report.")
+    parser.add_argument("--profiles-dir", default="",
+                        help="Directory of downloaded resource-profile-* artifacts.")
     args = parser.parse_args()
+
+    # Load resource profiles (available in both API and --from-json modes)
+    profiles = load_resource_profiles(args.profiles_dir) if args.profiles_dir else {}
 
     # Collect or load timings
     if args.from_json:
@@ -1051,20 +1269,20 @@ def main():
         if not args.review_status_out:
             parser.error("--review-status-only requires --review-status-out")
         report_url = os.environ.get("CI_TIMINGS_REPORT_URL", "")
-        statuses = generate_review_status(timings, baseline, report_url)
+        statuses = generate_review_status(timings, baseline, report_url, profiles)
         with open(args.review_status_out, "w", encoding="utf-8") as f:
             f.write(f"review_status={json.dumps(statuses)}\n")
         print(f"Wrote review status to {args.review_status_out}")
         return
 
     # Generate HTML
-    html = generate_html(timings, baseline)
+    html = generate_html(timings, baseline, profiles)
     with open(args.output, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"Generated HTML report: {args.output}")
 
     # Write summary
-    summary = generate_summary(timings, baseline)
+    summary = generate_summary(timings, baseline, profiles)
     with open(args.summary_out, "a", encoding="utf-8") as f:
         f.write(summary)
         print(f"Wrote summary to {args.summary_out}")
@@ -1074,7 +1292,7 @@ def main():
     # format) so the ci-timings job can expose it as a workflow_call output.
     if args.review_status_out:
         report_url = os.environ.get("CI_TIMINGS_REPORT_URL", "")
-        statuses = generate_review_status(timings, baseline, report_url)
+        statuses = generate_review_status(timings, baseline, report_url, profiles)
         json_str = json.dumps(statuses)
         with open(args.review_status_out, "a", encoding="utf-8") as f:
             f.write(f"review_status={json_str}\n")

@@ -121,16 +121,10 @@ jobs:
           command: uv sync --locked --python 3.11 --extra dev
 
       - name: Run docker integration tests
-        env:
-          # Skip rebuild; use the image already loaded by the build step.
-          HERMES_TEST_IMAGE: ${{ env.IMAGE_NAME }}:test
-          # Match the policy in tests.yml :: test job — no accidental
-          # real-API calls from inside the harness.
-          OPENROUTER_API_KEY: ""
-          OPENAI_API_KEY: ""
-          NOUS_API_KEY: ""
-        run: |
-          scripts/run_tests.sh tests/docker/ --file-timeout 600
+        uses: ./.github/actions/profile
+        with:
+          label: docker-tests
+          command: scripts/run_tests.sh tests/docker/ --file-timeout 600
 
   # ---------------------------------------------------------------------------
   # Rebuild and push each architecture only after the unprivileged build/test

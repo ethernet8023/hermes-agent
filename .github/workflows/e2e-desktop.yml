@@ -96,17 +96,20 @@ jobs:
       # `npm run test:e2e` builds dist/ as a pretest hook so the renderer
       # is always fresh — no separate build step needed.
       - name: Run Playwright E2E tests
-        working-directory: apps/desktop
-        run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "On main — generating/updating baseline screenshots"
-            npm run build && xvfb-run -a --server-args="-screen 0 1280x1024x24" \
-              npx playwright test --reporter=list --update-snapshots
-          else
-            echo "On PR — comparing against cached baselines"
-            npm run build && xvfb-run -a --server-args="-screen 0 1280x1024x24" \
-              npx playwright test --reporter=list
-          fi
+        uses: ./.github/actions/profile
+        with:
+          label: e2e-desktop
+          working-directory: apps/desktop
+          command: |
+            if [ "${{ github.ref_name }}" = "main" ]; then
+              echo "On main — generating/updating baseline screenshots"
+              npm run build && xvfb-run -a --server-args="-screen 0 1280x1024x24" \
+                npx playwright test --reporter=list --update-snapshots
+            else
+              echo "On PR — comparing against cached baselines"
+              npm run build && xvfb-run -a --server-args="-screen 0 1280x1024x24" \
+                npx playwright test --reporter=list
+            fi
         env:
           CI: 'true'
           # Ensure no real API keys leak into the test env.

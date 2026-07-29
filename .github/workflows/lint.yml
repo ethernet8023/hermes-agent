@@ -148,8 +148,10 @@ jobs:
       - name: ruff check .
         # No --exit-zero, no || true. Exit code propagates to the job,
         # which propagates to the required-check gate.
-        run: |
-          ruff check .
+        uses: ./.github/actions/profile
+        with:
+          label: ruff-blocking
+          command: ruff check .
 
   windows-footguns:
     # Static guardrails on Windows-unsafe Python primitives — os.kill(pid, 0),

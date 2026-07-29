@@ -348,6 +348,18 @@ jobs:
           restore-keys: |
             ci-timings-baseline-
 
+      - name: Download resource profiles
+        # Advisory — if no profiles were uploaded (e.g. sub-workflows
+        # didn't run), this step finds nothing and the report still works.
+        # NOTE: no merge-multiple — every artifact contains a file named
+        # resource-profile.json, so merging would clobber all but one.
+        # Per-artifact subdirs are exactly what load_resource_profiles walks.
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: resource-profile-*
+          path: resource-profiles
+
       - name: Collect timings and generate report
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -356,7 +368,8 @@ jobs:
             --baseline ci-timings-baseline.json \
             --output ci-timings-report.html \
             --json-out ci-timings.json \
-            --summary-out ci-timings-summary.md
+            --summary-out ci-timings-summary.md \
+            --profiles-dir resource-profiles
 
       - name: Upload HTML report
         # Advisory report — artifact-service blips must not fail the job.
@@ -376,6 +389,7 @@ jobs:
           python3 scripts/ci/timings_report.py \
             --from-json ci-timings.json \
             --baseline ci-timings-baseline.json \
+            --profiles-dir resource-profiles \
             --review-status-out review-status.json \
             --review-status-only
 

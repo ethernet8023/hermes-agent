@@ -76,4 +76,7 @@ jobs:
       - uses: ./.github/actions/retry
         with:
           command: npm ci
-      - run: npm run --prefix ${{ matrix.package }} ${{ matrix.script }}
+      - uses: ./.github/actions/profile
+        with:
+          label: js-${{ matrix.package }}-${{ matrix.script }}
+          command: npm run --prefix ${{ matrix.package }} ${{ matrix.script }}

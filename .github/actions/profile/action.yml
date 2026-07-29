@@ -1,0 +1,88 @@
+name: Profile a command (CPU/RAM/Disk)
+description: >-
+  Run a shell command while sampling CPU, RAM, and disk IO every second.
+  Produces a resource-profile.json artifact per job so the CI timing
+  report can show per-job resource usage and identify bottlenecks.
+
+inputs:
+  command:
+    description: Shell command to run (and profile).
+    required: true
+  label:
+    description: Label for this profile (e.g. "tests slice 1/8").
+    required: true
+  working-directory:
+    description: Directory to run in.
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - name: Start resource profiler
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        # Start profiler in background. It writes to resource-profile.json
+        # on SIGTERM (or when the command finishes and we signal it).
+        python3 scripts/ci/resource_profile.py \
+          --output resource-profile.json \
+          --label "$PROFILE_LABEL" &
+        echo $! > "$RUNNER_TEMP/profiler.pid"
+      env:
+        PROFILE_LABEL: ${{ inputs.label }}
+
+    - name: Run command
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        _CMD: ${{ inputs.command }}
+      run: |
+        bash -c "$_CMD"
+
+    - name: Stop profiler and collect results
+      id: stop-profiler
+      if: always()
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ -f "$RUNNER_TEMP/profiler.pid" ]; then
+          PID=$(cat "$RUNNER_TEMP/profiler.pid")
+          if kill -0 "$PID" 2>/dev/null; then
+            kill -TERM "$PID"
+            # Give it a moment to write the JSON
+            for i in 1 2 3 4 5; do
+              if kill -0 "$PID" 2>/dev/null; then
+                sleep 0.2
+              else
+                break
+              fi
+            done
+            kill -KILL "$PID" 2>/dev/null || true
+          fi
+        fi
+        # hashFiles() only matches inside the workspace, so surface file
+        # existence as a step output instead for the upload condition.
+        if [ -s resource-profile.json ]; then
+          echo "profile_written=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "profile_written=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Sanitize resource profile label
+      id: sanitize
+      if: always()
+      shell: bash
+      env:
+        PROFILE_LABEL: ${{ inputs.label }}
+      run: |
+        SAFE=$(printf '%s' "$PROFILE_LABEL" | sed -E 's/[^a-zA-Z0-9]+/-/g')
+        echo "safe_label=$SAFE" >> "$GITHUB_OUTPUT"
+
+    - name: Upload resource profile
+      if: always() && steps.stop-profiler.outputs.profile_written == 'true'
+      continue-on-error: true
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: resource-profile-${{ steps.sanitize.outputs.safe_label }}
+        path: ${{ inputs.working-directory }}/resource-profile.json
+        retention-days: 14

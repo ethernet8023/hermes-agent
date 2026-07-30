@@ -673,6 +673,35 @@ def _make_stdio_glyph_safe() -> None:
                 pass
 
 
+def _effective_cpu_count() -> int:
+    """CPU count respecting cgroup quotas (containers/K8s pods).
+
+    ``os.cpu_count()`` reports the HOST core count. Inside a CPU-limited
+    cgroup (e.g. an ARC runner pod with a 8-CPU limit on a 22-core node)
+    that oversubscribes the pod ~3x and per-file test subprocesses hit
+    their timeouts from CPU starvation. Read the cgroup v2 ``cpu.max``
+    (or v1 quota/period) when present.
+    """
+    host = os.cpu_count() or 4
+    try:
+        with open("/sys/fs/cgroup/cpu.max", encoding="ascii") as f:
+            quota_s, period_s = f.read().split()
+        if quota_s != "max":
+            return max(1, min(host, int(int(quota_s) / int(period_s))))
+    except (OSError, ValueError):
+        pass
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", encoding="ascii") as f:
+            quota = int(f.read())
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us", encoding="ascii") as f:
+            period = int(f.read())
+        if quota > 0:
+            return max(1, min(host, quota // period))
+    except (OSError, ValueError):
+        pass
+    return host
+
+
 def main() -> int:
     _make_stdio_glyph_safe()
     parser = argparse.ArgumentParser(
@@ -683,8 +712,8 @@ def main() -> int:
         "-j",
         "--jobs",
         type=int,
-        default=int(os.environ.get("HERMES_TEST_WORKERS") or (os.cpu_count() or 4) * 2),
-        help="Parallel worker count (default: $HERMES_TEST_WORKERS or cpu_count*2)",
+        default=int(os.environ.get("HERMES_TEST_WORKERS") or _effective_cpu_count() * 2),
+        help="Parallel worker count (default: $HERMES_TEST_WORKERS or cgroup-aware cpu_count*2)",
     )
     parser.add_argument(
         "--paths",

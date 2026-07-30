@@ -121,10 +121,15 @@ jobs:
           command: uv sync --locked --python 3.11 --extra dev
 
       - name: Run docker integration tests
+        # HERMES_TEST_WORKERS=4: this suite shares ONE dockerd — parallel
+        # width is bounded by the daemon, not CPU. At cpu*2 workers (16 on
+        # the 8-CPU ARC pods) dockerd thrashes: every file takes ~900s and
+        # teardown `docker rm` blows its 10s timeout. arm64 (2 CPU → -j4)
+        # passes for exactly this reason.
         uses: ./.github/actions/profile
         with:
           label: docker-tests
-          command: scripts/run_tests.sh tests/docker/ --file-timeout 600
+          command: HERMES_TEST_WORKERS=4 scripts/run_tests.sh tests/docker/ --file-timeout 600
 
   # ---------------------------------------------------------------------------
   # Rebuild and push each architecture only after the unprivileged build/test

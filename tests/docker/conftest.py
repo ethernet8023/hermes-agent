@@ -72,14 +72,32 @@ def built_image() -> str:
 
 @pytest.fixture
 def container_name(request) -> Iterator[str]:
-    """Generate a unique container name and ensure cleanup on test exit."""
+    """Generate a unique container name and ensure cleanup on test exit.
+
+    Cleans up BOTH before and after the test. The pre-clean matters for
+    the file-retry path: if attempt 1's teardown ``docker rm -f`` timed
+    out (busy daemon), the stale container survives and attempt 2's
+    ``docker run --name`` fails with a name Conflict. The teardown also
+    tolerates a slow daemon instead of raising TimeoutExpired out of the
+    fixture (which turns a passing test into an ERROR).
+    """
     safe = request.node.name.replace("[", "_").replace("]", "_")
     name = f"hermes-test-{safe}"
+
+    def _rm(timeout: int) -> None:
+        try:
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                capture_output=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            # Daemon is thrashing; the pre-clean of the next run (or the
+            # ephemeral CI pod being destroyed) picks up the stragglers.
+            pass
+
+    _rm(timeout=30)
     yield name
-    subprocess.run(
-        ["docker", "rm", "-f", name],
-        capture_output=True, timeout=10,
-    )
+    _rm(timeout=30)
 
 
 # ---------------------------------------------------------------------------

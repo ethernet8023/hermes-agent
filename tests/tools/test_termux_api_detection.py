@@ -166,6 +166,12 @@ class TestDetectAudioEnvironmentTermuxFallback:
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        # detect_audio_environment() also probes the REAL host for
+        # containment; a containerized CI runner would append the
+        # container warning and flip available=False. A Termux device is
+        # never a container — pin the probe to the scenario under test.
+        import hermes_constants
+        monkeypatch.setattr(hermes_constants, "is_container", lambda: False)
 
         # No sounddevice — we go down the Termux:API branch.
         monkeypatch.setattr(

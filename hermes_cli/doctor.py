@@ -1727,13 +1727,14 @@ def run_doctor(args):
         # not found" warning. If the user has explicitly chosen
         # TERMINAL_ENV=docker inside the container they likely mounted
         # /var/run/docker.sock, so fall through to the normal check.
-        if terminal_env != "docker":
+        # Only the implicit local-vs-docker choice is affected: remote
+        # backends (ssh, daytona, vercel_sandbox, ...) work fine from
+        # inside a container and must keep their real diagnostics.
+        if terminal_env == "local":
             check_info(
                 "Running inside a container — using local terminal backend "
                 "(docker-in-docker is not configured by default)"
             )
-            # Skip to next section; Docker isn't relevant here.
-            terminal_env = "local"
     if terminal_env == "docker":
         if _safe_which("docker"):
             # Check if docker daemon is running

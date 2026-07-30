@@ -471,7 +471,7 @@ def _normalize_string_set(values) -> Set[str]:
 # which becomes the dominant cost of ``hermes`` startup when ~120 skills
 # each trigger a category lookup during banner construction (10+ seconds
 # of pure waste).
-_EXTERNAL_DIRS_CACHE: Dict[Tuple[str, int], List[Path]] = {}
+_EXTERNAL_DIRS_CACHE: Dict[Tuple[str, int, int], List[Path]] = {}
 
 
 def _external_dirs_cache_clear() -> None:
@@ -496,11 +496,13 @@ def get_external_skills_dirs() -> List[Path]:
     if not config_path.exists():
         return []
 
-    # Cache key: (absolute path, mtime_ns).  stat() is ~2us vs ~85ms for
-    # the full YAML parse, so the fast path is nearly free.
+    # Cache key: (absolute path, mtime_ns, size).  stat() is ~2us vs ~85ms
+    # for the full YAML parse, so the fast path is nearly free.  Size is in
+    # the key because overlayfs (CI runner pods) can coalesce rapid writes
+    # into a single mtime_ns tick.
     try:
         stat = config_path.stat()
-        cache_key: Tuple[str, int] = (str(config_path), stat.st_mtime_ns)
+        cache_key: Tuple[str, int, int] = (str(config_path), stat.st_mtime_ns, stat.st_size)
     except OSError:
         cache_key = None  # type: ignore[assignment]
 

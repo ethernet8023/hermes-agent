@@ -680,6 +680,14 @@ def test_profile_scoped_agent_build_starts_mcp_discovery_in_profile_home(
     try:
         server._start_agent_build(sid, session)
         assert built.wait(timeout=2)
+        # Join the whole build thread: after `built` fires, _build's tail
+        # still emits session.info (or an error frame if the tail raises
+        # once the session is popped). An unjoined thread leaks that emit
+        # onto whatever _real_stdout a LATER test has patched in.
+        _t = session.get("_agent_build_thread")
+        if _t is not None:
+            _t.join(timeout=5)
+            assert not _t.is_alive(), "agent build thread leaked"
     finally:
         server._sessions.pop(sid, None)
 
@@ -735,6 +743,12 @@ def test_profile_scoped_agent_build_installs_secret_scope(monkeypatch, tmp_path)
     try:
         server._start_agent_build(sid, session)
         assert built.wait(timeout=2)
+        # Same leak class as above: join _build's tail before popping the
+        # session, or its post-build emit lands in a later test's stdout.
+        _t = session.get("_agent_build_thread")
+        if _t is not None:
+            _t.join(timeout=5)
+            assert not _t.is_alive(), "agent build thread leaked"
     finally:
         server._sessions.pop(sid, None)
 

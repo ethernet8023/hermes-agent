@@ -83,7 +83,6 @@ jobs:
           cache-from: ${{ matrix.cache-from }}
           cache-to: ${{ (github.event_name != 'pull_request') && matrix.cache-to || '' }}
 
-
       # Run the docker-integration test suite against the freshly-built
       # image already loaded into the local daemon (`:test`).
       #
@@ -104,7 +103,7 @@ jobs:
           # Pinned: unpinned setup-uv fetches a 'latest' manifest from
           # raw.githubusercontent.com every job; transient fetch failures
           # fail the job (2026-07-28 incident). Keep in sync with tests.yml.
-          version: "0.9.28"
+          version: '0.9.28'
 
       - name: Set up Python 3.11 (for docker tests)
         uses: ./.github/actions/retry
@@ -121,13 +120,10 @@ jobs:
           command: uv sync --locked --python 3.11 --extra dev
 
       - name: Run docker integration tests
-        # The test runner auto-caps workers for tests/docker (the suite is
-        # bounded by the single dind dockerd, not CPU — see
-        # run_tests_parallel.py's docker-suite auto-cap).
         uses: ./.github/actions/profile
         with:
           label: docker-tests
-          command: scripts/run_tests.sh tests/docker/ --file-timeout 600
+          command: HERMES_TEST_IMAGE="${{ env.IMAGE_NAME }}:test" scripts/run_tests.sh tests/docker/ --file-timeout 600
 
   # ---------------------------------------------------------------------------
   # Rebuild and push each architecture only after the unprivileged build/test

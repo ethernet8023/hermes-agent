@@ -1,5 +1,10 @@
 """Container-restart survives per-profile gateway registrations.
 
+Split from test_container_restart.py so the per-file parallel runner
+overlaps the ~110s container boots instead of serializing them in one
+file. The restart_container fixture travels with the shared header.
+
+
 The s6 dynamic scandir at /run/service/ lives on tmpfs and is wiped
 on every container restart. Phase 4 Task 4.0's container_boot module
 + cont-init.d/02-reconcile-profiles regenerate the service slots from
@@ -75,28 +80,31 @@ def restart_container(request, built_image: str):
     _docker("volume", "rm", "-f", volume)
 
 
-def test_stopped_gateway_stays_stopped_after_restart(restart_container: str) -> None:
+def test_stale_gateway_pid_cleaned_up_on_restart(restart_container: str) -> None:
+    """A dead container's gateway.pid + processes.json must NOT
+    survive the restart — a numerically-equal live PID in the new
+    container is a different process and would confuse the gateway
+    process-mismatch checks."""
     container = restart_container
 
-    docker_exec(container, "hermes", "profile", "create", "writer").check_returncode()
+    docker_exec(container, "hermes", "profile", "create", "ghost").check_returncode()
 
-    # Write 'stopped' directly so we don't have to race against the
-    # gateway's own state writes.
-    write_state = (
+    # Stamp stale runtime files alongside a 'running' state so the
+    # reconciler walks this profile.
+    stamp = (
         "import json, pathlib; "
-        "p = pathlib.Path('/opt/data/profiles/writer/gateway_state.json'); "
-        "p.write_text(json.dumps({'gateway_state': 'stopped', 'timestamp': 1}))"
+        "p = pathlib.Path('/opt/data/profiles/ghost'); "
+        "(p / 'gateway_state.json').write_text(json.dumps({'gateway_state': 'stopped', 'timestamp': 1})); "
+        "(p / 'gateway.pid').write_text(json.dumps({'pid': 99999, 'host': 'old'})); "
+        "(p / 'processes.json').write_text('[]')"
     )
-    docker_exec(container, "python3", "-c", write_state, timeout=10).check_returncode()
+    docker_exec(container, "python3", "-c", stamp, timeout=10).check_returncode()
 
     _docker("restart", container, timeout=60).check_returncode()
-    _wait_for_reconcile_log_mention(container, "writer", deadline_s=30.0)
+    _wait_for_reconcile_log_mention(container, "ghost", deadline_s=30.0)
 
-    # Slot exists.
-    assert wait_for_path(
-        container, "/run/service/gateway-writer", kind="d", deadline_s=10.0,
-    )
-
-    # Down marker present.
-    r = docker_exec_sh(container, "test -f /run/service/gateway-writer/down")
-    assert r.returncode == 0, "down marker missing despite prior_state=stopped"
+    # Stale runtime files swept.
+    r = docker_exec_sh(container, "test -f /opt/data/profiles/ghost/gateway.pid")
+    assert r.returncode != 0, "stale gateway.pid survived restart"
+    r = docker_exec_sh(container, "test -f /opt/data/profiles/ghost/processes.json")
+    assert r.returncode != 0, "stale processes.json survived restart"

@@ -329,3 +329,72 @@ def wait_for_docker_logs(
             return last
         time.sleep(interval_s)
     raise AssertionError(f"Didn't see `{needle}` in docker logs within {deadline_s} in container {container}")
+
+# ---------------------------------------------------------------------------
+# _http_probe — in-container HTTP probe shared by the dashboard test files
+# (split into per-boot files so the parallel runner overlaps container
+# boots; the shared probe lives here).
+# ---------------------------------------------------------------------------
+def _http_probe(
+    container: str,
+    path: str,
+    *,
+    deadline_s: float = 60.0,
+) -> tuple[int, str]:
+    """Poll ``http://127.0.0.1:9119<path>`` from inside the container.
+
+    Returns ``(status_code, body)`` as soon as the dashboard answers any
+    HTTP response — 200, 401, 503, anything. The image doesn't ship
+    ``curl`` but the venv's stdlib ``urllib`` is good enough; we use a
+    proper ``try``/``except`` to intercept ``HTTPError`` because
+    ``urlopen`` raises on 4xx/5xx, and we treat those as legitimate
+    responses (the OAuth gate's 401 IS the success signal for the
+    gate-engaged test).
+
+    Connection errors (uvicorn still starting, fail-closed exited) keep
+    the poll loop running until ``deadline_s`` elapses.
+
+    The probe Python program is fed over stdin (``python -``) rather
+    than ``python -c`` so we can use proper multi-line syntax with
+    ``try``/``except`` blocks without escaping hell.
+
+    Raises ``AssertionError`` on timeout.
+    """
+    py_program = f"""\
+import urllib.request, urllib.error
+req = urllib.request.Request("http://127.0.0.1:9119{path}")
+try:
+    r = urllib.request.urlopen(req, timeout=5)
+    print(r.status)
+    print(r.read().decode(), end="")
+except urllib.error.HTTPError as h:
+    print(h.code)
+    print(h.read().decode(), end="")
+"""
+    # Feed the program over stdin via a heredoc so docker_exec_sh's
+    # single bash string stays clean. The 'PY' delimiter is quoted to
+    # disable shell expansion inside the heredoc body.
+    probe = (
+        "/opt/hermes/.venv/bin/python - <<'PY'\n"
+        f"{py_program}"
+        "PY"
+    )
+    end = time.monotonic() + deadline_s
+    last_err = ""
+    while time.monotonic() < end:
+        r = docker_exec_sh(container, probe, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            lines = r.stdout.split("\n", 1)
+            try:
+                status = int(lines[0].strip())
+                body = lines[1] if len(lines) > 1 else ""
+                return status, body
+            except (ValueError, IndexError) as exc:
+                last_err = f"parse: {exc!r} / stdout={r.stdout!r}"
+        else:
+            last_err = f"rc={r.returncode} stderr={r.stderr!r}"
+        time.sleep(0.5)
+    raise AssertionError(
+        f"Probe of {path} never returned HTTP within {deadline_s}s; "
+        f"last error: {last_err}"
+    )

@@ -30,8 +30,20 @@ jobs:
   # Build and test the image for each architecture. This job runs PR code,
   # so it must remain secret-free. Publishing happens in the separate,
   # protected publish job after these tests pass.
+  #
+  # Buildx layer cache lives in Artifact Registry (us-central1, same region
+  # as the ARC runners) instead of GitHub's cache CDN. Reads are keyless via
+  # GKE Workload Identity on the runner pods; writes are keyless via GitHub
+  # OIDC -> GCP WIF (google-github-actions/auth). Fork PRs get neither an
+  # id-token nor pod WI outside our cluster, so they build cache-cold —
+  # same behavior type=gha gave them.
   build:
     if: github.repository == 'NousResearch/hermes-agent'
+    permissions:
+      contents: read
+      # OIDC token for WIF cache writes. Fork-PR runs receive no id-token;
+      # the auth step below is skipped for them.
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -39,13 +51,9 @@ jobs:
           - arch: amd64
             runner: arc-runner-set
             platform: linux/amd64
-            cache-from: type=gha,scope=docker-amd64
-            cache-to: type=gha,mode=max,scope=docker-amd64
           - arch: arm64
             runner: arc-runner-arm64
             platform: linux/arm64
-            cache-from: type=gha,scope=docker-arm64
-            cache-to: type=gha,mode=max,scope=docker-arm64
 
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -68,8 +76,32 @@ jobs:
         if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
+      # Keyless GCP auth via GitHub OIDC -> WIF. Fork PRs have no id-token
+      # (permissions are read-only in their context), so this step is
+      # skipped and the build runs cache-read-only via the pod's GKE
+      # Workload Identity.
+      - name: Authenticate to GCP (WIF, cache writes)
+        id: gcp-auth
+        if: github.event.pull_request.head.repo.fork != true
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: hermes-agent-github-actions
+          workload_identity_provider: projects/1067970703723/locations/global/workloadIdentityPools/github-actions/providers/github-oidc
+          service_account: gha-buildx-cache@hermes-agent-github-actions.iam.gserviceaccount.com
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        if: steps.gcp-auth.outputs.access_token != ''
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.gcp-auth.outputs.access_token }}
+
       # Build once, load into the local daemon for testing.  Cached
       # per-arch; the push step below reuses every layer from this build.
+      # Cache lives in same-region Artifact Registry: reads always work
+      # (pod Workload Identity); writes only when the WIF auth step ran.
       - name: Build image (${{ matrix.arch }})
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
@@ -80,8 +112,8 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:test
           build-args: |
             HERMES_GIT_SHA=${{ github.sha }}
-          cache-from: ${{ matrix.cache-from }}
-          cache-to: ${{ (github.event_name != 'pull_request') && matrix.cache-to || '' }}
+          cache-from: type=registry,ref=us-central1-docker.pkg.dev/hermes-agent-github-actions/ci-cache/hermes-agent:buildcache-${{ matrix.arch }}
+          cache-to: ${{ steps.gcp-auth.outputs.access_token != '' && format('type=registry,ref=us-central1-docker.pkg.dev/hermes-agent-github-actions/ci-cache/hermes-agent:buildcache-{0},mode=max,image-manifest=true', matrix.arch) || '' }}
 
       # Run the docker-integration test suite against the freshly-built
       # image already loaded into the local daemon (`:test`).
@@ -133,6 +165,9 @@ jobs:
     if: github.repository == 'NousResearch/hermes-agent' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release')
     needs: [build]
     environment: container-publish
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -140,13 +175,9 @@ jobs:
           - arch: amd64
             runner: arc-runner-set
             platform: linux/amd64
-            cache-from: type=gha,scope=docker-amd64
-            cache-to: type=gha,mode=max,scope=docker-amd64
           - arch: arm64
             runner: arc-runner-arm64
             platform: linux/arm64
-            cache-from: type=gha,scope=docker-arm64
-            cache-to: type=gha,mode=max,scope=docker-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -163,6 +194,24 @@ jobs:
       - name: Set up Docker Buildx (retry)
         if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # Same keyless AR cache as the build job. Publish only runs on
+      # trusted main/release contexts, so WIF auth is unconditional here.
+      - name: Authenticate to GCP (WIF, cache)
+        id: gcp-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: hermes-agent-github-actions
+          workload_identity_provider: projects/1067970703723/locations/global/workloadIdentityPools/github-actions/providers/github-oidc
+          service_account: gha-buildx-cache@hermes-agent-github-actions.iam.gserviceaccount.com
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.gcp-auth.outputs.access_token }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -184,8 +233,8 @@ jobs:
           build-args: |
             HERMES_GIT_SHA=${{ github.sha }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: ${{ matrix.cache-from }}
-          cache-to: ${{ matrix.cache-to }}
+          cache-from: type=registry,ref=us-central1-docker.pkg.dev/hermes-agent-github-actions/ci-cache/hermes-agent:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=us-central1-docker.pkg.dev/hermes-agent-github-actions/ci-cache/hermes-agent:buildcache-${{ matrix.arch }},mode=max,image-manifest=true
 
       - name: Export digest
         run: |

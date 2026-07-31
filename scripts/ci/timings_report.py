@@ -753,7 +753,15 @@ def _gantt_bars(timings: dict, baseline: dict | None) -> str:
         f'<span class="gantt-tick" style="left:{(t / total_s * 100):.1f}%">{fmt_tick(t)}</span>'
         for t in ticks
     )
-    axis = f'<div class="gantt-axis"><div class="gantt-track">{tick_html}</div></div>'
+    # Empty label spacer keeps the axis track aligned with the bar tracks
+    # (each gantt-row is [label][track]; without the spacer the axis spans
+    # the label column too and every tick lands left of its true position).
+    axis = (
+        f'<div class="gantt-axis">'
+        f'<div class="gantt-label"></div>'
+        f'<div class="gantt-track">{tick_html}</div>'
+        f'</div>'
+    )
 
     legend = (
         '<div class="legend">'

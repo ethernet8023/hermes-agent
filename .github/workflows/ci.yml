@@ -24,6 +24,7 @@ permissions:
   pull-requests: write # needed by lint (PR comment) + supply-chain review_status
   actions: read # needed by osv-scanner (SARIF upload)
   security-events: write # needed by osv-scanner (SARIF upload)
+  id-token: write # needed by docker.yml (WIF -> Artifact Registry buildx cache)
   packages: write # needed by docker build
 
 concurrency:

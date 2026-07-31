@@ -1,0 +1,141 @@
+name: Checkout with node-local git mirror
+description: >-
+  Drop-in replacement for actions/checkout on the GKE self-hosted runners.
+  Seeds the workspace's .git with an alternates pointer to the node-local
+  bare mirror maintained by the git-mirror DaemonSet (see
+  hermes-agent-ci-infra k8s/git-mirror-daemonset.yaml), so checkout resolves
+  nearly every object from local NVMe instead of pulling ~60MB over the
+  network. Falls back to a plain checkout wherever the mirror is absent, so
+  it is safe on ubuntu-latest, on forks, and on nodes the DaemonSet has not
+  finished seeding.
+
+inputs:
+  fetch-depth:
+    description: >-
+      Passed through to actions/checkout when the mirror is NOT available.
+      Ignored when it is: a mirrored checkout must be unshallow (see below).
+    required: false
+    default: "1"
+  ref:
+    description: Ref to check out. Defaults to actions/checkout's own default.
+    required: false
+    default: ""
+  path:
+    description: Workspace-relative path to check out into.
+    required: false
+    default: ""
+  persist-credentials:
+    description: Passed through to actions/checkout.
+    required: false
+    default: "true"
+
+outputs:
+  used-mirror:
+    description: "true when the node-local mirror was used"
+    value: ${{ steps.seed.outputs.used-mirror }}
+
+runs:
+  using: composite
+  steps:
+    - name: Seed git alternates from the node mirror
+      id: seed
+      shell: bash
+      env:
+        MIRROR_DIR: /mnt/git-mirror/hermes-agent.git
+        TARGET_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+
+        dest="${GITHUB_WORKSPACE}"
+        if [ -n "${TARGET_PATH}" ]; then
+          dest="${GITHUB_WORKSPACE}/${TARGET_PATH}"
+        fi
+
+        # No mirror (ubuntu-latest, arm64 pool, or a node the DaemonSet has
+        # not seeded yet) => plain checkout. Never fail the job over this.
+        if [ ! -d "${MIRROR_DIR}/objects" ]; then
+          echo "used-mirror=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::git mirror not present, using a normal checkout"
+          exit 0
+        fi
+
+        # A mirror mid-clone is a real state: the DaemonSet writes to
+        # <mirror>.tmp and renames, but a crashed node can leave a partial
+        # object store. Verify it answers as a git dir before trusting it.
+        if ! git -C "${MIRROR_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+          echo "used-mirror=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::git mirror present but unreadable, using a normal checkout"
+          exit 0
+        fi
+
+        mkdir -p "${dest}"
+        # If a previous step already made this a repo, leave it alone —
+        # actions/checkout knows how to reuse it and we would only confuse
+        # matters by rewriting its object config.
+        if [ -d "${dest}/.git" ]; then
+          echo "used-mirror=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::workspace already initialized, skipping mirror seed"
+          exit 0
+        fi
+
+        git init --quiet "${dest}"
+        # THE mechanism: point this repo's object lookup at the mirror.
+        # Objects are read straight off local NVMe; the subsequent fetch
+        # only transfers what the mirror does not already have.
+        echo "${MIRROR_DIR}/objects" > "${dest}/.git/objects/info/alternates"
+
+        echo "used-mirror=true" >> "$GITHUB_OUTPUT"
+        echo "::notice::seeded git alternates from ${MIRROR_DIR}"
+
+    # Two checkout calls rather than one with a computed fetch-depth: the
+    # depth has to differ, and a single step with an expression would still
+    # need the same conditional. Keeping them separate makes the reason
+    # visible in the job log.
+    - name: Checkout (mirrored, unshallow)
+      if: steps.seed.outputs.used-mirror == 'true'
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        # fetch-depth: 0 is REQUIRED here and is not a typo.
+        #
+        # Measured in-cluster against the 5.2G mirror:
+        #   plain --depth=1, no mirror        7s   60M fetched
+        #   alternates + --depth=1           17s   16K fetched  <-- slower!
+        #   alternates, no depth limit        1s   16K fetched  <-- this
+        #
+        # A shallow fetch must negotiate a shallow boundary against every
+        # object the alternate provides, and that enumeration costs more
+        # than downloading the pack outright. Unshallow says "I have
+        # everything" and transfers almost nothing. Cheap only because the
+        # objects are already on local disk.
+        fetch-depth: 0
+        ref: ${{ inputs.ref }}
+        path: ${{ inputs.path }}
+        persist-credentials: ${{ inputs.persist-credentials }}
+
+    - name: Checkout (no mirror)
+      if: steps.seed.outputs.used-mirror != 'true'
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        fetch-depth: ${{ inputs.fetch-depth }}
+        ref: ${{ inputs.ref }}
+        path: ${{ inputs.path }}
+        persist-credentials: ${{ inputs.persist-credentials }}
+
+    # NOTE: deliberately no "detach from mirror" step.
+    #
+    # The alternates file points at a hostPath that exists only on this node,
+    # so the workspace is not portable off the runner. Absorbing the borrowed
+    # objects to make it self-contained was measured and rejected:
+    #
+    #   leave alternates in place       1s total, .git =   1.0M
+    #   repack -a -d                   +5s      , .git = 461.3M
+    #   shallow-graft then repack     +20s      , .git =  61.0M
+    #
+    # Detaching costs more than the whole optimisation saves (baseline is
+    # 7s), and inflates .git rather than shrinking it. Since jobs consume the
+    # workspace on the same pod that created it, portability buys nothing.
+    #
+    # The one thing this rules out: copying the raw .git directory to another
+    # machine or into a docker build context. Nothing in this repo does that
+    # — docker builds use their own checkout — but a job that starts doing so
+    # must either run `git repack -a -d` itself or use plain actions/checkout.

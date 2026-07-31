@@ -23,8 +23,12 @@ concurrency:
 jobs:
   hadolint:
     name: Lint Dockerfile (hadolint)
-    # Short gate job: small runner, no dind (see hermes-agent-ci-infra).
-    runs-on: arc-runner-small
+    # arc-runner-docker, NOT arc-runner-small: hadolint-action declares
+    # `runs: using: docker`, so the runner builds and runs it as a container
+    # and needs a real daemon — even though no step here shells out to
+    # docker. Grepping job bodies for docker commands misses this; check
+    # each action's `runs.using` before routing a job to a dind-less set.
+    runs-on: arc-runner-docker
     timeout-minutes: 5
     steps:
       - name: Checkout code

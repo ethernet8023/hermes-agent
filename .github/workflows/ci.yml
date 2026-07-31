@@ -56,6 +56,11 @@ jobs:
       event_name: ${{ github.event_name }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            scripts/ci/classify_changes.py
+            .github/actions/detect-changes/action.yml
+          sparse-checkout-cone-mode: false
       - name: Detect affected areas
         id: classify
         uses: ./.github/actions/detect-changes
@@ -195,7 +200,18 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   comment-live:
     name: CI review comment (live)
-    needs: [detect, review-labels, lockfile-diff, supply-chain, osv-scanner, uv-lockfile, history-check, contributor-check, e2e-desktop]
+    needs:
+      [
+        detect,
+        review-labels,
+        lockfile-diff,
+        supply-chain,
+        osv-scanner,
+        uv-lockfile,
+        history-check,
+        contributor-check,
+        e2e-desktop
+      ]
     if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
     runs-on: arc-runner-set
     timeout-minutes: 40

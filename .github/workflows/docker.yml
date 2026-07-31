@@ -92,13 +92,36 @@ jobs:
           service_account: gha-buildx-cache@hermes-agent-github-actions.iam.gserviceaccount.com
           token_format: access_token
 
+      # PR builds mint a READ-ONLY registry token from the runner pod's GKE
+      # Workload Identity instead. The pod's KSA (arc-runners/buildx-cache-
+      # reader) impersonates gha-buildx-cache-ro@, which holds only
+      # artifactregistry.reader on the ci-cache repo — so this token cannot
+      # write cache layers, and the layer-poisoning boundary above holds.
+      #
+      # This step is what actually turns pod WI into a docker credential:
+      # buildx only forwards auth that's present in the docker cred store,
+      # and there is no ambient cred helper for *.pkg.dev in the runner
+      # image — without an explicit login, cache-from falls back to an
+      # anonymous pull, gets 403, and every PR build runs cache-cold
+      # (~15 min instead of ~3).
+      - name: Mint read-only cache token (pod Workload Identity)
+        id: wi-token
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          token=$(curl -sSf -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+            | jq -r .access_token)
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
       - name: Log in to Artifact Registry
-        if: steps.gcp-auth.outputs.access_token != ''
+        if: steps.gcp-auth.outputs.access_token != '' || steps.wi-token.outputs.token != ''
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: us-central1-docker.pkg.dev
           username: oauth2accesstoken
-          password: ${{ steps.gcp-auth.outputs.access_token }}
+          password: ${{ steps.gcp-auth.outputs.access_token || steps.wi-token.outputs.token }}
 
       # Build once, load into the local daemon for testing.  Cached
       # per-arch; the push step below reuses every layer from this build.

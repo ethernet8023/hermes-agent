@@ -22,6 +22,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -196,6 +197,125 @@ def _normalize_job(raw: dict) -> dict:
         "duration_s": dur_s(raw.get("started_at"), raw.get("completed_at")),
         "html_url": raw.get("html_url", ""),
         "steps": steps,
+    }
+
+
+# Step categories. "Overhead" is everything a job pays before and after its
+# actual work: runner setup, checkout, dependency restore/install, teardown.
+# Naming is GitHub's, not ours — a `uses:` step is reported as
+# "Run <owner>/<action>@<sha>" and its cleanup as "Post Run <...>", while a
+# `run:` step keeps whatever `name:` the workflow gave it. So the setup
+# patterns match action refs and the well-known implicit steps, and anything
+# unmatched is treated as work (better to under-report overhead than to
+# silently classify a real test step as setup).
+STEP_SETUP = "setup"
+STEP_WORK = "work"
+STEP_TEARDOWN = "teardown"
+
+_SETUP_PATTERNS = (
+    "set up job",
+    "set up python",
+    "set up node",
+    "checkout",
+    "actions/checkout",
+    "actions/setup-",
+    "actions/cache",
+    "restore ",          # "Restore uv cache", "Restore baseline cache", ...
+    "install ",          # "Install dependencies", "Install ruff + ty", ...
+    "minimize uv cache",
+    "uv-cache",
+    "set up docker buildx",
+    "log in to",
+    "authenticate to",
+    "mint read-only cache token",
+    "pull ghcr.io/",
+    "get-app-token",
+    "determine base ref",
+)
+
+_TEARDOWN_PATTERNS = (
+    "complete job",
+    "stop containers",
+    "upload",
+    "export results",
+)
+
+
+def classify_step(name: str) -> str:
+    """Bucket a step into setup / work / teardown.
+
+    Any ``Post ...`` step is teardown regardless of what it post-processes —
+    that's GitHub's own cleanup phase for a ``uses:`` step.
+    """
+    low = (name or "").strip().lower()
+    if low.startswith("post "):
+        return STEP_TEARDOWN
+    for pat in _TEARDOWN_PATTERNS:
+        if pat in low:
+            return STEP_TEARDOWN
+    for pat in _SETUP_PATTERNS:
+        if pat in low:
+            return STEP_SETUP
+    return STEP_WORK
+
+
+def display_step_name(name: str) -> str:
+    """Strip the pinned SHA from an action ref for display.
+
+    GitHub names a ``uses:`` step after the full pinned ref, e.g.
+    ``Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd``. The
+    40-char SHA crowds out the part a reader cares about and makes the
+    overhead table unreadable, so drop it. Only the DISPLAY changes — the
+    raw name stays the key for baseline comparison and aggregation, since
+    two different pins are genuinely two different steps.
+    """
+    if not name:
+        return ""
+    return re.sub(r"@[0-9a-f]{7,40}\b", "", name)
+
+
+def compute_overhead(timings: dict) -> dict:
+    """Aggregate setup/work/teardown seconds across every non-skipped job.
+
+    Returns totals plus the worst individual setup steps, so the report can
+    answer "how much of CI is spent getting ready to work" with a number
+    instead of an impression.
+    """
+    totals = {STEP_SETUP: 0.0, STEP_WORK: 0.0, STEP_TEARDOWN: 0.0}
+    by_step: dict[str, dict] = {}
+    jobs_with_steps = 0
+
+    for j in timings.get("jobs", []):
+        if is_skipped(j) or not j.get("steps"):
+            continue
+        jobs_with_steps += 1
+        for s in j["steps"]:
+            dur = s.get("duration_s")
+            if dur is None or dur < 0:
+                continue
+            cat = classify_step(s.get("name", ""))
+            totals[cat] += dur
+            if cat != STEP_WORK:
+                agg = by_step.setdefault(
+                    s.get("name", ""), {"name": s.get("name", ""),
+                                        "total_s": 0.0, "count": 0, "category": cat}
+                )
+                agg["total_s"] += dur
+                agg["count"] += 1
+
+    accounted = sum(totals.values())
+    overhead = totals[STEP_SETUP] + totals[STEP_TEARDOWN]
+    return {
+        "setup_s": totals[STEP_SETUP],
+        "work_s": totals[STEP_WORK],
+        "teardown_s": totals[STEP_TEARDOWN],
+        "overhead_s": overhead,
+        "accounted_s": accounted,
+        "overhead_pct": (overhead / accounted * 100) if accounted > 0 else 0.0,
+        "jobs_with_steps": jobs_with_steps,
+        "top_overhead_steps": sorted(
+            by_step.values(), key=lambda x: -x["total_s"]
+        )[:8],
     }
 
 
@@ -618,6 +738,61 @@ h2 { font-size: 18px; margin: 32px 0 12px; }
 .gantt-bar.baseline {
   background: transparent; border: 1px dashed #8b949e; top: 2px; height: 24px; z-index: 1;
 }
+
+/* Step segmentation inside the job bar. Segments are children of
+   .gantt-bar.current, so their percentages are relative to the bar. The
+   right border is the divider between consecutive steps. */
+.gantt-seg {
+  position: absolute; top: 0; height: 100%;
+  border-right: 1px solid rgba(1,4,9,0.85);
+  box-sizing: border-box;
+}
+.gantt-seg:last-child { border-right: none; }
+.gantt-seg.setup { background: #d29922; }
+.gantt-seg.work { background: #1f6feb; }
+.gantt-seg.teardown { background: #8957e5; }
+.gantt-seg:hover { filter: brightness(1.45); }
+
+/* Expandable job rows */
+.gantt-row.job.expandable { cursor: pointer; }
+.gantt-row.job.expandable:hover .gantt-label { color: #58a6ff; }
+.caret {
+  display: inline-block; margin-right: 4px; font-size: 9px; color: #8b949e;
+  transition: transform 0.15s;
+}
+.gantt-group.open .caret { transform: rotate(90deg); }
+.gantt-steps { display: none; }
+.gantt-group.open .gantt-steps { display: block; }
+.gantt-row.step { height: 18px; }
+.gantt-label.step {
+  font-size: 11px; color: #8b949e; padding-left: 18px;
+  text-align: right; direction: rtl;
+}
+.gantt-bar.step { height: 10px; top: 4px; opacity: 0.85; z-index: 2; }
+.gantt-bar.step.setup { background: #d29922; }
+.gantt-bar.step.work { background: #1f6feb; }
+.gantt-bar.step.teardown { background: #8957e5; }
+
+/* Overhead breakdown bar */
+.overhead-bar {
+  display: flex; height: 26px; border-radius: 4px; overflow: hidden;
+  margin: 8px 0 6px; border: 1px solid #30363d;
+}
+.overhead-seg {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; color: #010409; white-space: nowrap;
+  overflow: hidden;
+}
+.overhead-seg.setup { background: #d29922; }
+.overhead-seg.work { background: #1f6feb; color: #fff; }
+.overhead-seg.teardown { background: #8957e5; color: #fff; }
+.gantt-hint { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+.gantt-hint button {
+  background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+  border-radius: 5px; padding: 2px 10px; font-size: 12px; cursor: pointer;
+  font-family: inherit; margin-left: 4px;
+}
+.gantt-hint button:hover { background: #30363d; border-color: #8b949e; }
 .gantt-axis { display: flex; height: 20px; position: relative; border-top: 1px solid #30363d; margin-top: 4px; }
 .gantt-tick { position: absolute; font-size: 10px; color: #8b949e; transform: translateX(-50%); top: 4px; }
 .gantt-tick::before { content: ''; position: absolute; top: -4px; left: 50%; width: 1px; height: 4px; background: #30363d; }
@@ -735,16 +910,72 @@ def _gantt_bars(timings: dict, baseline: dict | None) -> str:
                 f'title="{escape(j["name"])} — waited: {fmt_dur(wait_s)}"></div>'
             )
 
+        # Segment the job bar by step, so the composition of a job is visible
+        # without expanding it. Segments are nested INSIDE the job bar, so
+        # their offsets are percentages of the bar's own width (not of the
+        # whole track) — hence job_span, not total_s, as the denominator.
+        # The expanded step rows sit in the track instead, so those use the
+        # track scale.
+        #
+        # GitHub reports step timestamps at second granularity, so a
+        # sub-second step has started_at == completed_at and would render
+        # zero-width. Every segment gets a small minimum width; the tooltip
+        # carries the true duration. Short steps stay hoverable at the cost
+        # of segments summing to slightly over 100% on very short jobs.
+        job_span = (e - s).total_seconds() or 1.0
+        segments = []
+        step_rows = []
+        for st in (j.get("steps") or []):
+            st_s = parse_ts(st.get("started_at"))
+            st_e = parse_ts(st.get("completed_at"))
+            if st_s is None or st_e is None:
+                continue
+            cat = classify_step(st.get("name", ""))
+            st_dur = st.get("duration_s") or 0
+            st_name = escape(display_step_name(st.get("name", "")))
+            tip = f'{st_name} — {fmt_dur(st_dur)} [{cat}]'
+
+            # Within-bar coordinates (percent of the job bar).
+            in_left = max((st_s - s).total_seconds() / job_span * 100, 0)
+            in_width = max((st_e - st_s).total_seconds() / job_span * 100, 0.4)
+            segments.append(
+                f'<div class="gantt-seg {cat}" '
+                f'style="left:{in_left:.3f}%;width:{in_width:.3f}%" '
+                f'title="{tip}"></div>'
+            )
+
+            # Track coordinates (percent of the whole timeline) for the
+            # expanded rows.
+            tr_left = (st_s - cur_t0).total_seconds() / total_s * 100
+            tr_width = max((st_e - st_s).total_seconds() / total_s * 100, 0.15)
+            step_rows.append(
+                f'<div class="gantt-row step">'
+                f'<div class="gantt-label step" title="{st_name}">{st_name}</div>'
+                f'<div class="gantt-track">'
+                f'<div class="gantt-bar step {cat}" '
+                f'style="left:{tr_left:.3f}%;width:{tr_width:.3f}%" '
+                f'title="{tip}"></div>'
+                f'</div></div>'
+            )
+
+        seg_html = "".join(segments)
+        # Only offer expansion when there is step detail to show.
+        expandable = " expandable" if step_rows else ""
+        caret = '<span class="caret">▸</span>' if step_rows else ""
+
         rows.append(
-            f'<div class="gantt-row">'
-            f'<div class="gantt-label" title="{escape(j["name"])}">{name_display}</div>'
+            f'<div class="gantt-group">'
+            f'<div class="gantt-row job{expandable}">'
+            f'<div class="gantt-label" title="{escape(j["name"])}">{caret}{name_display}</div>'
             f'<div class="gantt-track">'
             f'{bl_bar}'
             f'{wait_bar}'
             f'<div class="gantt-bar current" '
             f'style="left:{left:.2f}%;width:{width:.2f}%" '
-            f'title="{escape(j["name"])}: {fmt_dur(dur)}{delta_info}"></div>'
+            f'title="{escape(j["name"])}: {fmt_dur(dur)}{delta_info}">{seg_html}</div>'
             f'</div></div>'
+            f'<div class="gantt-steps">{"".join(step_rows)}</div>'
+            f'</div>'
         )
 
     # Axis
@@ -765,14 +996,122 @@ def _gantt_bars(timings: dict, baseline: dict | None) -> str:
 
     legend = (
         '<div class="legend">'
-        '<span><span class="legend-swatch" style="background:#1f6feb"></span>Current</span>'
+        '<span><span class="legend-swatch" style="background:#d29922"></span>Setup</span>'
+        '<span><span class="legend-swatch" style="background:#1f6feb"></span>Work</span>'
+        '<span><span class="legend-swatch" style="background:#8957e5"></span>Teardown</span>'
         '<span><span class="legend-swatch" style="background:repeating-linear-gradient(45deg,#30363d,#30363d 3px,transparent 3px,transparent 6px);opacity:0.6"></span>Wait</span>'
     )
     if baseline:
         legend += '<span><span class="legend-swatch" style="border:1px dashed #8b949e"></span>Baseline (main)</span>'
     legend += '</div>'
 
-    return f'<div class="gantt-wrap"><div class="gantt">{"".join(rows)}{axis}</div></div>{legend}'
+    hint = (
+        '<div class="gantt-hint">'
+        'Bars are segmented by step — hover a segment for its name and duration. '
+        'Click a job to expand its steps. '
+        '<button type="button" id="gantt-toggle-all">Expand all</button>'
+        '</div>'
+    )
+
+    # Vanilla JS, no deps: the report is a single self-contained HTML file
+    # served from an artifact URL.
+    script = """
+<script>
+(function () {
+  var groups = Array.prototype.slice.call(
+    document.querySelectorAll('.gantt-group')
+  );
+  groups.forEach(function (g) {
+    var row = g.querySelector('.gantt-row.job.expandable');
+    if (!row) return;
+    row.addEventListener('click', function () { g.classList.toggle('open'); });
+  });
+  var btn = document.getElementById('gantt-toggle-all');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var expandable = groups.filter(function (g) {
+      return g.querySelector('.gantt-row.job.expandable');
+    });
+    var anyClosed = expandable.some(function (g) {
+      return !g.classList.contains('open');
+    });
+    expandable.forEach(function (g) { g.classList.toggle('open', anyClosed); });
+    btn.textContent = anyClosed ? 'Collapse all' : 'Expand all';
+  });
+})();
+</script>
+"""
+
+    return (
+        f'{hint}<div class="gantt-wrap"><div class="gantt">{"".join(rows)}{axis}</div></div>'
+        f'{legend}{script}'
+    )
+
+
+def _overhead_section(timings: dict) -> str:
+    """Quantify how much CI compute goes to setup/teardown rather than work.
+
+    This is the "is checkout the bottleneck?" answer: a stacked bar over all
+    accounted step time, plus the individual overhead steps that cost the
+    most summed across every job.
+    """
+    ov = compute_overhead(timings)
+    total = ov["accounted_s"]
+    if total <= 0:
+        return ('<p style="color:#8b949e">No per-step timing data available '
+                '(GitHub returns steps only for jobs this token can read).</p>')
+
+    setup_pct = ov["setup_s"] / total * 100
+    work_pct = ov["work_s"] / total * 100
+    teardown_pct = ov["teardown_s"] / total * 100
+
+    def seg(cls, pct, label):
+        if pct < 0.5:
+            return ""
+        # Only label a segment wide enough to hold text.
+        text = label if pct >= 8 else ""
+        return (f'<div class="overhead-seg {cls}" style="width:{pct:.2f}%" '
+                f'title="{label}">{text}</div>')
+
+    bar = (
+        '<div class="overhead-bar">'
+        + seg("setup", setup_pct, f'Setup {fmt_dur(ov["setup_s"])} ({setup_pct:.0f}%)')
+        + seg("work", work_pct, f'Work {fmt_dur(ov["work_s"])} ({work_pct:.0f}%)')
+        + seg("teardown", teardown_pct,
+              f'Teardown {fmt_dur(ov["teardown_s"])} ({teardown_pct:.0f}%)')
+        + '</div>'
+    )
+
+    headline = (
+        f'<p style="margin:4px 0 12px"><strong>{ov["overhead_pct"]:.0f}%</strong> of '
+        f'accounted step time ({fmt_dur(ov["overhead_s"])} of {fmt_dur(total)}) is '
+        f'setup + teardown rather than useful work, across {ov["jobs_with_steps"]} jobs.</p>'
+    )
+
+    rows = []
+    for s in ov["top_overhead_steps"]:
+        pct = s["total_s"] / total * 100
+        rows.append(
+            f'<tr><td class="job-name">{escape(display_step_name(s["name"]))}</td>'
+            f'<td>{s["category"]}</td>'
+            f'<td class="num">{s["count"]}</td>'
+            f'<td class="num">{fmt_dur(s["total_s"])}</td>'
+            f'<td class="num">{pct:.1f}%</td></tr>'
+        )
+    table = (
+        '<table><thead><tr><th>Overhead step</th><th>Kind</th>'
+        '<th class="num">Jobs</th><th class="num">Total</th>'
+        '<th class="num">% of step time</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
+    ) if rows else ""
+
+    note = (
+        '<p style="font-size:12px;color:#8b949e">Percentages are of summed '
+        'step time across jobs (not wall time — jobs run in parallel). '
+        'Unrecognized step names count as work, so this under-reports rather '
+        'than inflates overhead.</p>'
+    )
+    return headline + bar + table + note
 
 
 def _stats_cards(stats: dict) -> str:
@@ -893,7 +1232,7 @@ def _step_details(timings: dict, baseline: dict | None) -> str:
 
             step_rows.append(
                 f'<tr>'
-                f'<td>{escape(s["name"])}</td>'
+                f'<td>{escape(display_step_name(s["name"]))}</td>'
                 f'<td class="num">{fmt_dur(s_dur)}</td>'
                 f'<td class="num">{fmt_dur(bl_s_dur)}</td>'
                 f'<td class="num {s_cls}">{s_delta}</td>'
@@ -949,7 +1288,7 @@ def _regressions(timings: dict, baseline: dict | None) -> str:
         rows.append(
             f'<tr>'
             f'<td class="job-name">{escape(job)}</td>'
-            f'<td>{escape(step)}</td>'
+            f'<td>{escape(display_step_name(step))}</td>'
             f'<td class="num">{fmt_dur(cur)}</td>'
             f'<td class="num">{fmt_dur(bl_d)}</td>'
             f'<td>{tag}</td>'
@@ -1043,6 +1382,9 @@ def generate_html(timings: dict, baseline: dict | None = None,
     html += _stats_cards(stats)
 
     html += _bottleneck_box(timings, profiles or {})
+
+    html += '<h2>Setup vs Work</h2>\n'
+    html += _overhead_section(timings)
 
     if profiles:
         html += '<h2>Resource Usage</h2>\n'

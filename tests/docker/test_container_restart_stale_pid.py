@@ -49,7 +49,13 @@ def _wait_for_reconcile_log_mention(
 ) -> str:
     """Poll until /opt/data/logs/container-boot.log mentions `profile`.
     """
-    return wait_for_log(container, "/opt/data/logs/container-boot.log",  f"profile={profile}")
+    return wait_for_log(
+        container,
+        "/opt/data/logs/container-boot.log",
+        f"profile={profile}",
+        deadline_s=deadline_s,
+        interval_s=interval_s,
+    )
 
 
 @pytest.fixture

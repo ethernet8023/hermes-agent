@@ -37,7 +37,10 @@ runs:
       env:
         _CMD: ${{ inputs.command }}
       run: |
-        bash -c "$_CMD"
+        # -e / pipefail: match the semantics of a normal `run:` step
+        # (bash -e {0}) so a failing early line (e.g. `source .venv/...`)
+        # fails the step instead of silently running the rest.
+        bash -eo pipefail -c "$_CMD"
 
     - name: Stop profiler and collect results
       id: stop-profiler

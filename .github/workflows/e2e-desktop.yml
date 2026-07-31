@@ -50,7 +50,9 @@ jobs:
             ui-tui/packages/*/node_modules
             web/node_modules
             tests-js/node_modules
-          key: node-modules-full-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          # node22 in the key: node-pty/electron native artifacts are
+          # node-major-specific; sync with setup-node's node-version.
+          key: node-modules-full-node22-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
 
 
       # Full npm ci (not --ignore-scripts): electron's postinstall

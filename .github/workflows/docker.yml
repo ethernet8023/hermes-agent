@@ -34,15 +34,15 @@ jobs:
   # Buildx layer cache lives in Artifact Registry (us-central1, same region
   # as the ARC runners) instead of GitHub's cache CDN. Reads are keyless via
   # GKE Workload Identity on the runner pods; writes are keyless via GitHub
-  # OIDC -> GCP WIF (google-github-actions/auth). Fork PRs get neither an
-  # id-token nor pod WI outside our cluster, so they build cache-cold —
-  # same behavior type=gha gave them.
+  # OIDC -> GCP WIF (google-github-actions/auth) and happen ONLY on trusted
+  # main-push/release contexts — PR builds of any origin are read-only so
+  # PR-controlled code can never write cache layers the publish job reads.
   build:
     if: github.repository == 'NousResearch/hermes-agent'
     permissions:
       contents: read
-      # OIDC token for WIF cache writes. Fork-PR runs receive no id-token;
-      # the auth step below is skipped for them.
+      # OIDC token for WIF cache writes — only minted on non-PR events
+      # (see the gcp-auth step); PR runs stay secret-free.
       id-token: write
     strategy:
       fail-fast: false
@@ -76,13 +76,15 @@ jobs:
         if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      # Keyless GCP auth via GitHub OIDC -> WIF. Fork PRs have no id-token
-      # (permissions are read-only in their context), so this step is
-      # skipped and the build runs cache-read-only via the pod's GKE
-      # Workload Identity.
+      # Keyless GCP auth via GitHub OIDC -> WIF. PR builds (fork or
+      # same-repo) get NO write token: this job runs PR-controlled code
+      # and the publish job reads the same cache ref, so a PR-writable
+      # cache would be a layer-poisoning vector. PRs read the cache via
+      # the pod's GKE Workload Identity; writes happen only on trusted
+      # main-push/release contexts.
       - name: Authenticate to GCP (WIF, cache writes)
         id: gcp-auth
-        if: github.event.pull_request.head.repo.fork != true
+        if: github.event_name != 'pull_request'
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           project_id: hermes-agent-github-actions
@@ -160,7 +162,7 @@ jobs:
         # env -i into the parallel runner.
         uses: ./.github/actions/profile
         with:
-          label: docker-tests
+          label: docker-tests-${{ matrix.arch }}
           command: HERMES_TEST_WORKERS=8 HERMES_TEST_IMAGE="${{ env.IMAGE_NAME }}:test" scripts/run_tests.sh tests/docker/ --file-timeout 600
 
   # ---------------------------------------------------------------------------

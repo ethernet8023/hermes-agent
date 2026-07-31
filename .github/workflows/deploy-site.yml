@@ -75,7 +75,9 @@ jobs:
         id: npm-cache
         with:
           path: website/node_modules
-          key: node-modules-cache-${{ hashFiles('website/package-lock.json') }}
+          # node22: native builds + engine checks are node-major-specific;
+          # keep the key in sync with setup-node's node-version above.
+          key: node-modules-cache-node22-${{ hashFiles('website/package-lock.json') }}
 
       - name: Install website dependencies
         uses: ./.github/actions/retry

@@ -1758,7 +1758,10 @@ def run_doctor(args):
     elif _is_termux():
         check_info("Docker backend is not available inside Termux (expected on Android)")
     elif running_in_container:
-        pass  # already explained above
+        # In-container with a non-docker backend: the info line above only
+        # prints for the implicit `local` case, but either way a missing
+        # docker binary inside the container is expected — stay quiet.
+        pass
     else:
         check_warn("docker not found", "(optional)")
     

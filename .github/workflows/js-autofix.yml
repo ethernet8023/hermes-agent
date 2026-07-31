@@ -85,7 +85,8 @@ jobs:
             ui-tui/packages/*/node_modules
             web/node_modules
             tests-js/node_modules
-          key: node-modules-noscripts-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          # node22 in the key: sync with setup-node's node-version.
+          key: node-modules-noscripts-node22-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
 
       # --ignore-scripts: eslint only needs TS sources + eslint packages.
       - uses: ./.github/actions/retry

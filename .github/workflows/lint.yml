@@ -34,6 +34,35 @@ jobs:
     runs-on: arc-runner-small
     timeout-minutes: 10
     steps:
+      - name: Seed git objects from the node-local mirror
+        # The GKE runner nodes keep a bare mirror of this repo on local disk
+        # (hermes-agent-ci-infra k8s/git-mirror-daemonset.yaml). Pointing a fresh
+        # .git at it via alternates makes the checkout below resolve nearly every
+        # object locally — ~1MB fetched instead of ~61MB. That matters because ~40
+        # pods check out at once and saturate the pool's egress.
+        #
+        # It matters doubly with fetch-depth: 0 — an unshallow fetch with no mirror
+        # is the worst case of all (measured 117s on a 1Gi pod). With the mirror the
+        # history is already on local disk.
+        #
+        # actions/checkout is unmodified: it reuses an existing .git when the fetch
+        # URL matches (git-directory-helper.ts prepareExistingDirectory).
+        shell: bash
+        run: |
+          set -euo pipefail
+          MIRROR=/mnt/git-mirror/hermes-agent.git
+          if [ ! -d "$MIRROR/objects" ]; then
+            echo "::notice::no node mirror, using a normal checkout"; exit 0
+          fi
+          git config --global --add safe.directory "$MIRROR"
+          if ! git -C "$MIRROR" rev-parse --git-dir >/dev/null 2>&1; then
+            echo "::warning::node mirror unreadable, using a normal checkout"; exit 0
+          fi
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then exit 0; fi
+          git init --quiet "$GITHUB_WORKSPACE"
+          echo "$MIRROR/objects" > "$GITHUB_WORKSPACE/.git/objects/info/alternates"
+          echo "::notice::seeded git alternates from $MIRROR"
+
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

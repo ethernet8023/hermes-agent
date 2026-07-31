@@ -51,7 +51,8 @@ jobs:
   check:
     name: Review label gate
     if: inputs.ci_review || inputs.mcp_catalog || inputs.supply_chain
-    runs-on: arc-runner-set
+    # Short gate job: small runner, no dind (see hermes-agent-ci-infra).
+    runs-on: arc-runner-small
     timeout-minutes: 2
     outputs:
       ci_reviewed: ${{ steps.label-check.outputs.ci_reviewed }}

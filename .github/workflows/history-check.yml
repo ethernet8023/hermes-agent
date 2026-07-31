@@ -25,7 +25,8 @@ permissions:
 
 jobs:
   check-common-ancestor:
-    runs-on: arc-runner-set
+    # Short gate job: small runner, no dind (see hermes-agent-ci-infra).
+    runs-on: arc-runner-small
     timeout-minutes: 10
     outputs:
       review_status: ${{ steps.merge-base-check.outputs.review_status }}

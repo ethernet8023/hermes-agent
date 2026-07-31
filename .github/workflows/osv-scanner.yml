@@ -57,7 +57,8 @@ jobs:
 
   emit-status:
     name: Emit review status
-    runs-on: arc-runner-set
+    # Short gate job: small runner, no dind (see hermes-agent-ci-infra).
+    runs-on: arc-runner-small
     needs: scan
     if: always()
     outputs:

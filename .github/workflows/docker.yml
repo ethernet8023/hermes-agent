@@ -49,7 +49,10 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: arc-runner-set
+            # dind lives only on arc-runner-docker now; the general amd64
+            # set dropped it so the ~20 workflows that never touch a daemon
+            # stop paying for a privileged sidecar on every pod.
+            runner: arc-runner-docker
             platform: linux/amd64
           - arch: arm64
             runner: arc-runner-arm64
@@ -197,7 +200,8 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: arc-runner-set
+            # See the build job: dind lives only on arc-runner-docker.
+            runner: arc-runner-docker
             platform: linux/amd64
           - arch: arm64
             runner: arc-runner-arm64
@@ -284,7 +288,8 @@ jobs:
   # ---------------------------------------------------------------------------
   merge:
     if: github.repository == 'NousResearch/hermes-agent' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release')
-    runs-on: arc-runner-set
+    # Needs buildx to assemble the manifest list — see the build job.
+    runs-on: arc-runner-docker
     needs: [publish]
     timeout-minutes: 10
     environment: container-publish

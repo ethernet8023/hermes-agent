@@ -21,54 +21,61 @@ jobs:
         run: |
           npm i -g npm@12
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: npm-cache
-        with:
-          # Cache every workspace's node_modules, not just the root: npm
-          # nests conflicting-version deps inside apps/*/node_modules etc.,
-          # and a root-only cache restores an incomplete install.
-          path: |
-            node_modules
-            apps/*/node_modules
-            ui-tui/node_modules
-            ui-tui/packages/*/node_modules
-            web/node_modules
-            tests-js/node_modules
-          # noscripts flavor: MUST NOT share a key with full `npm ci`
-          # installs (electron postinstall binary, node-pty build).
-          # node22 in the key: sync with setup-node's node-version.
-          key: node-modules-noscripts-node22-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
-
-      - uses: ./.github/actions/retry
-        with:
-          command: npm ci --ignore-scripts
-        if: steps.npm-cache.outputs.cache-hit != 'true'
-
       - id: set-matrix
         run: |
           node -e '
-          const { execSync } = require("child_process");
-          const pkgs = JSON.parse(execSync("npm query .workspace", { encoding: "utf-8" }));
+          const fs = require("fs");
+          const path = require("path");
+
+          const rootPkg = JSON.parse(fs.readFileSync("package.json", "utf-8"));
+          const patterns = rootPkg.workspaces || [];
+
+          // minimal glob support: exact dirs ("packages/foo") and single-level wildcards ("packages/*")
+          function expandPattern(pattern) {
+            if (!pattern.includes("*")) {
+              return fs.existsSync(pattern) ? [pattern] : [];
+            }
+            const [base] = pattern.split("*");
+            const parentDir = base.replace(/\/$/, "");
+            if (!fs.existsSync(parentDir)) return [];
+            return fs.readdirSync(parentDir, { withFileTypes: true })
+              .filter(d => d.isDirectory())
+              .map(d => path.join(parentDir, d.name));
+          }
+
+          const dirs = [...new Set(patterns.flatMap(expandPattern))];
+
+          const pkgs = dirs
+            .map(dir => {
+              const pkgPath = path.join(dir, "package.json");
+              if (!fs.existsSync(pkgPath)) return null;
+              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+              return { location: dir, name: pkg.name, scripts: pkg.scripts || {} };
+            })
+            .filter(Boolean);
+
           if (pkgs.length === 0) {
             console.error("::error::Workspace discovery produced an empty package list — refusing to emit a zero-length matrix (would skip all JS/TS checks silently).");
             process.exit(1);
           }
+
           const checks = [];
           for (const pkg of pkgs) {
-            const scripts = pkg.scripts || {};
-            const subs = Object.keys(scripts).filter(s => /^check:.+$/.test(s));
+            const subs = Object.keys(pkg.scripts).filter(s => /^check:.+$/.test(s));
             if (subs.length > 0) {
               for (const script of subs) {
                 checks.push({ package: pkg.location, script });
               }
-            } else if (scripts.check) {
+            } else if (pkg.scripts.check) {
               checks.push({ package: pkg.location, script: "check" });
             }
           }
+
           if (checks.length === 0) {
             console.error("::error::No check scripts found in any workspace package.");
             process.exit(1);
           }
+
           process.stdout.write("checks=" + JSON.stringify(checks) + "\n");
           ' >> "$GITHUB_OUTPUT"
 

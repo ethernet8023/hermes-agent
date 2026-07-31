@@ -170,6 +170,56 @@ def _discover_files(roots: List[Path]) -> List[Path]:
     return sorted(out)
 
 
+def _discover_files_from_git(roots: List[Path], repo_root: Path) -> List[Path]:
+    """Like :func:`_discover_files`, but list paths from the git index.
+
+    ``_discover_files`` walks the filesystem, which requires a full
+    working tree. The CI ``--generate-slices`` job only needs test file
+    *names* (it never opens them), so it checks out sparsely — a blobless,
+    sparse clone is ~3MB against ~212MB for the full tree. Under a sparse
+    checkout ``rglob`` finds nothing, because the files aren't on disk.
+
+    The git *index* still carries every path (sparse checkout only clears
+    the worktree, marking entries skip-worktree), so ``git ls-files``
+    enumerates the same set the filesystem walk would have. Skip-part
+    filtering and root-override semantics match ``_discover_files``
+    exactly, so both discovery paths produce identical slicing input.
+    """
+    seen: set[Path] = set()
+    out: List[Path] = []
+    for root in roots:
+        rel = root.relative_to(repo_root) if root.is_absolute() else root
+        # Same opt-in rule as _discover_files: naming a skipped dir as a
+        # root overrides the skip for that subtree.
+        root_skip_overrides = {part for part in rel.parts if part in _SKIP_PARTS}
+        effective_skips = _SKIP_PARTS - root_skip_overrides
+        try:
+            listed = subprocess.run(
+                ["git", "ls-files", "-z", "--", str(rel)],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"error: git ls-files failed for {rel}: {e}", file=sys.stderr)
+            raise SystemExit(2) from e
+        for entry in listed.split("\0"):
+            if not entry:
+                continue
+            path = Path(entry)
+            if not path.name.startswith("test_") or path.suffix != ".py":
+                continue
+            if any(part in effective_skips for part in path.parts):
+                continue
+            abs_path = repo_root / path
+            if abs_path in seen:
+                continue
+            seen.add(abs_path)
+            out.append(abs_path)
+    return sorted(out)
+
+
 def _kill_tree(proc: "subprocess.Popen", pgid: int | None = None) -> None:
     """Kill the pytest subprocess and every descendant it spawned.
 
@@ -774,6 +824,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--discover-from-git",
+        action="store_true",
+        help=(
+            "List test files from the git index (git ls-files) instead of "
+            "walking the filesystem. Lets --generate-slices run against a "
+            "blobless sparse checkout, where the test files aren't on disk."
+        ),
+    )
+    parser.add_argument(
         "--files",
         metavar="LIST",
         help=(
@@ -811,6 +870,7 @@ def main() -> int:
     OUR_FLAGS = {
         "-j", "--jobs", "--paths", "--include-integration",
         "--file-timeout", "--file-retries", "--slice", "--generate-slices", "--files",
+        "--discover-from-git",
     }
     # pytest short flags that consume the NEXT token as their value.
     PYTEST_VALUE_FLAGS = {"-k", "-m", "-p", "-o", "-c", "-r", "-W"}
@@ -929,7 +989,11 @@ def main() -> int:
             global _SKIP_PARTS  # noqa: PLW0603 — config knob
             _SKIP_PARTS = set()
 
-        files = _discover_files(roots)
+        files = (
+            _discover_files_from_git(roots, repo_root)
+            if args.discover_from_git
+            else _discover_files(roots)
+        )
 
     if not files:
         print("No test files to run", file=sys.stderr)

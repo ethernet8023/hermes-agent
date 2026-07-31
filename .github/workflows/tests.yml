@@ -26,6 +26,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # This job only needs test file *paths* — it computes the LPT
+          # distribution and never opens a test file. So skip the blobs
+          # (~212MB working tree -> ~3MB) and materialize only the script
+          # itself. `--discover-from-git` below lists the test paths from
+          # the git index, which a sparse checkout leaves fully populated.
+          # Checkout was ~90% of this job's wall time, and every test slice
+          # waits on it.
+          filter: blob:none
+          sparse-checkout: scripts/run_tests_parallel.py
+          sparse-checkout-cone-mode: false
 
       - name: Restore duration cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -42,7 +53,7 @@ jobs:
       - name: Generate test slices
         id: matrix
         run: |
-          MATRIX=$(python3 scripts/run_tests_parallel.py --generate-slices ${{ inputs.slice_count }})
+          MATRIX=$(python3 scripts/run_tests_parallel.py --generate-slices ${{ inputs.slice_count }} --discover-from-git)
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   test:

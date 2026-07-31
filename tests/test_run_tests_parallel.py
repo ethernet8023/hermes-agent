@@ -378,3 +378,102 @@ def test_explicit_k_wins_over_node_id_inference(tmp_path: Path) -> None:
     # -k test_beta wins: one test ran, and it wasn't filtered to nothing.
     assert proc.returncode == 0, proc.stdout
     assert "1 tests passed" in proc.stdout
+
+
+# ── Git-index discovery (--discover-from-git) ────────────────────────────────
+#
+# The CI "Generate slices" job only needs test file *paths* — it computes the
+# LPT distribution and never opens a test file. So it checks out blobless +
+# sparse (~212MB working tree -> ~3MB), which makes the filesystem rglob in
+# ``_discover_files`` find nothing. ``--discover-from-git`` lists paths from
+# the git index instead, which a sparse checkout leaves fully populated.
+#
+# These are behavior contracts, not snapshots: the two discovery paths must
+# agree on a full checkout (otherwise the flag silently changes which tests
+# run in which slice), and the git path must still work when the files are
+# absent from disk (otherwise it doesn't solve the problem it exists for).
+
+
+def _git_repo_with_tests(tmp_path: Path) -> Path:
+    """A real git repo containing test files, some under skipped dirs."""
+    repo = tmp_path / "repo"
+    (repo / "tests" / "sub").mkdir(parents=True)
+    (repo / "tests" / "docker").mkdir()
+    (repo / "tests" / "test_a.py").write_text("def test_a():\n    assert True\n")
+    (repo / "tests" / "sub" / "test_b.py").write_text("def test_b():\n    assert True\n")
+    # Not a test_*.py file — must never be discovered.
+    (repo / "tests" / "helper.py").write_text("X = 1\n")
+    # Under a _SKIP_PARTS dir — must be filtered out, same as the fs walk.
+    (repo / "tests" / "docker" / "test_c.py").write_text("def test_c():\n    assert True\n")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        cwd=repo, check=True,
+    )
+    return repo
+
+
+def _discovery_fns():
+    """Import both discovery functions straight from the runner script."""
+    import importlib.util
+
+    repo_root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_rtp_under_test", repo_root / "scripts" / "run_tests_parallel.py"
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_git_discovery_matches_filesystem_discovery(tmp_path: Path) -> None:
+    """On a full checkout both discovery paths return the same file set.
+
+    This is the safety property for the CI flag: flipping discovery from
+    rglob to ``git ls-files`` must not change which files get sliced, or
+    slice assignment silently shifts under us.
+    """
+    repo = _git_repo_with_tests(tmp_path)
+    mod = _discovery_fns()
+    roots = [repo / "tests"]
+    from_fs = mod._discover_files(roots)
+    from_git = mod._discover_files_from_git(roots, repo)
+    assert from_git == from_fs
+    # Sanity: the fixture actually produced something to compare. Sorted by
+    # full path, so tests/sub/test_b.py precedes tests/test_a.py.
+    assert [p.relative_to(repo).as_posix() for p in from_git] == [
+        "tests/sub/test_b.py",
+        "tests/test_a.py",
+    ]
+
+
+def test_git_discovery_finds_files_absent_from_disk(tmp_path: Path) -> None:
+    """The git path works when the worktree is sparse (files not checked out).
+
+    Simulates the CI sparse checkout by deleting the test files while
+    leaving the index intact. rglob finds nothing; git ls-files still
+    enumerates every path.
+    """
+    repo = _git_repo_with_tests(tmp_path)
+    mod = _discovery_fns()
+    roots = [repo / "tests"]
+    expected = mod._discover_files_from_git(roots, repo)
+
+    for path in repo.rglob("test_*.py"):
+        path.unlink()
+
+    assert mod._discover_files(roots) == []
+    assert mod._discover_files_from_git(roots, repo) == expected
+
+
+def test_git_discovery_honors_skip_part_override(tmp_path: Path) -> None:
+    """Naming a skipped dir as a root opts into it, same as the fs walk."""
+    repo = _git_repo_with_tests(tmp_path)
+    mod = _discovery_fns()
+    roots = [repo / "tests" / "docker"]
+    from_git = mod._discover_files_from_git(roots, repo)
+    assert [p.name for p in from_git] == ["test_c.py"]
+    assert from_git == mod._discover_files(roots)

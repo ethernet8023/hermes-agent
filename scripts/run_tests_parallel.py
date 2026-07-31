@@ -967,27 +967,6 @@ def main() -> int:
         test_counts = {f: test_counts[f] for f in files if f in test_counts}
         approx_total_tests = sum(test_counts.values())
 
-    # Docker-suite auto-cap: tests/docker files all funnel through a single
-    # docker daemon, so parallel width is bounded by dockerd, not CPU.
-    # Running the suite at cpu*2 width thrashes the daemon (files stretch
-    # from ~100s to ~900s, teardown `docker rm` blows its timeout). Cap at
-    # 4 unless the user explicitly chose a width (-j or HERMES_TEST_WORKERS).
-    _DOCKERD_BOUND_JOBS = 4
-    jobs_explicit = (
-        os.environ.get("HERMES_TEST_WORKERS")
-        or any(a == "-j" or a.startswith(("--jobs", "-j")) for a in sys.argv[1:])
-    )
-    if not jobs_explicit and files and all(
-        "tests/docker/" in str(f).replace(os.sep, "/") for f in files
-    ):
-        if args.jobs > _DOCKERD_BOUND_JOBS:
-            print(
-                f"Docker suite detected (single dockerd bottleneck): "
-                f"capping workers {args.jobs} -> {_DOCKERD_BOUND_JOBS}",
-                flush=True,
-            )
-            args.jobs = _DOCKERD_BOUND_JOBS
-
     if roots:
         roots_str = [str(r.relative_to(repo_root)) if r.is_relative_to(repo_root) else str(r) for r in roots]
         print(

@@ -152,10 +152,16 @@ jobs:
           command: uv sync --locked --python 3.11 --extra dev
 
       - name: Run docker integration tests
+        # HERMES_TEST_WORKERS=8: this suite shares ONE dockerd, so width
+        # is daemon-bound, not CPU-bound. Width sweep with prewarmed image
+        # + split files (2026-07): -j4 58-62s, -j8 39s, -j12 35s but with
+        # ~2x per-file contention inflation at 12. 8 is the knee.
+        # run_tests.sh forwards HERMES_TEST_WORKERS through its hermetic
+        # env -i into the parallel runner.
         uses: ./.github/actions/profile
         with:
           label: docker-tests
-          command: HERMES_TEST_IMAGE="${{ env.IMAGE_NAME }}:test" scripts/run_tests.sh tests/docker/ --file-timeout 600
+          command: HERMES_TEST_WORKERS=8 HERMES_TEST_IMAGE="${{ env.IMAGE_NAME }}:test" scripts/run_tests.sh tests/docker/ --file-timeout 600
 
   # ---------------------------------------------------------------------------
   # Rebuild and push each architecture only after the unprivileged build/test

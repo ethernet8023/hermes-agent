@@ -54,7 +54,38 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: ./.github/actions/checkout-mirrored
+      - name: Seed git objects from the node-local mirror
+        # The GKE runner nodes keep a bare mirror of this repo on local disk
+        # (hermes-agent-ci-infra k8s/git-mirror-daemonset.yaml). Pointing a fresh
+        # .git at it via alternates makes the checkout below resolve nearly every
+        # object locally — ~1MB fetched instead of ~61MB. That matters because ~40
+        # pods check out at once and saturate the pool's egress; measured on a
+        # seeded node, 4-6s vs 7-17s for the same shallow checkout.
+        #
+        # actions/checkout is unmodified: it reuses an existing .git when the fetch
+        # URL matches (git-directory-helper.ts prepareExistingDirectory), so this
+        # survives into the real checkout.
+        shell: bash
+        run: |
+          set -euo pipefail
+          MIRROR=/mnt/git-mirror/hermes-agent.git
+          # Absent on ubuntu-latest, the arm64 pool, and any node whose mirror has
+          # not seeded yet. Never fail a job over it — a normal checkout follows.
+          if [ ! -d "$MIRROR/objects" ]; then
+            echo "::notice::no node mirror, using a normal checkout"; exit 0
+          fi
+          # Written by the DaemonSet as root, jobs run as uid 1001; git refuses a
+          # repo owned by another user regardless of file permissions.
+          git config --global --add safe.directory "$MIRROR"
+          if ! git -C "$MIRROR" rev-parse --git-dir >/dev/null 2>&1; then
+            echo "::warning::node mirror unreadable, using a normal checkout"; exit 0
+          fi
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then exit 0; fi
+          git init --quiet "$GITHUB_WORKSPACE"
+          echo "$MIRROR/objects" > "$GITHUB_WORKSPACE/.git/objects/info/alternates"
+          echo "::notice::seeded git alternates from $MIRROR"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Get GitHub App token
         id: app-token

@@ -59,6 +59,13 @@ runs:
           exit 0
         fi
 
+        # The mirror is written by the DaemonSet as root; jobs run as uid
+        # 1001. Git's ownership check refuses to read a repo owned by
+        # another user ("detected dubious ownership") regardless of file
+        # permissions, so declare it trusted before touching it. Scoped to
+        # this exact path, not '*'.
+        git config --global --add safe.directory "${MIRROR_DIR}" || true
+
         # A mirror mid-clone is a real state: the DaemonSet writes to
         # <mirror>.tmp and renames, but a crashed node can leave a partial
         # object store. Verify it answers as a git dir before trusting it.

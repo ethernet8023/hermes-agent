@@ -66,7 +66,7 @@ jobs:
       matrix: ${{ fromJSON(needs.generate.outputs.matrix) }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: ./.github/actions/checkout-mirrored
 
       # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
       # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no
@@ -169,7 +169,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: ./.github/actions/checkout-mirrored
 
       # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
       # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no

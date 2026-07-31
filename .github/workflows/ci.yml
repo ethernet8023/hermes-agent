@@ -380,6 +380,7 @@ jobs:
         with:
           name: ci-timings-report
           path: ci-timings-report.html
+          archive: false
           retention-days: 14
 
       - name: Build linked review status

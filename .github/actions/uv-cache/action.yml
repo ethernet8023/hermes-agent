@@ -1,0 +1,24 @@
+name: Cache uv downloads
+description: >-
+  Persist uv's download/wheel cache (~/.cache/uv) across runs, keyed on the
+  dependency manifests. This is the half of astral-sh/setup-uv we still need:
+  uv itself and CPython 3.11 are baked into the nousresearch/nous-gke-runner
+  image (see hermes-agent-ci-infra runner/Dockerfile), but the wheel cache is
+  per-workspace and must still be restored. Without it `uv sync` re-downloads
+  and re-builds every wheel on every job — the toolchain would be faster to
+  set up and the sync dramatically slower, a net loss.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/uv
+        # runner.arch in the key: the cache holds built wheels, which are
+        # arch-specific — the docker workflow runs this on arm64 too.
+        key: uv-cache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+        # Fall back to any older cache for this arch: a stale wheel set still
+        # saves most of the download, and `uv sync --locked` re-resolves from
+        # uv.lock regardless, so a partial hit can't produce a wrong env.
+        restore-keys: |
+          uv-cache-${{ runner.os }}-${{ runner.arch }}-

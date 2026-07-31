@@ -34,7 +34,8 @@ concurrency:
 jobs:
   diff:
     name: package-lock.json semantic diff
-    runs-on: arc-runner-set
+    # Small runner: checkout plus a diff script.
+    runs-on: arc-runner-small
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.diff.outputs.changed }}

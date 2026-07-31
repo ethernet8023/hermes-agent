@@ -7,7 +7,8 @@ on:
 jobs:
   workspaces:
     name: List npm workspaces
-    runs-on: arc-runner-set
+    # Small runner: checkout plus an npm workspace query.
+    runs-on: arc-runner-small
     timeout-minutes: 20
     outputs:
       checks: ${{ steps.set-matrix.outputs.checks }}

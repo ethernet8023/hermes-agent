@@ -39,7 +39,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   detect:
     name: Detect affected areas
-    runs-on: arc-runner-set
+    # Small runner: gates 19 downstream jobs, so the warm pod matters most here.
+    runs-on: arc-runner-small
     timeout-minutes: 10
     outputs:
       python: ${{ steps.classify.outputs.python }}
@@ -306,7 +307,8 @@ jobs:
       # we don't require docker to pass rn because it's so slow lol
       # - docker
     if: always()
-    runs-on: arc-runner-set
+    # Small runner: one script step, no checkout.
+    runs-on: arc-runner-small
     timeout-minutes: 10
     outputs:
       needs-json: ${{ steps.evaluate.outputs.needs-json }}
@@ -348,7 +350,8 @@ jobs:
     name: CI timing report
     needs: [all-checks-pass, docker]
     if: always()
-    runs-on: arc-runner-set
+    # Small runner: checkout plus a python report script.
+    runs-on: arc-runner-small
     timeout-minutes: 10
     steps:
       - name: Checkout code

@@ -134,7 +134,8 @@ jobs:
   save-durations:
     needs: test
     if: needs.test.result == 'success' && github.ref == 'refs/heads/main'
-    runs-on: arc-runner-set
+    # Small runner: downloads artifacts and merges JSON.
+    runs-on: arc-runner-small
     timeout-minutes: 10
     steps:
       - name: Download all slice durations

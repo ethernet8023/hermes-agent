@@ -60,7 +60,8 @@ concurrency:
 jobs:
   check:
     name: uv lock --check
-    runs-on: arc-runner-set
+    # Small runner: checkout plus `uv lock --check`.
+    runs-on: arc-runner-small
     timeout-minutes: 5
     outputs:
       review_status: ${{ steps.verify.outputs.review_status }}

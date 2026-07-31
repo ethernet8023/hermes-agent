@@ -66,7 +66,40 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0 # need full history for merge-base + worktree
+          # NOT fetch-depth: 0. This job needs the base commit's tree (it runs
+          # ruff/ty inside a worktree at that SHA) plus enough history to
+          # resolve a merge base — it does not need all 19k commits or all
+          # 1400 branches.
+          #
+          # fetch-depth: 0 makes actions/checkout fetch every ref: the last
+          # run logged 1401 "new branch" lines and spent 76s here, against
+          # 3-6s for the shallow jobs on the same node with the same mirror.
+          # The node-local mirror supplies the objects cheaply, but ref
+          # negotiation across 1400 branches is its own cost and the mirror
+          # does nothing for it.
+          #
+          # The targeted deepen below gets the same capability in ~8s / 83MB
+          # instead of ~33s / 419MB (measured against this PR's branch).
+          fetch-depth: 1
+
+      - name: Deepen to the merge base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # On push events there is no PR payload; HEAD~1 is the comparison
+          # point and a depth-2 history covers it.
+          if [ -z "${BASE_SHA:-}" ]; then
+            git fetch --deepen=1 -q || true
+            exit 0
+          fi
+          # Fetch the base commit itself, then deepen both sides until their
+          # histories connect. 50 is comfortably more than the usual PR depth;
+          # if a branch is older than that the merge-base step below fails
+          # loudly rather than silently diffing against the wrong commit.
+          git fetch --depth=1 origin "$BASE_SHA" -q
+          git fetch --deepen=50 origin "$BASE_SHA" -q || true
+          git fetch --deepen=50 -q || true
 
       # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
       # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no
@@ -79,12 +112,18 @@ jobs:
 
       - name: Determine base ref
         id: base
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           # For PRs, diff against the merge base with the target branch.
           # For pushes to main, diff against the previous commit on main.
+          #
+          # Uses the event payload's base SHA rather than `origin/<base_ref>`:
+          # the shallow checkout above never creates that remote-tracking
+          # ref, and the payload gives us the commit directly.
           if [ "${{ inputs.event_name }}" = "pull_request" ]; then
-            BASE_SHA=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-            BASE_REF="origin/${{ github.base_ref }}"
+            BASE_SHA=$(git merge-base "$PR_BASE_SHA" HEAD)
+            BASE_REF="${{ github.base_ref }}"
           else
             BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
             BASE_REF="HEAD~1"

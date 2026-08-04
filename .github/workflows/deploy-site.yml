@@ -94,21 +94,14 @@ jobs:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 26
-
-      - name: grab npm 12
-        run: |
-          npm i -g npm@12
-
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: npm-cache
         with:
           path: website/node_modules
-          # node22: native builds + engine checks are node-major-specific;
-          # keep the key in sync with setup-node's node-version above.
-          key: node-modules-cache-node22-${{ hashFiles('website/package-lock.json') }}
+          # node26: native builds + engine checks are node-major-specific;
+          # keep in sync with NODE_MAJOR in the runner image (see
+          # hermes-agent-ci-infra runner/Dockerfile).
+          key: node-modules-cache-node26-${{ hashFiles('website/package-lock.json') }}
 
       - name: Install website dependencies
         uses: ./.github/actions/retry

@@ -61,14 +61,6 @@ jobs:
       # without requiring passwordless sudo.
 
       # ── Node ───────────────────────────────────────────────────────────
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 26
-
-      - name: grab npm 12
-        run: |
-          npm i -g npm@12
-
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: npm-cache
         with:
@@ -81,9 +73,10 @@ jobs:
             ui-tui/packages/*/node_modules
             web/node_modules
             tests-js/node_modules
-          # node22 in the key: node-pty/electron native artifacts are
-          # node-major-specific; sync with setup-node's node-version.
-          key: node-modules-full-node22-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          # node26 in the key: node-pty/electron native artifacts are
+          # node-major-specific; sync with NODE_MAJOR in the runner image
+          # (hermes-agent-ci-infra runner/Dockerfile).
+          key: node-modules-full-node26-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
 
 
       # Full npm ci (not --ignore-scripts): electron's postinstall

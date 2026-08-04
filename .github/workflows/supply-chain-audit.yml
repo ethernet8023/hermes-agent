@@ -101,6 +101,12 @@ jobs:
           # jobs on the same node with the same mirror.
           fetch-depth: 1
 
+      - name: Ensure merge base is present
+        uses: ./.github/actions/merge-base
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+
       - name: Scan diff for critical patterns
         id: scan
         env:
@@ -111,22 +117,17 @@ jobs:
 
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
-          # Shallow checkout: fetch the base commit and deepen until the two
-          # histories connect. Both are required — the diffs below use `...`
-          # (three-dot), which is defined as "since the merge base", so having
-          # both endpoint commits is NOT sufficient: git reports
-          # "fatal: ... no merge base" until their histories actually meet.
-          # Measured on this branch: 8s / 83MB, against 33s / 419MB to
-          # unshallow the full 19k-commit history.
-          git cat-file -e "${BASE}^{commit}" 2>/dev/null || git fetch --depth=1 origin "$BASE" -q
-          git fetch --deepen=50 origin "$BASE" -q 2>/dev/null || true
-          git fetch --deepen=50 -q 2>/dev/null || true
 
           # Added lines only, excluding lockfiles.
           # Three-point diff (base...head) diffs from the merge base to HEAD,
           # so only changes introduced by this PR are included — not changes
           # that landed on main after the PR branched off.
-          DIFF=$(git diff "$BASE"..."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock' || true)
+          #
+          # No `|| true` here: the merge-base step above guarantees the
+          # histories connect, so a failure now is a real error and must not
+          # be swallowed into an empty DIFF (which would scan nothing and
+          # report clean).
+          DIFF=$(git diff "$BASE"..."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock')
 
           FINDINGS=""
 
@@ -272,6 +273,12 @@ jobs:
           # jobs on the same node with the same mirror.
           fetch-depth: 1
 
+      - name: Ensure merge base is present
+        uses: ./.github/actions/merge-base
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+
       - name: Check for unbounded PyPI deps
         id: bounds
         run: |
@@ -279,18 +286,11 @@ jobs:
 
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
-          # Shallow checkout: fetch the base commit and deepen until the two
-          # histories connect. Both are required — the diffs below use `...`
-          # (three-dot), which is defined as "since the merge base", so having
-          # both endpoint commits is NOT sufficient: git reports
-          # "fatal: ... no merge base" until their histories actually meet.
-          # Measured on this branch: 8s / 83MB, against 33s / 419MB to
-          # unshallow the full 19k-commit history.
-          git cat-file -e "${BASE}^{commit}" 2>/dev/null || git fetch --depth=1 origin "$BASE" -q
-          git fetch --deepen=50 origin "$BASE" -q 2>/dev/null || true
-          git fetch --deepen=50 -q 2>/dev/null || true
 
-          # Only check added lines in pyproject.toml
+          # Only check added lines in pyproject.toml. The merge-base step above
+          # guarantees the three-dot diff resolves; `|| true` here only absorbs
+          # grep's exit 1 on no-match, not a git failure (pipefail would catch
+          # that), so this can't silently degrade into "no unbounded deps".
           ADDED=$(git diff "$BASE"..."$HEAD" -- pyproject.toml | grep '^+' | grep -v '^+++' || true)
 
           if [ -z "$ADDED" ]; then

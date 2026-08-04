@@ -14,11 +14,21 @@ inputs:
   head:
     description: Head commit SHA (e.g. github.event.pull_request.head.sha).
     required: true
+  fail-on-missing:
+    description: >-
+      Fail the step when no merge base exists. Default true: a caller about to
+      run a three-dot diff must never continue, or it silently diffs nothing.
+      Set false when absence is the thing you are measuring (history-check),
+      and branch on the `found` output instead.
+    default: 'true'
 
 outputs:
   sha:
-    description: The resolved merge-base commit SHA.
+    description: The resolved merge-base commit SHA (empty when none exists).
     value: ${{ steps.resolve.outputs.sha }}
+  found:
+    description: '"true" when a merge base exists, "false" otherwise.'
+    value: ${{ steps.resolve.outputs.found }}
 
 runs:
   using: composite
@@ -28,6 +38,7 @@ runs:
       env:
         BASE: ${{ inputs.base }}
         HEAD: ${{ inputs.head }}
+        FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
       run: |
         set -euo pipefail
 
@@ -44,24 +55,32 @@ runs:
           git fetch --deepen="$depth" -q 2>/dev/null || true
         done
 
-        # Last resort for a very old branch: full history. Slow, but correct —
-        # this is the behaviour we had before the shallow-checkout speedup, and
-        # it only triggers for branches the escalating deepen couldn't reach.
+        # Full history is the only way to PROVE absence, so a genuinely
+        # unrelated branch always lands here. Rare (that PR is rejected
+        # anyway) and still cheaper than every job unshallowing by default.
         if ! git merge-base "$BASE" "$HEAD" >/dev/null 2>&1; then
           if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
             echo "::warning::deepen did not connect the histories; unshallowing (slow path)"
             git fetch --unshallow -q 2>/dev/null || true
+            git fetch --depth=2147483647 origin "$BASE" -q 2>/dev/null || true
           fi
         fi
 
-        # Never fail open. If there is genuinely no common ancestor the
-        # history-check workflow already fails the PR with a better message;
-        # here we only have to refuse to report a vacuous result.
-        if ! MB=$(git merge-base "$BASE" "$HEAD" 2>/dev/null) || [ -z "$MB" ]; then
+        if MB=$(git merge-base "$BASE" "$HEAD" 2>/dev/null) && [ -n "$MB" ]; then
+          echo "sha=$MB" >> "$GITHUB_OUTPUT"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::merge base: $MB"
+          exit 0
+        fi
+
+        # Never fail open. Callers running a three-dot diff must stop here;
+        # history-check opts out to report the failure in its own words.
+        echo "sha=" >> "$GITHUB_OUTPUT"
+        echo "found=false" >> "$GITHUB_OUTPUT"
+        if [ "$FAIL_ON_MISSING" = "true" ]; then
           echo "::error::No merge base between $BASE and $HEAD after deepening." \
                "Refusing to continue: a three-dot diff would silently produce" \
                "an empty result and report a vacuous pass."
           exit 1
         fi
-        echo "sha=$MB" >> "$GITHUB_OUTPUT"
-        echo "::notice::merge base: $MB"
+        echo "::notice::no merge base between $BASE and $HEAD"

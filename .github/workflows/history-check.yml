@@ -38,9 +38,9 @@ jobs:
         # object locally — ~1MB fetched instead of ~61MB. That matters because ~40
         # pods check out at once and saturate the pool's egress.
         #
-        # It matters doubly with fetch-depth: 0 — an unshallow fetch with no mirror
-        # is the worst case of all (measured 117s on a 1Gi pod). With the mirror the
-        # history is already on local disk.
+        # It matters doubly here: the one case that still needs full history
+        # (proving no common ancestor exists) unshallows, and with the mirror
+        # that history is already on local disk.
         #
         # actions/checkout is unmodified: it reuses an existing .git when the fetch
         # URL matches (git-directory-helper.ts prepareExistingDirectory).
@@ -62,16 +62,30 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0 # full history both sides for merge-base
+          # No fetch-depth: 0. The merge-base action below deepens only as far
+          # as it takes to connect the two histories (~15s, against 76-81s to
+          # fetch all ~1400 refs). It still unshallows in the one case that
+          # genuinely needs full history — proving NO common ancestor exists,
+          # which is exactly the branch this job rejects.
+          fetch-depth: 1
+
+      - name: Resolve merge base
+        id: mb
+        uses: ./.github/actions/merge-base
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          # Absence is the thing this job measures — report it below, in our
+          # own words, instead of dying with the action's generic error.
+          fail-on-missing: 'false'
 
       - id: merge-base-check
         name: Reject PRs with no common ancestor on main
+        env:
+          FOUND: ${{ steps.mb.outputs.found }}
+          BASE: ${{ steps.mb.outputs.sha }}
         run: |
-          # `git merge-base` exits non-zero AND prints nothing when the two
-          # commits share no ancestor.  We check both conditions explicitly
-          # so the failure message is clear regardless of which signal fires
-          # first.
-          if ! BASE=$(git merge-base origin/main HEAD 2>/dev/null) || [ -z "$BASE" ]; then
+          if [ "$FOUND" != "true" ]; then
             STATUS='[{"source":"unrelated histories","results":[{"kind":"action_required","title":"Unrelated histories","summary":"This PR has no common ancestor with main.","detail":"","how_to_fix":"Rebase your changes onto current main:\n```\ngit fetch origin main\ngit checkout -b fix-branch origin/main\n# re-apply your changes (cherry-pick, copy files, etc.)\ngit push -f origin fix-branch\n```\n"}]}]'
             echo "review_status=${STATUS}" >> "$GITHUB_OUTPUT"
             echo ""

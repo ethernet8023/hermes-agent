@@ -68,9 +68,8 @@ jobs:
         # object locally — ~1MB fetched instead of ~61MB. That matters because ~40
         # pods check out at once and saturate the pool's egress.
         #
-        # It matters doubly here: this job needs fetch-depth: 0 for the diff, and
-        # an unshallow fetch with no mirror is the worst case of all (measured
-        # 117s on a 1Gi pod). With the mirror the history is already local.
+        # It matters doubly here: the merge-base action below deepens until the
+        # histories connect, and with the mirror that history is already local.
         #
         # actions/checkout is unmodified: it reuses an existing .git when the fetch
         # URL matches (git-directory-helper.ts prepareExistingDirectory).
@@ -240,9 +239,8 @@ jobs:
         # object locally — ~1MB fetched instead of ~61MB. That matters because ~40
         # pods check out at once and saturate the pool's egress.
         #
-        # It matters doubly here: this job needs fetch-depth: 0 for the diff, and
-        # an unshallow fetch with no mirror is the worst case of all (measured
-        # 117s on a 1Gi pod). With the mirror the history is already local.
+        # It matters doubly here: the merge-base action below deepens until the
+        # histories connect, and with the mirror that history is already local.
         #
         # actions/checkout is unmodified: it reuses an existing .git when the fetch
         # URL matches (git-directory-helper.ts prepareExistingDirectory).

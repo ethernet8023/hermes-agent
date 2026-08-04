@@ -88,9 +88,6 @@ jobs:
         if: steps.npm-cache.outputs.cache-hit != 'true'
 
       # ── Python (for the hermes serve backend) ──────────────────────────
-      # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
-      # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no
-      # `uv python install`.
       - name: Restore uv cache
         uses: ./.github/actions/uv-cache
 

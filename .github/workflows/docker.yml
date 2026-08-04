@@ -157,9 +157,6 @@ jobs:
       # than the build itself.  Reusing the existing daemon state is the
       # cheapest path to coverage on every PR that touches docker code.
       # ---------------------------------------------------------------------
-      # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
-      # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no
-      # `uv python install`.
       - name: Restore uv cache (for docker tests)
         uses: ./.github/actions/uv-cache
 

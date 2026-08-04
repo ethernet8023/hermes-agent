@@ -99,9 +99,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
-      # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no
-      # `uv python install`. Only the wheel cache still needs restoring.
       - name: Restore uv cache
         uses: ./.github/actions/uv-cache
 
@@ -233,9 +230,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
-      # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no
-      # `uv python install`. Only the wheel cache still needs restoring.
       - name: Restore uv cache
         uses: ./.github/actions/uv-cache
 
@@ -263,8 +257,7 @@ jobs:
         with:
           label: tests-e2e
           command: |
-            source .venv/bin/activate
-            python -m pytest tests/e2e/ -v --tb=short
+            uv run --no-sync pytest tests/e2e/ -v --tb=short
         env:
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""

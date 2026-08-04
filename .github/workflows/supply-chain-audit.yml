@@ -63,14 +63,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # NOT fetch-depth: 0. This job diffs two specific commits that the
-          # event payload already names (base.sha / head.sha below) — it never
-          # resolves a ref by name, so there is nothing to gain from full
-          # history. fetch-depth: 0 also makes actions/checkout fetch all
-          # ~1400 branches, which measured 76-81s against 3-6s for the shallow
-          # jobs on the same node with the same mirror.
-          fetch-depth: 1
 
       - name: Ensure merge base is present
         uses: ./.github/actions/merge-base
@@ -89,15 +81,13 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
 
-          # Added lines only, excluding lockfiles.
-          # Three-point diff (base...head) diffs from the merge base to HEAD,
-          # so only changes introduced by this PR are included — not changes
-          # that landed on main after the PR branched off.
+          # Added lines only, excluding lockfiles. Three-dot diff = "since the
+          # merge base", so changes that landed on main after the branch point
+          # are excluded.
           #
-          # No `|| true` here: the merge-base step above guarantees the
-          # histories connect, so a failure now is a real error and must not
-          # be swallowed into an empty DIFF (which would scan nothing and
-          # report clean).
+          # No `|| true`: the merge-base step guarantees the histories connect,
+          # so a git failure here is real and must not degrade into an empty
+          # DIFF that scans nothing and reports clean.
           DIFF=$(git diff "$BASE"..."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock')
 
           FINDINGS=""
@@ -194,7 +184,6 @@ jobs:
               f.write(f"review_status={json.dumps(status)}\n")
           PYEOF
 
-
   dep-bounds:
     name: Check PyPI dependency upper bounds
     if: inputs.deps
@@ -206,14 +195,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # NOT fetch-depth: 0. This job diffs two specific commits that the
-          # event payload already names (base.sha / head.sha below) — it never
-          # resolves a ref by name, so there is nothing to gain from full
-          # history. fetch-depth: 0 also makes actions/checkout fetch all
-          # ~1400 branches, which measured 76-81s against 3-6s for the shallow
-          # jobs on the same node with the same mirror.
-          fetch-depth: 1
 
       - name: Ensure merge base is present
         uses: ./.github/actions/merge-base
@@ -229,10 +210,9 @@ jobs:
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
 
-          # Only check added lines in pyproject.toml. The merge-base step above
-          # guarantees the three-dot diff resolves; `|| true` here only absorbs
-          # grep's exit 1 on no-match, not a git failure (pipefail would catch
-          # that), so this can't silently degrade into "no unbounded deps".
+          # Only check added lines in pyproject.toml. `|| true` absorbs grep's
+          # exit 1 on no-match, not a git failure — pipefail catches that, so
+          # this can't silently degrade into "no unbounded deps".
           ADDED=$(git diff "$BASE"..."$HEAD" -- pyproject.toml | grep '^+' | grep -v '^+++' || true)
 
           if [ -z "$ADDED" ]; then

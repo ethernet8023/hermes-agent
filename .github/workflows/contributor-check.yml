@@ -24,11 +24,13 @@ jobs:
       - name: Check for unmapped contributor emails
         id: check-emails
         run: |
-          # Get the merge base between this PR and main
-          MERGE_BASE=$(git merge-base origin/main HEAD)
-
-          # Find any new author emails in this PR's commits
-          NEW_EMAILS=$(git log ${MERGE_BASE}..HEAD --format='%ae' --no-merges | sort -u)
+          # Commits this PR adds on top of main. `origin/main..HEAD` already
+          # means "reachable from HEAD, not from main", which is exactly what
+          # resolving the merge base and using `<mb>..HEAD` computes — the two
+          # are equivalent (verified, including when the branch has merged main
+          # into itself). Dropping the extra git call also drops an unquoted
+          # expansion of the resulting SHA.
+          NEW_EMAILS=$(git log origin/main..HEAD --format='%ae' --no-merges | sort -u)
 
           if [ -z "$NEW_EMAILS" ]; then
             echo "No new commits to check."

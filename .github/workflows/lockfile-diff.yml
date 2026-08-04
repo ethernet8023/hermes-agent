@@ -43,19 +43,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # No fetch-depth: 0. This job needs exactly two blobs of one file,
-          # and GitHub already hands us the base commit in the event payload
-          # (github.event.pull_request.base.sha), so there is nothing to
-          # resolve a merge base for — the step below fetches that single
-          # commit on demand.
-          #
-          # base.sha is the base-branch tip when the PR was opened, not the
-          # merge base. For a package-lock.json diff that distinction only
-          # matters if main changed the lockfile after the branch point, in
-          # which case those changes show up here as well. That is a rare and
-          # visible failure mode, and cheap next to unshallowing 19k commits.
-          fetch-depth: 1
 
       - name: Generate semantic lockfile diff
         id: diff
@@ -63,11 +50,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          # Fetch just the base commit (and only if we don't already have it
-          # via the node-local mirror seeded above).
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --depth=1 origin "${BASE_SHA}"
-          fi
+          # Fetch just the base commit.
+          git fetch --depth=1 origin "${BASE_SHA}"
           echo "Base commit: ${BASE_SHA}"
           python3 scripts/ci/lockfile_diff.py \
             --base "$BASE_SHA" \

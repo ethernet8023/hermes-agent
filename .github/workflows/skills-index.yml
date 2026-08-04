@@ -3,13 +3,13 @@ name: Build Skills Index
 on:
   schedule:
     # Run twice daily: 6 AM and 6 PM UTC
-    - cron: "0 6,18 * * *"
+    - cron: '0 6,18 * * *'
   workflow_dispatch: # Manual trigger
   push:
     branches: [main]
     paths:
-      - "scripts/build_skills_index.py"
-      - ".github/workflows/skills-index.yml"
+      - 'scripts/build_skills_index.py'
+      - '.github/workflows/skills-index.yml'
 
 permissions:
   contents: read
@@ -63,19 +63,15 @@ jobs:
           client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.11"
-
       - name: Install dependencies
         uses: ./.github/actions/retry
         with:
-          command: pip install httpx==0.28.1 pyyaml==6.0.2
+          command: uv pip install httpx==0.28.1 pyyaml==6.0.2
 
       - name: Build skills index
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python3 scripts/build_skills_index.py
+        run: uv run scripts/build_skills_index.py
 
       - name: Upload index artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

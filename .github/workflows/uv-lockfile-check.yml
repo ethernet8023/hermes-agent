@@ -69,10 +69,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # uv and CPython 3.11 are baked into the nousresearch/nous-gke-runner
-      # image (hermes-agent-ci-infra runner/Dockerfile) — no setup-uv, no
-      # `uv python install`.
-
       # `uv lock --check` re-resolves the project from pyproject.toml and
       # compares the result to uv.lock, exiting non-zero if they disagree.
       # No network writes, no file modifications.

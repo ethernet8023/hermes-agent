@@ -1,0 +1,18 @@
+# actionlint configuration.
+#
+# Declares the self-hosted runner labels served by the GKE ARC scale sets
+# (see the hermes-agent-ci-infra repo). Without this, actionlint only knows
+# GitHub-hosted labels and reports every `runs-on:` in the repo as unknown —
+# 40 warnings that bury real findings.
+#
+# Keep in sync with the scale sets deployed in hermes-agent-ci-infra.
+self-hosted-runner:
+  labels:
+    # Default set: general-purpose jobs.
+    - arc-runner-set
+    # Short gate jobs (detect, lint, small checks) — no docker sidecar.
+    - arc-runner-small
+    # Jobs that need a docker daemon (image build/test).
+    - arc-runner-docker
+    # arm64 image builds.
+    - arc-runner-arm64

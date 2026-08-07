@@ -93,15 +93,13 @@ def pip_install(
 
     *overrides* is a requirements-style file of security floors. The uv
     tier passes it as ``--overrides`` (unconditional pins that beat the
-    backend spec's own caps). pip has no such flag, so the pip tier takes
-    it as a second ``--constraint``: same floor, but when the backend spec
-    exact-pins BELOW the floor, pip fails closed instead of downgrading.
-    Measured difference on the DingTalk case: with the constraint pip
-    holds cryptography at 50.0.0 and resolves alibabacloud-tea-openapi
-    back to 0.3.16; without it, cryptography is downgraded to 48.0.1. An
-    older backend is a functional regression, a downgraded cryptography
-    is a security one — a failed optional install beats a silent
-    downgrade of the core venv.
+    backend spec's own caps). pip has no such flag — the CALLER re-asserts
+    the floor after a pip-tier install with a ``--no-deps`` repair pass
+    (see tools/lazy_deps._pip_reassert_overrides). Handing pip the floor
+    as a constraint instead would hold the pinned package but resolve the
+    backend backwards (measured on the DingTalk case: alibabacloud-tea-
+    openapi 0.4.5 → 0.3.16, a two-year-old sdist). ``LadderResult.tier``
+    tells the caller which tier ran.
     """
     if not specs:
         return LadderResult(True, "", "", "none")
@@ -115,7 +113,6 @@ def pip_install(
     pip_extra: list[str] = list(extra)
     if overrides is not None:
         uv_extra += ["--overrides", str(overrides)]
-        pip_extra += ["--constraint", str(overrides)]
 
     run_kwargs: dict = {
         "text": True,

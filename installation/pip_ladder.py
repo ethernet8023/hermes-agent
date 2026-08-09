@@ -80,6 +80,7 @@ def pip_install(
     timeout: int = 300,
     target: Optional[Path] = None,
     constraints: Optional[Path] = None,
+    overrides: Optional[Path] = None,
     env: Optional[dict] = None,
     capture_output: bool = True,
     creationflags: int = 0,
@@ -89,6 +90,18 @@ def pip_install(
 
     Never raises: every failure comes back as a ``LadderResult`` whose
     stderr says which tier failed and why.
+
+    *overrides* is a requirements-style file of security floors. The uv
+    tier passes it as ``--overrides`` (unconditional pins that beat the
+    backend spec's own caps). pip has no such flag, so the pip tier takes
+    it as a second ``--constraint``: same floor, but when the backend spec
+    exact-pins BELOW the floor, pip fails closed instead of downgrading.
+    Measured difference on the DingTalk case: with the constraint pip
+    holds cryptography at 50.0.0 and resolves alibabacloud-tea-openapi
+    back to 0.3.16; without it, cryptography is downgraded to 48.0.1. An
+    older backend is a functional regression, a downgraded cryptography
+    is a security one — a failed optional install beats a silent
+    downgrade of the core venv.
     """
     if not specs:
         return LadderResult(True, "", "", "none")
@@ -98,6 +111,11 @@ def pip_install(
         extra += ["--target", str(target)]
     if constraints is not None:
         extra += ["--constraint", str(constraints)]
+    uv_extra: list[str] = list(extra)
+    pip_extra: list[str] = list(extra)
+    if overrides is not None:
+        uv_extra += ["--overrides", str(overrides)]
+        pip_extra += ["--constraint", str(overrides)]
 
     run_kwargs: dict = {
         "text": True,
@@ -120,7 +138,7 @@ def pip_install(
         uv_env["VIRTUAL_ENV"] = str(venv_root)
         try:
             result = subprocess.run(
-                [str(uv_bin), "pip", "install", *extra, *specs],
+                [str(uv_bin), "pip", "install", *uv_extra, *specs],
                 timeout=timeout,
                 env=uv_env,
                 **run_kwargs,
@@ -183,7 +201,7 @@ def pip_install(
 
     try:
         result = subprocess.run(
-            pip_cmd + ["install", *extra, *specs],
+            pip_cmd + ["install", *pip_extra, *specs],
             timeout=timeout,
             env=env,
             **run_kwargs,

@@ -736,6 +736,65 @@ def _core_constraints_file() -> Optional[Path]:
         return None
 
 
+# Overrides forced onto every lazy install: the ``[tool.uv]
+# override-dependencies`` list, read from pyproject.toml.
+#
+# ``uv pip install`` / ``pip install`` do NOT read ``[tool.uv]``, so a
+# transitive dep that caps a security-pinned package below its patched floor
+# silently DOWNGRADES the core venv on first use of the backend that pulls it.
+# Measured with cryptography: the core venv ships 50.0.0, then enabling
+# DingTalk (``alibabacloud-dingtalk`` -> ``alibabacloud-tea-openapi==0.4.5``,
+# which caps ``cryptography<49``) resolved to::
+#
+#     + cryptography==48.0.1     # three open advisories, re-introduced
+#
+# Pinning the floor alongside the specs is NOT a fix: the resolver satisfies
+# it by walking ``alibabacloud-tea-openapi`` back to 0.3.16 (a two-year-old
+# sdist build) instead, and pinning both is simply unsatisfiable. An overrides
+# file is the only mechanism that forces the patched version while keeping the
+# backend at its intended version, so it is passed to the uv tier below.
+#
+# Lazy installs only ever run from a source checkout (the one wheel-shaped
+# install, Nix, seals its venv and cannot lazy-install), so pyproject.toml is
+# always on disk next to this package and there is no second copy of the list
+# to keep in sync.
+
+
+def _security_overrides() -> tuple[str, ...]:
+    """Read ``[tool.uv] override-dependencies`` from pyproject.toml."""
+    try:
+        import tomllib
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        return tuple(data.get("tool", {}).get("uv", {}).get("override-dependencies", []))
+    except Exception as e:
+        logger.debug("Could not read override-dependencies from pyproject.toml: %s", e)
+        return ()
+
+
+def _security_overrides_file() -> Optional[Path]:
+    """Write the overrides to a temp requirements file for ``--overrides``.
+
+    Returns the path, or None if there are no overrides or the file can't be
+    written (in which case the caller installs without overrides — same
+    behaviour as before, just with the downgrade risk this guards against).
+    """
+    overrides = _security_overrides()
+    if not overrides:
+        return None
+    try:
+        import tempfile
+
+        fd, path = tempfile.mkstemp(prefix="hermes-lazy-overrides-", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(overrides) + "\n")
+        return Path(path)
+    except Exception as e:
+        logger.debug("Could not build security overrides file: %s", e)
+        return None
+
+
 def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _InstallResult:
     """Install ``specs`` via the shared ladder (installation.pip_ladder).
 
@@ -772,6 +831,8 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
             return _InstallResult(False, "", err)
         constraints = _core_constraints_file()
 
+    overrides = _security_overrides_file()
+
     try:
         from tools.environments.local import hermes_subprocess_env
 
@@ -792,6 +853,7 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
             timeout=timeout,
             target=target,
             constraints=constraints,
+            overrides=overrides,
             env=env,
             creationflags=windows_hide_flags(),
             uv_resolver_failure_is_final=True,
@@ -800,11 +862,12 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
             _activate_target_on_syspath(target)
         return _InstallResult(result.ok, result.stdout, result.stderr)
     finally:
-        if constraints is not None:
-            try:
-                constraints.unlink()
-            except OSError:
-                pass
+        for tmp in (constraints, overrides):
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
 
 # =============================================================================

@@ -33,7 +33,16 @@ from tools import lazy_deps as ld
 
 class TestTargetResolution:
     def test_no_target_when_env_unset(self, monkeypatch):
+        # The checkout contract: no env override AND no sealed tree →
+        # venv-scoped mode. The tree shape is pinned because the host
+        # running the suite may itself be a sealed install (nix devshell),
+        # where rung 2 correctly derives a state-folder target instead.
         monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
+        import installation.tree as tree_mod
+
+        monkeypatch.setattr(
+            tree_mod, "runtime_tree", lambda _root: object(), raising=True
+        )
         assert ld._lazy_install_target() is None
 
 
@@ -50,6 +59,11 @@ class TestGatingWithTarget:
     def test_disable_env_blocks_without_target(self, monkeypatch):
         monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
         monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
+        import installation.tree as tree_mod
+
+        monkeypatch.setattr(
+            tree_mod, "runtime_tree", lambda _root: object(), raising=True
+        )
         # config unreadable → fails open on the config check, but the sealed
         # env var with no target still blocks.
         monkeypatch.setattr(
@@ -180,8 +194,14 @@ class TestInstallArgConstruction:
         assert cmd[-1] == "somepkg==1.2.3"
 
     def test_no_target_args_in_venv_scoped_mode(self, monkeypatch):
-        # Env unset → plain venv-scoped install, no --target / --constraint.
+        # Env unset → plain venv-scoped install, no --target and no
+        # core-constraints file.
         monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
+        import installation.tree as tree_mod
+
+        monkeypatch.setattr(
+            tree_mod, "runtime_tree", lambda _root: object(), raising=True
+        )
         monkeypatch.setattr(ld.shutil, "which", lambda _: None)
         captured = {}
 
@@ -194,8 +214,20 @@ class TestInstallArgConstruction:
         monkeypatch.setattr(ld.subprocess, "run", fake_run)
         result = ld._venv_pip_install(("somepkg==1.2.3",))
         assert result.success
-        assert "--target" not in captured["cmd"]
-        assert "--constraint" not in captured["cmd"]
+        cmd = captured["cmd"]
+        assert "--target" not in cmd
+        # The durable-target mode's core-constraints file must be absent. The
+        # pip tier does still carry a --constraint holding the security floor
+        # (see tools/lazy_deps._security_overrides), so assert on the file's
+        # role rather than on the flag's mere presence.
+        constraint_paths = [
+            Path(cmd[i + 1])
+            for i, tok in enumerate(cmd)
+            if tok == "--constraint"
+        ]
+        assert not any(
+            p.name.startswith("hermes-core-constraints-") for p in constraint_paths
+        ), f"venv-scoped install must not pin against a core-constraints file: {cmd}"
 
     def test_uv_resolution_failure_does_not_fall_through_to_pip(self, monkeypatch):
         monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)

@@ -60,16 +60,20 @@ jobs:
         id: test-tools-cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: test-bins
+          path: ${{ runner.temp }}\test-bins
           key: test-bins-${{ runner.os }}-v1
 
       # AutoHotkey drives the installer GUI; ffmpeg records the screen so a
       # failed click is diagnosable from the artifact instead of by guesswork.
+      # Everything lands under RUNNER_TEMP: an untracked dir inside the
+      # checkout makes the tree dirty, and the driver refuses a dirty tree
+      # (the update target must be a reviewable commit).
       - name: Install AutoHotkey v2 and ffmpeg
         if: steps.test-tools-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path test-bins\autohotkey, test-bins\ffmpeg -Force | Out-Null
+          $bins = "$env:RUNNER_TEMP\test-bins"
+          New-Item -ItemType Directory -Path $bins\autohotkey, $bins\ffmpeg -Force | Out-Null
 
           # AutoHotkey: copy its whole v2 directory so helper exes/dlls come along.
           winget install -e --id AutoHotkey.AutoHotkey --silent --accept-source-agreements --accept-package-agreements --disable-interactivity
@@ -77,16 +81,16 @@ jobs:
           if (-not (Test-Path $ahkDir)) {
             throw "AutoHotkey install directory not found: $ahkDir"
           }
-          Copy-Item -Path "$ahkDir\*" -Destination test-bins\autohotkey -Recurse -Force
+          Copy-Item -Path "$ahkDir\*" -Destination $bins\autohotkey -Recurse -Force
 
-          winget install -e --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements --disable-interactivity --location ffmpeg_dir
-          Copy-Item -Path "ffmpeg_dir\*\*" -Destination test-bins\ffmpeg -Recurse -Force
+          winget install -e --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements --disable-interactivity --location "$env:RUNNER_TEMP\ffmpeg_dir"
+          Copy-Item -Path "$env:RUNNER_TEMP\ffmpeg_dir\*\*" -Destination $bins\ffmpeg -Recurse -Force
 
       - name: Add test tools to PATH
         shell: pwsh
         run: |
-          Add-Content -Path $env:GITHUB_PATH -Value "$PWD\test-bins\autohotkey"
-          Add-Content -Path $env:GITHUB_PATH -Value "$PWD\test-bins\ffmpeg\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\test-bins\autohotkey"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\test-bins\ffmpeg\bin"
 
       - name: Run install + update E2E
         shell: pwsh

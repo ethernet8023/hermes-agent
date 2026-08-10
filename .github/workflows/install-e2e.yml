@@ -12,6 +12,11 @@ name: Install & Update E2E
 # A hardcoded list would stop covering the newest release the day after it
 # ships, and would pin an "oldest" that nobody still runs.
 #
+# A separate Windows axis (install-e2e-windows-run.yml) installs with the
+# latest PUBLISHED bootstrap installer and applies the desktop app's builtin
+# update — no tag matrix there, because the published exe's own build pin is
+# the starting point users actually have.
+#
 # Triggers:
 #   * every 12 hours, so upstream drift (a new uv, a Node bump, a PyPI change)
 #     surfaces on a schedule rather than in someone's review cycle;
@@ -27,11 +32,11 @@ on:
   workflow_dispatch:
     inputs:
       route:
-        description: 'Which update route to exercise.'
+        description: 'Which update route to exercise. all/both include the Windows desktop leg.'
         required: false
         type: choice
-        default: both
-        options: [both, update, installer]
+        default: all
+        options: [all, both, update, installer, windows-desktop]
       tag-count:
         description: 'How many release tags to sample (newest, oldest, and a spread between).'
         required: false
@@ -81,7 +86,7 @@ jobs:
 
   # `hermes update` -- the route most users take.
   update:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'installer'
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "update"]'), inputs.route)
     needs: pick-releases
     strategy:
       # One release breaking is worth knowing about even if another already
@@ -97,7 +102,7 @@ jobs:
   # Re-running the curl one-liner over an existing checkout: autostash + pull
   # rather than the updater's own git handling.
   installer:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'update'
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "installer"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
@@ -108,3 +113,14 @@ jobs:
     with:
       route: installer
       install-ref: ${{ matrix.install-ref }}
+
+  # Windows desktop: install with the latest PUBLISHED bootstrap installer
+  # (Hermes-Setup.exe — the exact bits a user downloads today), then apply the
+  # desktop app's builtin update. No release-tag matrix: the published exe's
+  # build pin decides the starting base, which is precisely the "user on the
+  # current installer" scenario this axis exists to cover.
+  windows-desktop:
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
+    uses: ./.github/workflows/install-e2e-windows-run.yml
+    with:
+      route: desktop

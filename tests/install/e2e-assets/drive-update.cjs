@@ -1,0 +1,203 @@
+// drive-update.cjs — launch the INSTALLED Hermes.exe (real Electron desktop
+// app) under Playwright's Electron driver and perform the update the way a
+// user does: Settings -> About -> "Update now". Screenshots at every step.
+//
+// Run from the installed checkout's apps/desktop directory (so
+// @playwright/test resolves from ITS node_modules — the same deps the
+// installed app was built with):
+//
+//   node <this file> <path-to-Hermes.exe> <proof-dir>
+//
+// Exit codes: 0 = update hand-off started and the app quit (the detached
+// updater takes it from there — the PowerShell driver polls for the result);
+// 1 = any step failed. The driver treats nonzero as leg failure.
+//
+// This intentionally does NOT call any store/bridge function directly: only
+// real clicks on the real UI, so a regression in the button, the About
+// panel, the overlay, or the renderer->main bridge fails the test.
+
+const path = require('node:path')
+const fs = require('node:fs')
+
+const { _electron } = require('@playwright/test')
+
+const exePath = process.argv[2]
+const proofDir = process.argv[3]
+
+if (!exePath || !proofDir) {
+  console.error('usage: node drive-update.cjs <Hermes.exe> <proof-dir>')
+  process.exit(1)
+}
+
+fs.mkdirSync(proofDir, { recursive: true })
+
+function log(msg) {
+  console.log(`[drive-update] ${new Date().toISOString()} ${msg}`)
+}
+
+async function shot(page, name) {
+  const file = path.join(proofDir, `${name}.png`)
+
+  try {
+    await page.screenshot({ path: file })
+    log(`screenshot: ${file}`)
+  } catch (err) {
+    log(`screenshot ${name} failed: ${err.message}`)
+  }
+}
+
+// Hard ceiling so a hung renderer can't wedge the CI job; the driver's own
+// step timeout is the real guard, this is belt-and-braces.
+const KILL_AFTER_MS = 15 * 60 * 1000
+const killer = setTimeout(() => {
+  console.error('[drive-update] global timeout — aborting')
+  process.exit(1)
+}, KILL_AFTER_MS)
+killer.unref()
+
+async function clickFirstVisible(page, locators, description, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+
+  for (;;) {
+    for (const make of locators) {
+      const locator = make(page).first()
+
+      try {
+        if (await locator.isVisible()) {
+          await locator.click()
+          log(`clicked: ${description}`)
+
+          return true
+        }
+      } catch {
+        // locator invalid in this state; try the next
+      }
+    }
+    if (Date.now() > deadline) {
+      return false
+    }
+    await page.waitForTimeout(500)
+  }
+}
+
+async function main() {
+  log(`launching ${exePath}`)
+
+  const app = await _electron.launch({
+    executablePath: exePath,
+    args: ['--disable-gpu', '--no-sandbox'],
+    // Inherit the driver's env: HERMES_HOME (isolated install) and
+    // GIT_CONFIG_GLOBAL (URL redirect to the staged serve repo) MUST reach
+    // the main process so its update check fetches from the staged repo.
+    env: { ...process.env },
+    timeout: 120_000
+  })
+
+  const page = await app.firstWindow({ timeout: 120_000 })
+  log('first window acquired')
+
+  // Boot: wait for the composer to exist — the shell is mounted by then.
+  // The real backend (`hermes serve`) is booting underneath; give it time.
+  await page.waitForSelector('textarea, [contenteditable="true"]', {
+    state: 'attached',
+    timeout: 300_000
+  })
+  log('renderer booted (composer attached)')
+  await page.waitForTimeout(3000)
+  await shot(page, '01-app-booted')
+
+  // ── Open Settings (titlebar gear) ─────────────────────────────────────
+  const openedSettings = await clickFirstVisible(
+    page,
+    [
+      p => p.getByLabel('Open settings'),
+      p => p.locator('[aria-label="Open settings"]'),
+      p => p.locator('[title="Open settings"]'),
+      p => p.getByRole('button', { name: 'Open settings' })
+    ],
+    'Open settings',
+    60_000
+  )
+
+  if (!openedSettings) {
+    await shot(page, 'ERROR-no-settings-button')
+    throw new Error('could not find the Open settings control')
+  }
+  await page.waitForTimeout(1500)
+  await shot(page, '02-settings-open')
+
+  // ── Go to the About section ───────────────────────────────────────────
+  const openedAbout = await clickFirstVisible(
+    page,
+    [
+      p => p.getByRole('tab', { name: 'About' }),
+      p => p.getByRole('button', { name: 'About' }),
+      p => p.getByText('About', { exact: true })
+    ],
+    'About section',
+    30_000
+  )
+
+  if (!openedAbout) {
+    await shot(page, 'ERROR-no-about-tab')
+    throw new Error('could not find the About section in Settings')
+  }
+  await page.waitForTimeout(1500)
+  await shot(page, '03-about-panel')
+
+  // ── Wait for "Update now" (appears when behind > 0) ──────────────────
+  // checkUpdates() runs at boot; if its result hasn't landed yet, press
+  // "Check now" like an impatient user would.
+  const updateNow = page.getByRole('button', { name: 'Update now' }).first()
+  let visible = await updateNow.isVisible().catch(() => false)
+
+  if (!visible) {
+    log('Update now not visible yet — clicking Check now')
+    await clickFirstVisible(page, [p => p.getByRole('button', { name: 'Check now' })], 'Check now', 20_000)
+
+    try {
+      await updateNow.waitFor({ state: 'visible', timeout: 120_000 })
+      visible = true
+    } catch {
+      visible = false
+    }
+  }
+
+  if (!visible) {
+    await shot(page, 'ERROR-no-update-now')
+    throw new Error('"Update now" never appeared — update check did not report behind > 0')
+  }
+  await shot(page, '04-update-available')
+
+  // ── The click under test ──────────────────────────────────────────────
+  await updateNow.click()
+  log('clicked: Update now')
+
+  // The "Updating Hermes — this window will close" overlay should appear,
+  // then the app quits (hand-off dwell). Screenshot the overlay while the
+  // window is still alive.
+  await page.waitForTimeout(1200)
+  await shot(page, '05-updating-overlay')
+
+  // ── Wait for the app to quit for the hand-off ─────────────────────────
+  await new Promise((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error('app did not quit within 120s of Update now — hand-off did not start')),
+      120_000
+    )
+
+    app.on('close', () => {
+      clearTimeout(t)
+      resolve()
+    })
+  })
+
+  log('app quit for updater hand-off — success, the detached updater owns the rest')
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch(err => {
+    console.error(`[drive-update] FAILED: ${err.message}`)
+    process.exit(1)
+  })

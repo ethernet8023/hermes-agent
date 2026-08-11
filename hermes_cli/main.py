@@ -8471,11 +8471,20 @@ def _run_install_with_heartbeat(
     t = threading.Thread(target=_heartbeat, daemon=True)
     t.start()
     try:
+        # stderr=STDOUT: uv/pip write progress to stderr. The desktop
+        # hand-off (scripts/desktop-update.ps1) only drains the child's
+        # stdout while the child runs, so a full stderr pipe (~64KB)
+        # blocks the installer forever — run 31449642122 hung 65 minutes
+        # inside this call. Merged into stdout, the output rides the pipe
+        # that IS drained. The fix lives here (not only in the hand-off
+        # script) because old installed bases run their OLD copy of the
+        # hand-off, but import THIS file fresh after the git reset.
         subprocess.run(
             cmd,
             cwd=PROJECT_ROOT,
             check=True,
             env=env,
+            stderr=subprocess.STDOUT,
         )
     finally:
         done.set()

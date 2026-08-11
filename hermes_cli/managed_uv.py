@@ -827,6 +827,14 @@ def _stage_candidate_venv(
     # UV_NO_CONFIG drops it and uv 0.12+ refuses --locked.
     sync_env = dict(env)
     sync_env.pop("UV_NO_CONFIG", None)
+    # stderr=STDOUT: uv writes progress to stderr. When the desktop
+    # hand-off (scripts/desktop-update.ps1) runs `hermes update`, it only
+    # drains the child's stdout while the child runs; a full stderr pipe
+    # (~64KB) blocks uv forever. Run 31453853006 hung 43 minutes in this
+    # exact call. Merging into stdout keeps the output streaming through
+    # the pipe that IS drained. Old installed bases run their old copy of
+    # the hand-off script, so the fix must live here, on the Python side
+    # the update refreshes before dependencies are installed.
     synced = subprocess.run(
         [
             uv_bin,
@@ -839,6 +847,7 @@ def _stage_candidate_venv(
         ],
         cwd=project_root,
         env=sync_env,
+        stderr=subprocess.STDOUT,
         check=False,
     )
     if synced.returncode != 0:

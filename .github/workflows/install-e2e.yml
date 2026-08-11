@@ -110,7 +110,7 @@ jobs:
   # ---- linux: install via curl-bash ---------------------------------------
 
   linux-curl-bash-to-hermes-update:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "linux: curl-bash -> hermes-update (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "update"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -126,7 +126,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   linux-curl-bash-to-curl-bash:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "linux: curl-bash -> curl-bash (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "installer"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -143,7 +143,7 @@ jobs:
   # ---- windows: install via the website's Hermes-Setup.exe ----------------
 
   windows-desktop-installer-to-desktop-app:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: desktop-installer@latest -> desktop-app (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -161,7 +161,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   windows-desktop-installer-to-installer-rerun:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: desktop-installer@latest -> desktop-installer-rerun@latest (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -176,7 +176,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   windows-desktop-installer-to-hermes-update:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: desktop-installer@latest -> hermes-update (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -191,7 +191,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   windows-desktop-installer-to-irm-iex:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: desktop-installer@latest -> irm-iex (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -208,7 +208,7 @@ jobs:
   # ---- windows: install via irm | iex --------------------------------------
 
   windows-irm-iex-to-desktop-app:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: irm-iex -> desktop-app (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -223,7 +223,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   windows-irm-iex-to-installer-rerun:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: irm-iex -> desktop-installer-rerun@latest (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -238,7 +238,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   windows-irm-iex-to-hermes-update:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: irm-iex -> hermes-update (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -253,7 +253,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   windows-irm-iex-to-irm-iex:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "windows: irm-iex -> irm-iex (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -270,7 +270,7 @@ jobs:
   # ---- macos: no driver yet (every leg natively skips in the run workflow) -
 
   macos-curl-bash-to-curl-bash:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "macos: curl-bash -> curl-bash (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
@@ -284,7 +284,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   macos-curl-bash-to-hermes-update:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "macos: curl-bash -> hermes-update (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
@@ -298,7 +298,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   macos-curl-bash-to-app-update:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "macos: curl-bash -> app-update (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
@@ -312,7 +312,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   macos-packaged-app-to-curl-bash:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "macos: packaged-app -> curl-bash (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
@@ -326,7 +326,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   macos-packaged-app-to-hermes-update:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "macos: packaged-app -> hermes-update (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
@@ -340,7 +340,7 @@ jobs:
       install-ref: ${{ matrix.tag.ref }}
 
   macos-packaged-app-to-app-update:
-    name: "${{ matrix.tag.ref }} -> HEAD"
+    name: "macos: packaged-app -> app-update (${{ matrix.tag.ref }} -> HEAD)"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:

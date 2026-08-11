@@ -1,0 +1,115 @@
+name: Install & Update E2E — Windows desktop (reusable)
+
+# Runs the REAL Windows desktop user flow against ONE update route:
+# install OLD via the website's Hermes-Setup.exe (headed, AutoHotkey clicks
+# Install -> Launch, the real Electron window must appear), then update
+# OLD -> HEAD through the route a user would take.
+#
+# The Windows sibling of install-e2e-run.yml. No bubblewrap here — the
+# driver (tests/install/windows-desktop-gui-e2e.ps1) fakes GitHub with
+# git's own transport rewrite: a driver-owned GIT_CONFIG_GLOBAL carrying
+# url.<file://serve.git>.insteadOf for both canonical repo URLs, so the
+# installer and updater run byte-for-byte against their real URLs and land
+# on a local bare repo serving HEAD as `main`. OLD is not staged: it is
+# the release pin baked into the website exe — the literal starting point
+# of every real GUI user.
+#
+# Routes (the update mechanism under test):
+#   desktop    the app's own Update button: the installed Hermes.exe runs
+#              under Playwright's Electron driver, which clicks Settings ->
+#              About -> "Update now"; the production hand-off chain runs
+#              untouched (marker, app quit, detached updater, hermes
+#              update, desktop rebuild, relaunch).
+#   update     TODO: `hermes update` from the installed venv.
+#   installer  TODO: re-run the bootstrap exe over the existing install.
+#
+# Call it:
+#
+#   jobs:
+#     windows-desktop:
+#       uses: ./.github/workflows/install-e2e-windows-run.yml
+#       with:
+#         route: desktop
+
+on:
+  workflow_call:
+    inputs:
+      route:
+        description: 'Update mechanism to exercise: desktop (Update button; implemented), update (hermes update; TODO), installer (re-run bootstrap exe; TODO).'
+        required: false
+        type: string
+        default: desktop
+      setup-exe-url:
+        description: 'Bootstrap installer to install OLD with. Default: the latest published one — what a user downloads today.'
+        required: false
+        type: string
+        default: https://hermes-assets.nousresearch.com/Hermes-Setup.exe
+      timeout-minutes:
+        description: 'Job timeout. The install leg does real toolchain work and the update leg a full Electron rebuild.'
+        required: false
+        type: number
+        default: 240
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: "${{ inputs.route }} route from website installer"
+    runs-on: windows-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    env:
+      # Sibling of the checkout (D:\a\hermes-agent\hermes-desktop-gui-e2e):
+      # outside the repo so the staged bare clone and the install never
+      # collide with the checkout itself. NOTE: ${{ runner.temp }} is NOT
+      # available in job-level env (only github/inputs/matrix/needs/
+      # secrets/strategy/vars).
+      HERMES_E2E_WORKROOT: ${{ github.workspace }}\..\hermes-desktop-gui-e2e
+
+    steps:
+      # Full history: the driver bare-clones this checkout as the repo the
+      # installer/updater talk to, and the installer's baked release pin
+      # must be reachable in that clone. A shallow checkout cannot serve
+      # either need.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Stage serve repo (main -> HEAD)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route ${{ inputs.route }} -SetupExeUrl ${{ inputs.setup-exe-url }}
+
+      - name: Install OLD via website Hermes-Setup.exe (headed, AHK-clicked)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase install-gui -Route ${{ inputs.route }} -SetupExeUrl ${{ inputs.setup-exe-url }}
+
+      - name: Update OLD -> HEAD (${{ inputs.route }} route)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route ${{ inputs.route }} -SetupExeUrl ${{ inputs.setup-exe-url }}
+
+      - name: Collect proof + logs
+        if: always()
+        shell: powershell
+        run: |
+          $out = "gui-e2e-proof"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $work = $env:HERMES_E2E_WORKROOT
+          $home_ = Join-Path $work "hermes-home"
+          foreach ($pair in @(
+            @{ src = (Join-Path $work "proof");                          dst = "proof" },
+            @{ src = (Join-Path $work "shas.json");                      dst = "shas.json" },
+            @{ src = (Join-Path $home_ "logs");                          dst = "logs" },
+            @{ src = (Join-Path $home_ ".hermes-update-result.json");    dst = ".hermes-update-result.json" }
+          )) {
+            if (Test-Path $pair.src) { Copy-Item $pair.src (Join-Path $out $pair.dst) -Recurse -Force }
+          }
+
+      - name: Upload proof + logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: install-e2e-windows-${{ inputs.route }}-${{ github.sha }}
+          path: gui-e2e-proof
+          retention-days: 14
+          if-no-files-found: ignore

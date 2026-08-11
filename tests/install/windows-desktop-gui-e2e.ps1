@@ -1,27 +1,44 @@
 # ============================================================================
 # Windows Desktop GUI install + update E2E driver (the REAL user flow)
 # ============================================================================
-# Same before -> current -> next staging as windows-desktop-e2e.ps1, but every
-# leg goes through the surfaces a real user touches:
+# Proves, on a real Windows machine, that a user who installs Hermes the way
+# the website tells them to can then update to the commit under test through
+# a real update surface -- with every leg driven through the GUI a user
+# actually touches:
 #
 #   INSTALL   - downloads the production Hermes-Setup.exe from the website,
 #               launches it HEADED, and AutoHotkey clicks Install, waits,
 #               then clicks Launch. The real Electron Hermes.exe must appear.
 #               The exe runs EXACTLY as shipped: it downloads its own pinned
 #               install.ps1 from GitHub raw and installs its baked
-#               BUILD_PIN_COMMIT -- so the "before" version in this harness is
-#               the website release pin, the literal starting point of every
-#               real GUI user. (The strict HEAD~1 -> HEAD guarantee is the
-#               contract harness's job; this one covers the production pin.)
-#   UPDATE x2 - launches the installed Hermes.exe under Playwright's Electron
-#               driver and CLICKS Settings -> About -> "Update now". That
-#               spawns the production hand-off (desktop-update.ps1 via
-#               cmd start, or the staged hermes-setup.exe on old checkouts),
-#               the app quits, the detached updater runs `hermes update`,
-#               rebuilds the desktop, and RELAUNCHES Hermes.exe. We assert
-#               the whole chain: target sha, marker cleanup, working hermes,
-#               and the relaunched app window. Leg 1 lands on CURRENT, leg 2
-#               on the synthetic NEXT.
+#               BUILD_PIN_COMMIT -- so OLD is the website release pin, the
+#               literal starting point of every real GUI user.
+#   UPDATE    - OLD -> HEAD through the route selected by -Route:
+#                 desktop    (implemented) launch the installed Hermes.exe
+#                            under Playwright's Electron driver and CLICK
+#                            Settings -> About -> "Update now". The
+#                            production hand-off chain runs untouched:
+#                            marker, app quit, detached updater, `hermes
+#                            update`, desktop rebuild, RELAUNCH. Asserts
+#                            target sha, marker cleanup, result JSON (when
+#                            the script path wrote one), working hermes,
+#                            and the relaunched app window.
+#                 update     TODO: run `hermes update` from the installed
+#                            venv (the CLI route a GUI user might take).
+#                 installer  TODO: re-run the bootstrap installer over the
+#                            existing install (its --update flow).
+#
+# HOW THE STAGING WORKS (no MITM proxy, no network fakery):
+#   We bare-clone the checkout into <workroot>\serve.git and point every git
+#   process at it with url.<file-url>.insteadOf rewrites for the two
+#   canonical repo URLs, via a driver-owned gitconfig selected with
+#   GIT_CONFIG_GLOBAL. (NOT GIT_CONFIG_COUNT/KEY_n/VALUE_n env config --
+#   install.ps1 sets those itself and silently clobbers them.) The
+#   installer's `git clone` and `hermes update`'s `git fetch origin`
+#   transparently hit OUR bare repo, whose `main` ref serves HEAD -- the
+#   update target. Installer and updater run byte-for-byte as shipped;
+#   everything else (uv, PyPI, npm, the installer's raw.githubusercontent
+#   install.ps1 download) uses the real network, same as a user install.
 #
 # PROOF: screenshots at every renderer step (Playwright), full-desktop
 # screenshots around the installer/AHK phases, a rolling desktop capture
@@ -29,27 +46,41 @@
 # as CI artifacts.
 #
 # DEVIATIONS FROM PRODUCTION (each one deliberate and small):
-#   * git URL redirect (GIT_CONFIG_GLOBAL) routes the canonical repo URLs
-#     to the staged serve.git -- the staging requirement itself. The
-#     installer's raw.githubusercontent install.ps1 download and the pinned
-#     ZIP fallback are NOT redirected (real network, as shipped).
+#   * the git URL redirect itself -- the staging requirement.
 #   * serve.git gets uploadpack.allowAnySHA1InWant=true so the installer's
 #     baked -Commit pin can be fetched from the redirected clone the same
 #     way GitHub's upload-pack allows it.
-#   * A dummy provider key is seeded after install so the update legs see
+#   * A dummy provider key is seeded after install so the update leg sees
 #     the ready app shell instead of the onboarding overlay (a real
 #     updating user has a configured provider).
+#   * .skip_upstream_prompt is set: serve.git's file:// origin looks like a
+#     fork to `hermes update`, whose fork-only upstream prompt is a bare
+#     input() that hangs forever under the desktop's detached console.
+#     Real GUI users are on the official origin and never see it.
 #
-# Usage mirrors windows-desktop-e2e.ps1:
+# USAGE (local Windows box or CI):
 #   powershell -File tests\install\windows-desktop-gui-e2e.ps1 -Phase all
-#   ... -Phase stage / install-gui / update-gui-to-current / update-gui-to-next
+#   ... -Phase stage / install-gui / update-gui
+#   Phases share state via <workroot>\shas.json, so CI can run them as
+#   separate steps for readable logs.
 # ============================================================================
 
 param(
-    [ValidateSet("stage", "install-gui", "update-gui-to-current", "update-gui-to-next", "all")]
+    [ValidateSet("stage", "install-gui", "update-gui", "all")]
     [string]$Phase = "all",
+
+    # Update route to exercise in the update-gui phase. Only "desktop" (the
+    # app's own Update button) is implemented; "update" (CLI `hermes
+    # update`) and "installer" (re-run the bootstrap exe) are declared arms
+    # so the workflow surface is stable when they land.
+    [ValidateSet("desktop", "update", "installer")]
+    [string]$Route = "desktop",
+
+    # Repo checkout whose HEAD is the update target.
     [string]$RepoRoot = "",
+
     [string]$WorkRoot = $(if ($env:HERMES_E2E_WORKROOT) { $env:HERMES_E2E_WORKROOT } else { Join-Path $env:TEMP "hermes-desktop-gui-e2e" }),
+
     [string]$SetupExeUrl = "https://hermes-assets.nousresearch.com/Hermes-Setup.exe"
 )
 
@@ -86,6 +117,11 @@ function Assert-True([bool]$Condition, [string]$Message) {
 }
 
 function Invoke-Git([string[]]$GitArgs) {
+    # PS 5.1 trap: under $ErrorActionPreference = "Stop", a native command
+    # that writes ANYTHING to stderr while merged via 2>&1 throws a
+    # NativeCommandError even when it exits 0 (git loves stderr for
+    # progress/notices). Relax EAP around the native call only; exit-code
+    # checking below is the real error gate.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
@@ -100,8 +136,16 @@ function Invoke-Git([string[]]$GitArgs) {
 }
 
 function Set-GitRedirect {
-    # Same mechanism (and same install.ps1-clobber rationale) as
-    # windows-desktop-e2e.ps1: a driver-owned gitconfig via GIT_CONFIG_GLOBAL.
+    # Route the canonical repo URLs to the local bare repo for THIS process
+    # and every child (the installer's git, hermes update's git).
+    #
+    # MECHANISM: a driver-owned global gitconfig selected via
+    # GIT_CONFIG_GLOBAL. Do NOT use GIT_CONFIG_COUNT/KEY_n/VALUE_n env
+    # config here -- install.ps1 SETS those itself (GIT_CONFIG_COUNT=1,
+    # windows.appendAtomically), silently clobbering any redirect we put
+    # there. install.ps1's own `git config --global` writes simply land in
+    # our file, so its compat settings still apply. Nothing leaks onto the
+    # machine: the file lives in the workroot and dies with it.
     $fileUrl = "file:///" + ($ServeRepo -replace "\\", "/")
     $gitCfg = Join-Path $WorkRoot "e2e-gitconfig"
     if (-not (Test-Path -LiteralPath $WorkRoot)) {
@@ -114,6 +158,7 @@ function Set-GitRedirect {
 "@ | Set-Content -LiteralPath $gitCfg -Encoding ASCII
     $env:GIT_CONFIG_GLOBAL = $gitCfg
     Write-Host "  git URL redirect via GIT_CONFIG_GLOBAL=$gitCfg"
+    Write-Host "    $RepoUrlHttps -> $fileUrl"
 }
 
 function Read-State {
@@ -145,7 +190,7 @@ function Test-HermesRuns([string]$Label) {
 }
 
 function Save-DesktopScreenshot([string]$OutFile) {
-    # Single full-desktop screenshot (all monitors' primary screen).
+    # Single full-desktop screenshot (primary screen).
     try {
         Add-Type -AssemblyName System.Windows.Forms, System.Drawing
         $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -197,7 +242,7 @@ function Stop-DesktopRecorder($proc, [string]$OutDir) {
 }
 
 function Stop-HermesAppProcesses([string]$Label) {
-    # Close the desktop app the blunt way between legs (a user quitting).
+    # Close the desktop app the blunt way between phases (a user quitting).
     # Only Hermes.exe (Electron) -- never hermes.exe (the venv CLI shim).
     $procs = @(Get-Process -Name "Hermes" -ErrorAction SilentlyContinue)
     foreach ($p in $procs) {
@@ -226,20 +271,40 @@ function Get-ManagedNode {
 }
 
 # ----------------------------------------------------------------------------
-# Phase: stage -- reuse the contract driver's stage (identical staging)
+# Phase: stage -- serve.git with `main` at HEAD (the update target)
 # ----------------------------------------------------------------------------
 function Invoke-PhaseStage {
-    Write-Step "STAGE (gui): delegating to windows-desktop-e2e.ps1 -Phase stage"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot "windows-desktop-e2e.ps1") `
-        -Phase stage -RepoRoot $RepoRoot -WorkRoot $WorkRoot
-    if ($LASTEXITCODE -ne 0) { throw "stage phase failed" }
+    Write-Step "STAGE: bare serve repo, main -> HEAD (update target)"
+
+    if (Test-Path -LiteralPath $WorkRoot) {
+        Remove-Item -LiteralPath $WorkRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
+    # The purge above deleted the redirect gitconfig; re-arm it so the
+    # bare-clone below (and everything after) sees the redirect file.
+    Set-GitRedirect
+
+    $current = Invoke-Git @("-C", $RepoRoot, "rev-parse", "HEAD")
+    Write-Host "  HEAD (update target): $current"
+
+    # Bare-clone the checkout: this is the repo the installer and updater
+    # actually talk to. Local-path clone hardlinks objects, so it's fast
+    # even for full history. OLD is not staged by us -- it is whatever
+    # release pin the website installer carries (recorded in install-gui).
+    Invoke-Git @("clone", "--bare", "--quiet", $RepoRoot, $ServeRepo) | Out-Null
+    Invoke-Git @("-C", $ServeRepo, "update-ref", "refs/heads/main", $current) | Out-Null
+    Invoke-Git @("-C", $ServeRepo, "symbolic-ref", "HEAD", "refs/heads/main") | Out-Null
+
     # The website installer pins a specific release commit (-Commit <sha>).
     # That sha is in serve.git's history but not at a ref tip, so the
     # redirected fetch needs any-SHA1 upload-pack permission (GitHub grants
-    # the equivalent for archive/fetch of reachable commits).
+    # the equivalent for fetch of reachable commits).
     Invoke-Git @("-C", $ServeRepo, "config", "uploadpack.allowAnySHA1InWant", "true") | Out-Null
     Write-Host "  serve.git: uploadpack.allowAnySHA1InWant=true (installer commit pin)"
+
+    @{ current = $current } |
+        ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
+    Write-Host "  state written: $StatePath"
     New-Item -ItemType Directory -Path $ProofRoot -Force | Out-Null
 }
 
@@ -334,39 +399,39 @@ function Invoke-PhaseInstallGui {
     # Close the freshly launched app (user quits after first look).
     Stop-HermesAppProcesses "post-install"
 
-    # The website exe installs its baked release pin -- record it as the
-    # "before" version. It must differ from CURRENT (an update is genuinely
-    # available). We do NOT require it to be an ancestor of CURRENT: on a
-    # real `push: main` run CURRENT is main's tip and the release pin is
-    # behind it (ancestor), but on a feature branch CURRENT has diverged
-    # from main, so the release pin legitimately isn't in its ancestry. The
-    # update leg resets the checkout to serve.git's main ref regardless, and
-    # asserts it lands on CURRENT -- that is the real forward-update proof.
+    # The website exe installs its baked release pin -- that IS the OLD
+    # version. It must differ from HEAD (an update is genuinely available).
+    # We do NOT require it to be an ancestor of HEAD: on a real `push: main`
+    # run HEAD is main's tip and the release pin is behind it (ancestor),
+    # but on a feature branch HEAD has diverged from main, so the release
+    # pin legitimately isn't in its ancestry. The update leg resets the
+    # checkout to serve.git's main ref regardless, and asserts it lands on
+    # HEAD -- that is the real forward-update proof.
     $installedSha = Get-InstalledHead
-    Write-Host "  installer landed on: $installedSha (website release pin)"
-    Assert-True ($installedSha -ne $state.current) "installed pin differs from CURRENT (an update is genuinely available)"
+    Write-Host "  installer landed on: $installedSha (website release pin = OLD)"
+    Assert-True ($installedSha -ne $state.current) "installed pin differs from HEAD (an update is genuinely available)"
     $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     & git -C $InstallDir merge-base --is-ancestor $installedSha $state.current 2>&1 | Out-Null
     $isAncestor = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEap
     if ($isAncestor) {
-        Write-Host "  [ok] installed pin is an ancestor of CURRENT (linear before -> current)"
+        Write-Host "  [ok] installed pin is an ancestor of HEAD (linear old -> new)"
     } else {
-        Write-Host "  [note] installed pin is NOT an ancestor of CURRENT -- expected on a diverged feature branch; the update leg still resets to CURRENT"
+        Write-Host "  [note] installed pin is NOT an ancestor of HEAD -- expected on a diverged feature branch; the update leg still resets to HEAD"
     }
     Test-HermesRuns "post-install-gui"
     Assert-True ($null -ne (Get-DesktopExe)) "packaged Desktop Hermes.exe exists"
 
-    # Seed a provider so the update legs meet the ready app shell, not the
+    # Seed a provider so the update leg meets the ready app shell, not the
     # onboarding overlay (an updating user has a configured provider).
     $envFile = Join-Path $HermesHome ".env"
     if (-not (Test-Path -LiteralPath $envFile) -or -not ((Get-Content $envFile -Raw -ErrorAction SilentlyContinue) -match "OPENROUTER_API_KEY")) {
-        Add-Content -LiteralPath $envFile -Value "OPENROUTER_API_KEY=sk-or-e2e-placeholder-not-a-real-key"
+        Add-Content -LiteralPath $envFile -Value "OPENROUTER_API_KEY=sk-or-...-key"
     }
-    Write-Host "  seeded placeholder provider key for update legs"
+    Write-Host "  seeded placeholder provider key for the update leg"
 
     # Suppress the interactive "add upstream remote?" prompt during the GUI
-    # update legs. Our serve.git origin (file://) looks like a fork to
+    # update leg. Our serve.git origin (file://) looks like a fork to
     # `hermes update`, so `_sync_with_upstream_if_needed` would call bare
     # input() -- which HANGS FOREVER when the Desktop spawns the hand-off via
     # `cmd start /min` (a real but empty console; input() blocks waiting for a
@@ -380,18 +445,17 @@ function Invoke-PhaseInstallGui {
 }
 
 # ----------------------------------------------------------------------------
-# Update legs: real app, real clicks (Playwright Electron driver)
+# Phase: update-gui -- OLD -> HEAD through the selected route
 # ----------------------------------------------------------------------------
-function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegSlug) {
-    Write-Step "UPDATE GUI ($LegName): advance served main -> $TargetSha, click Update now"
-    $proof = Join-Path $ProofRoot $LegSlug
+function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
+    Write-Step "UPDATE (GUI, route=desktop): click Update now, land on $TargetSha"
+    $proof = Join-Path $ProofRoot "update-gui"
     New-Item -ItemType Directory -Path $proof -Force | Out-Null
 
     $env:HERMES_HOME = $HermesHome
-    Invoke-Git @("-C", $ServeRepo, "update-ref", "refs/heads/main", $TargetSha) | Out-Null
 
     $desktopExe = Get-DesktopExe
-    Assert-True ($null -ne $desktopExe) "$LegName -- packaged Hermes.exe present before update"
+    Assert-True ($null -ne $desktopExe) "packaged Hermes.exe present before update"
 
     $resultPath = Join-Path $HermesHome ".hermes-update-result.json"
     $markerPath = Join-Path $HermesHome ".hermes-update-in-progress"
@@ -407,7 +471,7 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
     & $node -e "require.resolve('@playwright/test', { paths: [process.argv[1]] })" $appsDesktop 2>&1 | Out-Null
     $pwResolved = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEap
-    Assert-True $pwResolved "$LegName -- @playwright/test resolvable from installed apps/desktop"
+    Assert-True $pwResolved "@playwright/test resolvable from installed apps/desktop"
 
     $recorder = Start-DesktopRecorder (Join-Path $proof "desktop-frames")
     try {
@@ -428,7 +492,7 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
             Pop-Location
             Remove-Item -LiteralPath $driver -Force -ErrorAction SilentlyContinue
         }
-        Assert-True ($driveExit -eq 0) "$LegName -- GUI driver clicked Update now and the app quit for hand-off"
+        Assert-True ($driveExit -eq 0) "GUI driver clicked Update now and the app quit for hand-off"
 
         # The detached updater (spawned by the app, NOT by us) now runs
         # `hermes update` + desktop rebuild + relaunch. Which updater depends
@@ -443,12 +507,12 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
         # only when the script path produced it.
         #
         # This can take a LONG time: the website release we installed is weeks
-        # of main behind CURRENT, so the update pulls a large diff AND does a
+        # of main behind HEAD, so the update pulls a large diff AND does a
         # full Electron desktop rebuild (vite + electron-builder) plus a uv
         # sync. The desktop-build output goes to logs/update.log (not the
         # streamed handoff log), so we tail update.log here to show progress
         # instead of going silent for tens of minutes.
-        Write-Host "  waiting for the detached updater to finish (up to 90 min; large release->CURRENT rebuild) ..."
+        Write-Host "  waiting for the detached updater to finish (up to 90 min; large old->new rebuild) ..."
         $updateLog = Join-Path $HermesHome "logs\update.log"
         $updateLogPos = 0
         $deadline = (Get-Date).AddMinutes(90)
@@ -473,7 +537,7 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
         if (Test-Path -LiteralPath $resultPath) {
             $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
             Write-Host "  updater result: ok=$($result.ok) code=$($result.exit_code) msg=$($result.message)"
-            Assert-True ([bool]$result.ok) "$LegName -- updater result ok=true"
+            Assert-True ([bool]$result.ok) "updater result ok=true"
         } else {
             Write-Host "  (no result JSON -- staged-binary updater path; relying on sha/marker/relaunch asserts)"
         }
@@ -481,11 +545,11 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
         # Marker may briefly outlive the result write; allow it a moment.
         $mDeadline = (Get-Date).AddMinutes(2)
         while ((Get-Date) -lt $mDeadline -and (Test-Path -LiteralPath $markerPath)) { Start-Sleep -Seconds 5 }
-        Assert-True (-not (Test-Path -LiteralPath $markerPath)) "$LegName -- update marker cleaned up"
+        Assert-True (-not (Test-Path -LiteralPath $markerPath)) "update marker cleaned up"
 
-        Assert-True ((Get-InstalledHead) -eq $TargetSha) "$LegName -- checkout landed on target commit"
-        Test-HermesRuns $LegName
-        Assert-True ($null -ne (Get-DesktopExe)) "$LegName -- Hermes.exe still present after update"
+        Assert-True ((Get-InstalledHead) -eq $TargetSha) "checkout landed on target commit"
+        Test-HermesRuns "post-update"
+        Assert-True ($null -ne (Get-DesktopExe)) "Hermes.exe still present after update"
 
         # The production hand-off relaunches the desktop (RelaunchExe).
         # A relaunched window is the user-visible proof the update loop closed.
@@ -497,7 +561,7 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
             if ($relaunched) { break }
             Start-Sleep -Seconds 5
         }
-        Assert-True ($null -ne $relaunched) "$LegName -- updater relaunched the desktop app"
+        Assert-True ($null -ne $relaunched) "updater relaunched the desktop app"
         Start-Sleep -Seconds 12   # let the window paint for the screenshot
         # Foreground the relaunched Hermes window so the proof screenshot
         # captures IT, not whatever else is on top (the full-desktop grab is
@@ -525,19 +589,30 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
             Get-Content -LiteralPath $handoffLog -Tail 60 | ForEach-Object { Write-Host "  | $_" }
             Copy-Item $handoffLog (Join-Path $proof "desktop-update-handoff.log") -Force -ErrorAction SilentlyContinue
         }
-        # Quit the relaunched app so the next leg (or job teardown) is clean.
-        Stop-HermesAppProcesses $LegName
+        # Quit the relaunched app so job teardown is clean.
+        Stop-HermesAppProcesses "post-update"
     }
 }
 
-function Invoke-PhaseUpdateGuiToCurrent {
+function Invoke-PhaseUpdateGui {
     $state = Read-State
-    Invoke-GuiUpdateLeg $state.current "BASE -> CURRENT (GUI)" "update-gui-to-current"
-}
-
-function Invoke-PhaseUpdateGuiToNext {
-    $state = Read-State
-    Invoke-GuiUpdateLeg $state.next "CURRENT -> NEXT (GUI)" "update-gui-to-next"
+    switch ($Route) {
+        "desktop" {
+            Invoke-GuiUpdateDesktopRoute $state.current
+        }
+        "update" {
+            # TODO: run `hermes update` from the installed venv -- the CLI
+            # route. Needs the same completion/sha/relaunch asserts minus
+            # the app-quit dance.
+            throw "route 'update' (CLI hermes update) is not implemented yet"
+        }
+        "installer" {
+            # TODO: re-run the bootstrap Hermes-Setup.exe over the existing
+            # install (its --update flow jumps straight to progress and
+            # runs unattended).
+            throw "route 'installer' (re-run bootstrap exe) is not implemented yet"
+        }
+    }
 }
 
 # ----------------------------------------------------------------------------
@@ -545,21 +620,20 @@ function Invoke-PhaseUpdateGuiToNext {
 # ----------------------------------------------------------------------------
 Write-Host "Windows Desktop GUI E2E driver (real user flow)"
 Write-Host "  phase:    $Phase"
+Write-Host "  route:    $Route"
 Write-Host "  repo:     $RepoRoot"
 Write-Host "  workroot: $WorkRoot"
 
 Set-GitRedirect
 
 switch ($Phase) {
-    "stage"                 { Invoke-PhaseStage }
-    "install-gui"           { Invoke-PhaseInstallGui }
-    "update-gui-to-current" { Invoke-PhaseUpdateGuiToCurrent }
-    "update-gui-to-next"    { Invoke-PhaseUpdateGuiToNext }
+    "stage"       { Invoke-PhaseStage }
+    "install-gui" { Invoke-PhaseInstallGui }
+    "update-gui"  { Invoke-PhaseUpdateGui }
     "all" {
         Invoke-PhaseStage
         Invoke-PhaseInstallGui
-        Invoke-PhaseUpdateGuiToCurrent
-        Invoke-PhaseUpdateGuiToNext
+        Invoke-PhaseUpdateGui
     }
 }
 

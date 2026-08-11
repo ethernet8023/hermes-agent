@@ -12,11 +12,12 @@ name: Install & Update E2E
 # A hardcoded list would stop covering the newest release the day after it
 # ships, and would pin an "oldest" that nobody still runs.
 #
-# A separate Windows workflow (desktop-windows-e2e.yml) covers the Windows
-# desktop surfaces: a headless desktop-update.ps1 contract job and a real
-# user-flow GUI job (website installer, clicked Install/Launch/Update now).
-# No tag matrix there — the published exe's own build pin is the starting
-# point users actually have.
+# A separate Windows axis (install-e2e-windows-run.yml) covers the desktop
+# user flow: install OLD with the website's published bootstrap installer
+# (headed, AutoHotkey-clicked), then update to HEAD through a real update
+# surface — the app's own Update button clicked by Playwright. No tag
+# matrix there: the published exe's own build pin is the starting point
+# users actually have.
 #
 # Triggers:
 #   * every 12 hours, so upstream drift (a new uv, a Node bump, a PyPI change)
@@ -33,11 +34,11 @@ on:
   workflow_dispatch:
     inputs:
       route:
-        description: 'Which update route to exercise.'
+        description: 'Which update route to exercise. all/both include the Windows desktop leg.'
         required: false
         type: choice
         default: all
-        options: [all, both, update, installer]
+        options: [all, both, update, installer, windows-desktop]
       tag-count:
         description: 'How many release tags to sample (newest, oldest, and a spread between).'
         required: false
@@ -115,9 +116,14 @@ jobs:
       route: installer
       install-ref: ${{ matrix.install-ref }}
 
-  # Windows desktop coverage moved to desktop-windows-e2e.yml: two jobs —
-  # a headless desktop-update.ps1 contract job (BASE -> CURRENT -> NEXT)
-  # and a REAL user-flow GUI job (website Hermes-Setup.exe, AutoHotkey
-  # Install/Launch clicks, Playwright-driven Settings -> About -> Update
-  # now, relaunched-window assert). Triggered on push-to-main + nightly +
-  # release tags + dispatch there, so no leg here.
+  # Windows desktop: install OLD with the website's published bootstrap
+  # installer (the exact bits a user downloads today, AutoHotkey-clicked),
+  # then update to HEAD by clicking the app's own Update button under
+  # Playwright. The reusable workflow's route input selects the update
+  # mechanism; `hermes update` and installer-rerun arms are declared TODOs
+  # there.
+  windows-desktop:
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
+    uses: ./.github/workflows/install-e2e-windows-run.yml
+    with:
+      route: desktop

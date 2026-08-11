@@ -115,9 +115,11 @@ installerWin := "ahk_exe " setupExe
 appWin := "ahk_exe Hermes.exe"
 
 ; Button center as a fraction of the window rect (installer is ~full-screen
-; on the runner). Measured from a live CI frame: center ~ (0.50, 0.59).
+; on the runner). Measured from a live CI frame where the template match
+; landed at screen (511,454) inside window x=64 y=34 w=896 h=659:
+;   fx = (511-64)/896 = 0.50 ; fy = (454-34)/659 = 0.637
 BTN_FX := 0.50
-BTN_FY := 0.59
+BTN_FY := 0.637
 
 Log("Waiting for a real-sized installer window (" installerWin ") ...")
 rect := WaitForRealWindow(installerWin, 90000)

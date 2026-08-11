@@ -4,13 +4,13 @@ name: Install & Update E2E — macOS (reusable)
 # a starting version and updating it to HEAD.
 #
 # NOTHING is implemented yet: every method pair NATIVELY SKIPS (grey check,
-# no runner) until a macOS driver exists. The workflow exists now so the
-# combination generator (scripts/sandbox/generate-e2e-matrix.mjs) can
-# dispatch every declared macOS combination the same way it does for linux
-# and windows -- capability knowledge lives here, next to where the driver
-# will be, and implementing a method flips this workflow's job-level `if`.
+# no runner) until a macOS driver exists. The workflow exists now so
+# install-e2e.yml can dispatch every declared macOS combination the same
+# way it does for linux and windows -- capability knowledge lives here,
+# next to where the driver will be, and implementing a method flips this
+# workflow's job-level `if`.
 #
-# Declared methods (see the generator's SPEC):
+# Declared methods (see install-e2e.yml's macos-* jobs):
 #   install: curl-bash, packaged-app
 #   update:  curl-bash, hermes-update, app-update
 

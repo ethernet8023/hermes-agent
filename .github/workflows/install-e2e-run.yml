@@ -10,7 +10,7 @@ name: Install & Update E2E (reusable)
 # is independent: its own sandbox, its own install, nothing rewound or
 # shared.
 #
-# Method ids come from scripts/sandbox/generate-e2e-matrix.mjs. Supported
+# Method ids come from install-e2e.yml's combination jobs. Supported
 # today: install via curl-bash, update via hermes-update or curl-bash.
 # Anything else NATIVELY SKIPS (grey check, no runner): capability
 # knowledge lives here, next to the driver, so the caller can dispatch

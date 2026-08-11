@@ -72,14 +72,52 @@ permissions:
   contents: read
 
 jobs:
+  # Can this starting version run this flow at all? The desktop app
+  # (apps/desktop) only exists in releases from v2026.5.31 on (#20059):
+  # older tags have no window to launch and no Update button to click, so
+  # desktop-method legs from them natively skip below. Data-driven from the
+  # tag's own tree -- no hardcoded version list to rot.
+  probe:
+    name: probe tag
+    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'desktop-app'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has-desktop: ${{ steps.probe.outputs.has-desktop }}
+    steps:
+      # Tree listings only: no blobs, full history + tags so any ref
+      # resolves.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - id: probe
+        run: |
+          set -euo pipefail
+          ref='${{ inputs.install-ref }}'
+          if [ "$ref" = "auto" ]; then
+            # Same choice the driver's stage phase makes: newest release tag.
+            ref="$(git tag --list 'v[0-9]*' --sort=-creatordate | head -1)"
+          fi
+          if git ls-tree -d "$ref" apps/desktop | grep -q .; then
+            has=true
+          else
+            has=false
+          fi
+          echo "ref $ref: has-desktop=$has"
+          echo "has-desktop=$has" >> "$GITHUB_OUTPUT"
+
   e2e:
     # Static name on purpose: the caller's job name already carries the
     # method pair, and GitHub renders name expressions UNEXPANDED (literal
     # "${{ inputs... }}") on natively skipped jobs.
     name: run
-    # The one pair the driver can run today. Anything else is a declared
-    # TODO: native skip, so the coverage gap is a grey check on every run.
-    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'desktop-app'
+    needs: probe
+    # The one pair the driver can run today, and only from a starting
+    # version that ships the desktop app. Anything else is a native skip:
+    # a declared-TODO method pair, or a tag from before the app existed.
+    # (When probe itself skipped, its output is empty and this is false.)
+    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'desktop-app' && needs.probe.outputs.has-desktop == 'true'
     runs-on: windows-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 

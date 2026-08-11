@@ -10,7 +10,7 @@ name: Install & Update E2E — macOS (reusable)
 # next to where the driver will be, and implementing a method flips this
 # workflow's job-level `if`.
 #
-# Declared methods (see install-e2e.yml's macos-* jobs):
+# Declared methods (see the generator's SPEC):
 #   install: curl-bash, packaged-app
 #   update:  curl-bash, hermes-update, app-update
 

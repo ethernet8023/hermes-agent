@@ -72,9 +72,10 @@ param(
     [string]$Phase = "all",
 
     # Update method to exercise in the update-gui phase, named by the same
-    # ids install-e2e.yml's combination jobs use. Only "desktop-app" (the
-    # app's own Update button) is implemented; the others are declared arms
-    # so the surface is stable when they land.
+    # ids the combination generator (scripts/sandbox/generate-e2e-matrix
+    # .mjs) declares. Only "desktop-app" (the app's own Update button) is
+    # implemented; the others are declared arms so the surface is stable
+    # when they land.
     [ValidateSet("desktop-app", "hermes-update", "desktop-installer-rerun@latest", "irm-iex")]
     [string]$Route = "desktop-app",
 

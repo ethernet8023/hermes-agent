@@ -12,10 +12,11 @@ name: Install & Update E2E
 # A hardcoded list would stop covering the newest release the day after it
 # ships, and would pin an "oldest" that nobody still runs.
 #
-# A separate Windows axis (install-e2e-windows-run.yml) installs with the
-# latest PUBLISHED bootstrap installer and applies the desktop app's builtin
-# update — no tag matrix there, because the published exe's own build pin is
-# the starting point users actually have.
+# A separate Windows workflow (desktop-windows-e2e.yml) covers the Windows
+# desktop surfaces: a headless desktop-update.ps1 contract job and a real
+# user-flow GUI job (website installer, clicked Install/Launch/Update now).
+# No tag matrix there — the published exe's own build pin is the starting
+# point users actually have.
 #
 # Triggers:
 #   * every 12 hours, so upstream drift (a new uv, a Node bump, a PyPI change)
@@ -32,11 +33,11 @@ on:
   workflow_dispatch:
     inputs:
       route:
-        description: 'Which update route to exercise. all/both include the Windows desktop leg.'
+        description: 'Which update route to exercise.'
         required: false
         type: choice
         default: all
-        options: [all, both, update, installer, windows-desktop]
+        options: [all, both, update, installer]
       tag-count:
         description: 'How many release tags to sample (newest, oldest, and a spread between).'
         required: false
@@ -114,13 +115,9 @@ jobs:
       route: installer
       install-ref: ${{ matrix.install-ref }}
 
-  # Windows desktop: install with the latest PUBLISHED bootstrap installer
-  # (Hermes-Setup.exe — the exact bits a user downloads today), then apply the
-  # desktop app's builtin update. No release-tag matrix: the published exe's
-  # build pin decides the starting base, which is precisely the "user on the
-  # current installer" scenario this axis exists to cover.
-  windows-desktop:
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
-    uses: ./.github/workflows/install-e2e-windows-run.yml
-    with:
-      route: desktop
+  # Windows desktop coverage moved to desktop-windows-e2e.yml: two jobs —
+  # a headless desktop-update.ps1 contract job (BASE -> CURRENT -> NEXT)
+  # and a REAL user-flow GUI job (website Hermes-Setup.exe, AutoHotkey
+  # Install/Launch clicks, Playwright-driven Settings -> About -> Update
+  # now, relaunched-window assert). Triggered on push-to-main + nightly +
+  # release tags + dispatch there, so no leg here.

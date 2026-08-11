@@ -106,6 +106,28 @@ async function main() {
   await page.waitForTimeout(3000)
   await shot(page, '01-app-booted')
 
+  // ── Dismiss onboarding if present ─────────────────────────────────────
+  // A fresh install with no configured provider shows the onboarding card
+  // ("Let's get you setup..."). The update path needs no provider, so skip
+  // it via "I'll choose a provider later" to reach the app shell (which
+  // has the settings gear). Harmless no-op if onboarding isn't shown.
+  const dismissedOnboarding = await clickFirstVisible(
+    page,
+    [
+      p => p.getByRole('button', { name: /choose a provider later/i }),
+      p => p.getByText(/choose a provider later/i),
+      p => p.getByRole('button', { name: /skip/i })
+    ],
+    'skip onboarding',
+    8_000
+  )
+
+  if (dismissedOnboarding) {
+    log('dismissed onboarding overlay')
+    await page.waitForTimeout(2500)
+    await shot(page, '01b-onboarding-dismissed')
+  }
+
   // ── Open Settings (titlebar gear) ─────────────────────────────────────
   const openedSettings = await clickFirstVisible(
     page,

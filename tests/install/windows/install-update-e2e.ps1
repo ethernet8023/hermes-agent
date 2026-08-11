@@ -242,15 +242,40 @@ try {
     # ImageSearch reference crop is made from: the ffmpeg recording is
     # H.264/yuv420p, whose chroma subsampling shifts glyph pixels enough that
     # a crop from video never matches the live screen.
-    Start-Sleep -Seconds 10
+    #
+    # Poll instead of a fixed sleep: WebView2's cold start left the window
+    # pure white past 17s on a runner (run 31448964917's capture was blank).
+    # "Rendered" = colored (non-grayscale) pixels in the window content area,
+    # which the blue HERMES AGENT title guarantees.
     Add-Type -AssemblyName System.Windows.Forms, System.Drawing
     $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-    $gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-    $gfx.Dispose()
-    $bmp.Save((Join-Path $LogDir "welcome-screen.png"), [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
+    $shotPath = Join-Path $LogDir "welcome-screen.png"
+    $renderDeadline = (Get-Date).AddSeconds(120)
+    $rendered = $false
+    while ((Get-Date) -lt $renderDeadline) {
+        Start-Sleep -Seconds 5
+        $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+        $gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $gfx.Dispose()
+        $colored = 0
+        for ($y = 100; $y -lt 600; $y += 7) {
+            for ($x = 100; $x -lt 900; $x += 7) {
+                $p = $bmp.GetPixel($x, $y)
+                $mx = [Math]::Max($p.R, [Math]::Max($p.G, $p.B))
+                $mn = [Math]::Min($p.R, [Math]::Min($p.G, $p.B))
+                if (($mx - $mn) -gt 60) { $colored++ }
+            }
+        }
+        $bmp.Save($shotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+        Write-Host "  screen poll: $colored colored samples"
+        if ($colored -gt 20) { $rendered = $true; break }
+    }
+    if (-not $rendered) {
+        Stop-Recording
+        Fail "installer UI never rendered within 120s (last capture saved to welcome-screen.png)"
+    }
     Ok "welcome screen captured (lossless) to welcome-screen.png"
 
     # TEMPORARY: stop here. The ImageSearch reference crop has to be cut from

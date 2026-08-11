@@ -49,7 +49,12 @@ jobs:
     timeout-minutes: 180
 
     env:
-      HERMES_E2E_WORKROOT: ${{ runner.temp }}\hermes-desktop-e2e
+      # Sibling of the checkout (D:\a\hermes-agent\hermes-desktop-e2e): outside
+      # the repo so the staged bare clone and the install never collide with
+      # the checkout itself. NOTE: ${{ runner.temp }} is NOT available in
+      # job-level env (only github/inputs/matrix/needs/secrets/strategy/vars);
+      # that exact mistake made the whole workflow file invalid on first push.
+      HERMES_E2E_WORKROOT: ${{ github.workspace }}\..\hermes-desktop-e2e
 
     steps:
       # Full history: the driver resolves HEAD~1 and bare-clones this

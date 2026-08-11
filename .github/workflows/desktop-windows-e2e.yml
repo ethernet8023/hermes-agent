@@ -30,10 +30,7 @@ on:
     # Nightly, off the hour to dodge the top-of-hour runner crunch.
     - cron: '40 6 * * *'
   push:
-    branches:
-      - main
-      # TEMPORARY pre-merge validation of the gui-e2e job: remove before merge.
-      - hermes/hermes-76e68435
+    branches: [main]
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'

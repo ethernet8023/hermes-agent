@@ -499,6 +499,22 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
         }
         Assert-True ($null -ne $relaunched) "$LegName -- updater relaunched the desktop app"
         Start-Sleep -Seconds 12   # let the window paint for the screenshot
+        # Foreground the relaunched Hermes window so the proof screenshot
+        # captures IT, not whatever else is on top (the full-desktop grab is
+        # otherwise at the mercy of z-order -- an earlier run caught VS Code).
+        try {
+            $mainProc = Get-Process -Name "Hermes" -ErrorAction SilentlyContinue |
+                Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+            if ($mainProc) {
+                Add-Type -Namespace HdE2E -Name Win -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);
+'@ -ErrorAction SilentlyContinue
+                [HdE2E.Win]::ShowWindow($mainProc.MainWindowHandle, 9) | Out-Null   # SW_RESTORE
+                [HdE2E.Win]::SetForegroundWindow($mainProc.MainWindowHandle) | Out-Null
+                Start-Sleep -Seconds 2
+            }
+        } catch {}
         Save-DesktopScreenshot (Join-Path $proof "99-relaunched-desktop.png")
     }
     finally {

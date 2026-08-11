@@ -278,15 +278,6 @@ try {
     }
     Ok "welcome screen captured (lossless) to welcome-screen.png"
 
-    # TEMPORARY: stop here. The ImageSearch reference crop has to be cut from
-    # this capture before the AHK click path can work, so running it now only
-    # burns a doomed 30-minute leg. Remove this exit once install-button.png
-    # is regenerated from welcome-screen.png.
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Stop-Recording
-    Write-Host "STOPPING EARLY: welcome-screen.png captured; AHK path disabled until the button crop is regenerated from it."
-    exit 0
-
     $ahkLog = Join-Path $LogDir "ahk.log"
     # The helper polls for the installer's own completion signal instead of a
     # second button screenshot (see paths.rs likely_bootstrap_marker).

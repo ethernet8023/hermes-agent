@@ -13,11 +13,13 @@
 ;   2: bootstrap-complete marker path to poll for (required)
 ;
 ; The Install button image lives next to this script. It is a literal crop
-; of the published installer's button from a CI screen recording;
-; ImageSearch runs with a generous shade tolerance because the reference
-; passed through video compression. Completion deliberately does NOT use a
-; second button image: the marker file is the installer's own completion
-; signal and cannot go stale with a UI restyle.
+; of the published installer's "[ INSTALL ]" button, cut from the LOSSLESS
+; welcome-screen.png the driver captures in CI (run 31449192962) -- never
+; from the ffmpeg recording, whose H.264/yuv420p chroma subsampling shifts
+; glyph pixels enough that a video-sourced crop misses the live screen.
+; Completion deliberately does NOT use a second button image: the marker
+; file is the installer's own completion signal and cannot go stale with a
+; UI restyle.
 
 logPath := A_Args.Length >= 1 ? A_Args[1] : "ahk.log"
 markerPath := A_Args.Length >= 2 ? A_Args[2] : ""
@@ -98,9 +100,9 @@ FindImageInWindow(winTitle, imageFile, &outX, &outY, timeoutMs := 10000, interva
     timeLeft := 1
 
     Log(Format("Searching for button file {} in window {}...", imageFile, winTitle))
-    ; *60: the reference crop survived H.264 video compression, so per-channel
-    ; drift up to ~60 shades must still count as a match.
-    searchImage := Format("*60 {}", imageFile)
+    ; *20: the reference is a lossless screen crop, so only minor rendering
+    ; drift (ClearType phase, sub-shade rounding) needs absorbing.
+    searchImage := Format("*20 {}", imageFile)
     while (timeLeft > 0)
     {
         if ImageSearch(&x, &y, wx, wy, wx + ww, wy + wh, searchImage)
@@ -139,44 +141,26 @@ if (markerPath = "") {
     throw Error("marker path argument is required")
 }
 
-; Find the Install button and click it.
-;
-; ImageSearch against the reference crop is attempted first, but it is
-; expected to fail on a real screen: the crop came from an H.264/yuv420p
-; recording, whose chroma subsampling smears the glyph edges -- the same
-; crop matches a RECORDING of this screen within 8 shades/channel while
-; missing the live screen entirely. The reliable path is PixelSearch for
-; the saturated blue of the "[ INSTALL ]" text. Scan only the CENTER THIRD
-; horizontally and BELOW 55% of the window height: the HERMES AGENT title
-; is blue too (bottom rows ~47% -- run 31446691812 clicked it ten times),
-; and the post-click PROGRESS view has blue stage text on the left side
-; (run 31447405319 clicked that while the install was running fine).
+; Find the Install button via ImageSearch against the lossless screen crop.
+; No PixelSearch fallback: color-hunting matched the blue HERMES AGENT title
+; (run 31446691812) and the progress view's blue stage text (run 31447405319)
+; before it ever matched the button.
 FindInstallClickPoint(winTitle, &outX, &outY) {
-    WinGetPos(&wx, &wy, &ww, &wh, winTitle)
     try {
         FindImageInWindow(winTitle, A_ScriptDir "\install-button.png", &outX, &outY, 3000, 250)
         Log("Install button located via ImageSearch")
         return true
     } catch {
+        return false
     }
-    x1 := wx + Floor(ww * 0.33)
-    x2 := wx + Floor(ww * 0.67)
-    y1 := wy + Floor(wh * 0.55)
-    if PixelSearch(&px, &py, x1, y1, x2, wy + wh, 0x3B82F6, 90) {
-        outX := px
-        outY := py
-        Log(Format("Install button located via PixelSearch (blue text at {1}, {2})", px, py))
-        return true
-    }
-    return false
 }
 
-; Did the click land? Check whether the blue we clicked is still at THAT
-; SPOT (small box around the click point): the button vanishes when the UI
-; flips to the progress view, and a point check cannot false-positive on
-; the progress view's own blue elsewhere in the window.
-BlueStillAt(x, y) {
-    return PixelSearch(&px, &py, x - 12, y - 12, x + 12, y + 12, 0x3B82F6, 90)
+; Did the click land? The button vanishes when the UI flips to the progress
+; view, so finding it again means the click did not take.
+InstallButtonStillVisible(winTitle) {
+    x := 0
+    y := 0
+    return FindInstallClickPoint(winTitle, &x, &y)
 }
 
 ; Best-effort clicking: NEVER throw here. The authoritative signals are
@@ -211,11 +195,11 @@ while (attempts < 10) {
     ClickWithMarker(x, y)
     everClicked := true
     Sleep(3000)
-    if (!BlueStillAt(x, y)) {
-        Log("Install click landed (button gone from click point)")
+    if (!InstallButtonStillVisible(winTitle)) {
+        Log("Install click landed (button no longer on screen)")
         break
     }
-    Log(Format("Install click attempt {}: blue persists at click point; retrying", attempts))
+    Log(Format("Install click attempt {}: button still visible; retrying", attempts))
 }
 
 ; Wait for the installer's own completion signal: the bootstrap-complete

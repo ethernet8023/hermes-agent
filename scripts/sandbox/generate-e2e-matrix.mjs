@@ -37,8 +37,14 @@ import { fileURLToPath } from 'node:url';
  * @typedef {'latest'} InstallerVersion
  *   The artifact published on the website right now -- Hermes-Setup.exe has
  *   no versioned archive yet. Widen this union when one exists.
- * @typedef {'irm-iex' | 'desktop-installer' | 'curl-bash' | 'packaged-app'} InstallMethod
- * @typedef {InstallMethod | 'desktop-installer-rerun' | 'hermes-update' | 'app-update' | 'desktop-app'} UpdateMethod
+ * @typedef {'installer-script' | 'desktop-installer' | 'packaged-app'} InstallMethod
+ *   installer-script is the platform's one-liner (curl | bash on
+ *   linux/macos, irm | iex on windows); packaged-app is declared but not
+ *   used by any OS spec yet.
+ * @typedef {InstallMethod | 'hermes-update' | 'app-update'} UpdateMethod
+ *   Every install method doubles as an update method (re-run it over the
+ *   existing install), plus the updater CLI and the running app's own
+ *   Update button.
  * @typedef {'linux' | 'windows' | 'macos'} Os
  *
  * @typedef {{method: InstallMethod, versions?: InstallerVersion[]}} InstallEntry
@@ -63,36 +69,35 @@ export const SPEC = {
   windows: {
     install: [
       // irm https://hermes.nousresearch.com/install.ps1 | iex
-      { method: 'irm-iex' },
+      { method: 'installer-script' },
       // Website Hermes-Setup.exe, clicked through the GUI.
       { method: 'desktop-installer', versions: ['latest'] },
     ],
     update: [
-      { method: 'irm-iex' },
+      { method: 'installer-script' },
       // Run the bootstrap exe again over an existing install (--update flow).
-      { method: 'desktop-installer-rerun', versions: ['latest'] },
+      { method: 'desktop-installer', versions: ['latest'] },
       { method: 'hermes-update' },
       // Settings -> About -> "Update now" inside the running desktop app.
-      { method: 'desktop-app' },
+      { method: 'app-update' },
     ],
   },
   macos: {
     install: [
-      { method: 'curl-bash' },
-      { method: 'packaged-app' },
+      { method: 'installer-script' },
     ],
     update: [
-      { method: 'curl-bash' },
+      { method: 'installer-script' },
       { method: 'hermes-update' },
       { method: 'app-update' },
     ],
   },
   linux: {
     install: [
-      { method: 'curl-bash' },
+      { method: 'installer-script' },
     ],
     update: [
-      { method: 'curl-bash' },
+      { method: 'installer-script' },
       { method: 'hermes-update' },
     ],
   },

@@ -11,8 +11,8 @@ name: Install & Update E2E — macOS (reusable)
 # workflow's job-level `if`.
 #
 # Declared methods (see the generator's SPEC):
-#   install: curl-bash, packaged-app
-#   update:  curl-bash, hermes-update, app-update
+#   install: installer-script
+#   update:  installer-script, hermes-update, app-update
 
 on:
   workflow_call:

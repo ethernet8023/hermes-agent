@@ -16,16 +16,16 @@ name: Install & Update E2E — Windows desktop (reusable)
 # real user.
 #
 # Routes (from the update-method input):
-#   desktop-app             the app's own Update button: the installed
+#   app-update              the app's own Update button: the installed
 #                           Hermes.exe runs under Playwright's Electron
 #                           driver, which clicks Settings -> About ->
 #                           "Update now"; the production hand-off chain runs
 #                           untouched (marker, app quit, detached updater,
 #                           hermes update, desktop rebuild, relaunch).
 #   hermes-update           TODO: `hermes update` from the installed venv.
-#   desktop-installer-rerun@latest
+#   desktop-installer@latest
 #                           TODO: re-run the bootstrap exe over the install.
-#   irm-iex                 TODO: re-run the irm | iex one-liner.
+#   installer-script        TODO: re-run the irm | iex one-liner.
 #
 # Method pairs without a driver yet NATIVELY SKIP (grey check, no runner):
 # the capability knowledge lives here, next to the driver, so the caller
@@ -38,7 +38,7 @@ name: Install & Update E2E — Windows desktop (reusable)
 #       uses: ./.github/workflows/install-e2e-windows-run.yml
 #       with:
 #         install-method: desktop-installer@latest
-#         update-method: desktop-app
+#         update-method: app-update
 #         install-ref: v2026.8.3
 
 on:
@@ -49,7 +49,7 @@ on:
         required: true
         type: string
       update-method:
-        description: 'How the install updates to HEAD. Supported: desktop-app (Update button under Playwright). Declared-but-TODO methods skip.'
+        description: 'How the install updates to HEAD. Supported: app-update (Update button under Playwright). Declared-but-TODO methods skip.'
         required: true
         type: string
       install-ref:
@@ -87,7 +87,7 @@ jobs:
     # tag-has-desktop from the tag's own tree; releases before #20059 have
     # no window to launch and no Update button to click). Anything else is
     # a native skip: a declared-TODO method pair, or a pre-desktop tag.
-    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'desktop-app' && inputs.tag-has-desktop
+    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'app-update' && inputs.tag-has-desktop
     runs-on: windows-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 

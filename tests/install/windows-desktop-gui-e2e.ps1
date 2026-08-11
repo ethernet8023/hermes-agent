@@ -73,11 +73,11 @@ param(
 
     # Update method to exercise in the update-gui phase, named by the same
     # ids the combination generator (scripts/sandbox/generate-e2e-matrix
-    # .mjs) declares. Only "desktop-app" (the app's own Update button) is
+    # .mjs) declares. Only "app-update" (the app's own Update button) is
     # implemented; the others are declared arms so the surface is stable
     # when they land.
-    [ValidateSet("desktop-app", "hermes-update", "desktop-installer-rerun@latest", "irm-iex")]
-    [string]$Route = "desktop-app",
+    [ValidateSet("app-update", "hermes-update", "desktop-installer@latest", "installer-script")]
+    [string]$Route = "app-update",
 
     # The OLD version: the ref served as `main` while the installer runs,
     # i.e. what the user starts on. The published Hermes-Setup.exe carries
@@ -658,7 +658,7 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
 function Invoke-PhaseUpdateGui {
     $state = Read-State
     switch ($Route) {
-        "desktop-app" {
+        "app-update" {
             Invoke-GuiUpdateDesktopRoute $state.current
         }
         "hermes-update" {
@@ -667,16 +667,16 @@ function Invoke-PhaseUpdateGui {
             # app-quit dance.
             throw "update method 'hermes-update' is not implemented yet"
         }
-        "desktop-installer-rerun@latest" {
+        "desktop-installer@latest" {
             # TODO: re-run the bootstrap Hermes-Setup.exe over the existing
             # install (its --update flow jumps straight to progress and
             # runs unattended).
-            throw "update method 'desktop-installer-rerun@latest' is not implemented yet"
+            throw "update method 'desktop-installer@latest' is not implemented yet"
         }
-        "irm-iex" {
+        "installer-script" {
             # TODO: re-run the irm | iex one-liner over the existing
             # install.
-            throw "update method 'irm-iex' is not implemented yet"
+            throw "update method 'installer-script' is not implemented yet"
         }
     }
 }

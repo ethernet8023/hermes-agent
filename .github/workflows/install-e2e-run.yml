@@ -11,7 +11,8 @@ name: Install & Update E2E (reusable)
 # shared.
 #
 # Method ids come from scripts/sandbox/generate-e2e-matrix.mjs. Supported
-# today: install via curl-bash, update via hermes-update or curl-bash.
+# today: install via installer-script, update via hermes-update or
+# installer-script (re-run the one-liner).
 # Anything else NATIVELY SKIPS (grey check, no runner): capability
 # knowledge lives here, next to the driver, so the caller can dispatch
 # every declared combination without knowing which ones work.
@@ -22,7 +23,7 @@ name: Install & Update E2E (reusable)
 #     tip:
 #       uses: ./.github/workflows/install-e2e-run.yml
 #       with:
-#         install-method: curl-bash
+#         install-method: installer-script
 #         update-method: hermes-update
 #         install-ref: refs/heads/main
 
@@ -30,11 +31,11 @@ on:
   workflow_call:
     inputs:
       install-method:
-        description: 'How the starting version gets installed. Supported: curl-bash (the real curl | install.sh one-liner).'
+        description: 'How the starting version gets installed. Supported: installer-script (the real curl | install.sh one-liner).'
         required: true
         type: string
       update-method:
-        description: 'How the install updates to HEAD. Supported: hermes-update (the updater) or curl-bash (re-run the one-liner). Declared-but-TODO methods skip.'
+        description: 'How the install updates to HEAD. Supported: hermes-update (the updater) or installer-script (re-run the one-liner). Declared-but-TODO methods skip.'
         required: true
         type: string
       install-ref:
@@ -65,7 +66,7 @@ jobs:
     name: e2e
     # The pairs the sandbox driver can run today; anything else is a
     # declared TODO and natively skips.
-    if: inputs.install-method == 'curl-bash' && contains(fromJSON('["hermes-update", "curl-bash"]'), inputs.update-method)
+    if: inputs.install-method == 'installer-script' && contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -107,8 +108,8 @@ jobs:
           # Method id -> the driver script's --route vocabulary. The one
           # place that knows both names.
           case '${{ inputs.update-method }}' in
-            hermes-update) route=update ;;
-            curl-bash)     route=installer ;;
+            hermes-update)    route=update ;;
+            installer-script) route=installer ;;
             *) echo "unreachable: update-method passed the job-level gate but has no route mapping" >&2; exit 1 ;;
           esac
           tests/install/install-update-e2e.sh \

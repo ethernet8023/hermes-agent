@@ -120,16 +120,30 @@ function Invoke-Git([string[]]$GitArgs, [string]$WorkDir = $null) {
 
 function Set-GitRedirect {
     # Route the canonical repo URLs to the local bare repo for THIS process
-    # and every child (install.ps1's git, hermes update's git). Environment-
-    # based config beats `git config --global`: nothing leaks onto the
-    # machine if the driver dies, and local dev runs stay clean.
+    # and every child (install.ps1's git, hermes update's git).
+    #
+    # MECHANISM: a driver-owned global gitconfig selected via
+    # GIT_CONFIG_GLOBAL. Do NOT use GIT_CONFIG_COUNT/KEY_n/VALUE_n env
+    # config here -- install.ps1 SETS those itself (GIT_CONFIG_COUNT=1,
+    # windows.appendAtomically), silently clobbering any redirect we put
+    # there. That exact clobber made the first CI run clone real GitHub
+    # main instead of the staged BASE (caught by the HEAD-at-BASE assert).
+    # install.ps1's own `git config --global` writes simply land in our
+    # file, so its compat settings still apply. Nothing leaks onto the
+    # machine: the file lives in the workroot and dies with it.
     $fileUrl = "file:///" + ($ServeRepo -replace "\\", "/")
-    $env:GIT_CONFIG_COUNT   = "2"
-    $env:GIT_CONFIG_KEY_0   = "url.$fileUrl.insteadOf"
-    $env:GIT_CONFIG_VALUE_0 = $RepoUrlHttps
-    $env:GIT_CONFIG_KEY_1   = "url.$fileUrl.insteadOf"
-    $env:GIT_CONFIG_VALUE_1 = $RepoUrlSsh
-    Write-Host "  git URL redirect: $RepoUrlHttps -> $fileUrl"
+    $gitCfg = Join-Path $WorkRoot "e2e-gitconfig"
+    if (-not (Test-Path -LiteralPath $WorkRoot)) {
+        New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
+    }
+    @"
+[url "$fileUrl"]
+	insteadOf = $RepoUrlHttps
+	insteadOf = $RepoUrlSsh
+"@ | Set-Content -LiteralPath $gitCfg -Encoding ASCII
+    $env:GIT_CONFIG_GLOBAL = $gitCfg
+    Write-Host "  git URL redirect via GIT_CONFIG_GLOBAL=$gitCfg"
+    Write-Host "    $RepoUrlHttps -> $fileUrl"
 }
 
 function Read-State {
@@ -171,6 +185,9 @@ function Invoke-PhaseStage {
         Remove-Item -LiteralPath $WorkRoot -Recurse -Force
     }
     New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
+    # The purge above deleted the redirect gitconfig; re-arm it so the
+    # bare-clone below (and everything after) sees the redirect file.
+    Set-GitRedirect
 
     $current = Invoke-Git @("-C", $RepoRoot, "rev-parse", "HEAD")
     $base    = Invoke-Git @("-C", $RepoRoot, "rev-parse", "HEAD~1")

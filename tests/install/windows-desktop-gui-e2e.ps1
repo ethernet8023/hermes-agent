@@ -386,7 +386,15 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
 
     $node = Get-ManagedNode
     $appsDesktop = Join-Path $InstallDir "apps\desktop"
-    Assert-True (Test-Path -LiteralPath (Join-Path $appsDesktop "node_modules\@playwright\test")) "$LegName -- @playwright/test present in installed checkout"
+    # @playwright/test is a workspace devDependency; the root `npm ci`
+    # HOISTS it to the repo-root node_modules, not apps/desktop's. Resolve
+    # it the way Node will (walk up from apps/desktop) instead of asserting
+    # a hardcoded path that hoisting makes wrong.
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    & $node -e "require.resolve('@playwright/test', { paths: [process.argv[1]] })" $appsDesktop 2>&1 | Out-Null
+    $pwResolved = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevEap
+    Assert-True $pwResolved "$LegName -- @playwright/test resolvable from installed apps/desktop"
 
     $recorder = Start-DesktopRecorder (Join-Path $proof "desktop-frames")
     try {

@@ -41,10 +41,10 @@ on:
         type: string
         default: desktop
       install-ref:
-        description: 'Ref to install as OLD (served as main while the installer runs). Empty = the newest release tag in the checkout.'
+        description: 'Ref to install as OLD (served as main while the installer runs). auto = the newest release tag in the checkout.'
         required: false
         type: string
-        default: ''
+        default: auto
       setup-exe-url:
         description: 'Bootstrap installer to install OLD with. Default: the latest published one — what a user downloads today.'
         required: false

@@ -82,10 +82,12 @@ param(
     # i.e. what the user starts on. The published Hermes-Setup.exe carries
     # no commit pin (Pin { commit: None, branch: "main" }) -- it installs
     # whatever `main` points at, so staging OLD means serving it there.
-    # Empty = newest release tag in the checkout (the "user on the current
-    # release" starting point, same philosophy as the linux axis's tag
-    # matrix).
-    [string]$InstallRef = "",
+    # Empty or "auto" = newest release tag in the checkout (the "user on
+    # the current release" starting point, same philosophy as the linux
+    # axis's tag matrix). "auto" exists because `powershell -File` silently
+    # swallows an empty-string argument ('Missing an argument for
+    # parameter'), so the workflow cannot pass "".
+    [string]$InstallRef = "auto",
 
     # Repo checkout whose HEAD is the update target.
     [string]$RepoRoot = "",
@@ -301,7 +303,7 @@ function Invoke-PhaseStage {
     # OLD: explicit -InstallRef, or the newest release tag -- the version a
     # user who installed on release day is on.
     $oldRef = $InstallRef
-    if (-not $oldRef) {
+    if (-not $oldRef -or $oldRef -eq "auto") {
         $oldRef = (Invoke-Git @("-C", $RepoRoot, "tag", "--list", "v*", "--sort=-creatordate") -split "`r?`n" | Select-Object -First 1)
         if (-not $oldRef) { throw "no v* release tags in the checkout and no -InstallRef given -- cannot pick an OLD version" }
     }

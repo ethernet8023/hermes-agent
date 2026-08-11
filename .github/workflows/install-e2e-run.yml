@@ -1,12 +1,20 @@
 name: Install & Update E2E (reusable)
 
-# Runs ONE update route against ONE starting commit, in the dev sandbox, with a
-# real install (uv, a managed Python, Node, the venv) behind it.
+# Runs ONE {install-method, update-method} combination against ONE starting
+# commit, in the dev sandbox, with a real install (uv, a managed Python,
+# Node, the venv) behind it.
 #
-# Reusable so callers can fan out over the combinations that matter -- update
-# from the tip vs. from an older release, `hermes update` vs. re-running the
-# installer -- without duplicating the runner setup. Each leg is independent:
-# its own sandbox, its own install, nothing rewound or shared.
+# Reusable so callers can fan out over the combinations that matter --
+# update from the tip vs. from an older release, `hermes update` vs.
+# re-running the installer -- without duplicating the runner setup. Each leg
+# is independent: its own sandbox, its own install, nothing rewound or
+# shared.
+#
+# Method ids come from scripts/sandbox/generate-e2e-matrix.mjs. Supported
+# today: install via curl-bash, update via hermes-update or curl-bash.
+# Anything else NATIVELY SKIPS (grey check, no runner): capability
+# knowledge lives here, next to the driver, so the caller can dispatch
+# every declared combination without knowing which ones work.
 #
 # Call it:
 #
@@ -14,14 +22,19 @@ name: Install & Update E2E (reusable)
 #     tip:
 #       uses: ./.github/workflows/install-e2e-run.yml
 #       with:
-#         route: update
+#         install-method: curl-bash
+#         update-method: hermes-update
 #         install-ref: refs/heads/main
 
 on:
   workflow_call:
     inputs:
-      route:
-        description: 'Update path to exercise: update (hermes update) or installer (re-run install.sh).'
+      install-method:
+        description: 'How the starting version gets installed. Supported: curl-bash (the real curl | install.sh one-liner).'
+        required: true
+        type: string
+      update-method:
+        description: 'How the install updates to HEAD. Supported: hermes-update (the updater) or curl-bash (re-run the one-liner). Declared-but-TODO methods skip.'
         required: true
         type: string
       install-ref:
@@ -45,7 +58,14 @@ permissions:
 
 jobs:
   e2e:
-    name: ${{ inputs.route }} from ${{ inputs.install-ref }}
+    # Static name on purpose: the caller's job name already carries the
+    # method pair, and GitHub renders name expressions UNEXPANDED (literal
+    # "${{ inputs... }}") on natively skipped jobs.
+    name: run
+    # The pairs the sandbox driver can run today. Anything else is a
+    # declared TODO: native skip, so the coverage gap is a grey check on
+    # every run.
+    if: inputs.install-method == 'curl-bash' && contains(fromJSON('["hermes-update", "curl-bash"]'), inputs.update-method)
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -84,8 +104,15 @@ jobs:
       - name: Run install + update E2E
         run: |
           set -euo pipefail
+          # Method id -> the driver script's --route vocabulary. The one
+          # place that knows both names.
+          case '${{ inputs.update-method }}' in
+            hermes-update) route=update ;;
+            curl-bash)     route=installer ;;
+            *) echo "unreachable: update-method passed the job-level gate but has no route mapping" >&2; exit 1 ;;
+          esac
           tests/install/install-update-e2e.sh \
-            --route '${{ inputs.route }}' \
+            --route "$route" \
             --install-ref '${{ inputs.install-ref }}'
         env:
           # Outside the workspace on purpose: the script creates this directory
@@ -106,7 +133,7 @@ jobs:
           set -euo pipefail
           safe_ref='${{ inputs.install-ref }}'
           safe_ref="${safe_ref//\//-}"
-          echo "name=install-e2e-${{ inputs.route }}-${safe_ref}" >> "$GITHUB_OUTPUT"
+          echo "name=install-e2e-${{ inputs.update-method }}-${safe_ref}" >> "$GITHUB_OUTPUT"
 
       # The installer's own transcripts say far more than the assertion that
       # tripped when a real install breaks.

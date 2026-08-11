@@ -7,23 +7,23 @@ name: Install & Update E2E
 # The job graph nests one sub-graph per starting release tag:
 #
 #   from <tag> (install-e2e-tag.yml)
-#     -> linux: <install> -> <update>     one job per combination, a real
-#                                         curl|bash install in bubblewrap
+#     -> linux: <install> -> <update>     one dispatch per combination, a
+#                                         real curl|bash install in
+#                                         bubblewrap
 #                                         (install-e2e-run.yml)
-#     -> windows: <install> -> <update>   one job per combination, the real
-#                                         desktop user flow: website exe
-#                                         clicked by AutoHotkey, update via
-#                                         the app, Playwright clicking
+#     -> windows: <install> -> <update>   one dispatch per combination, the
+#                                         real desktop user flow: website
+#                                         exe clicked by AutoHotkey, update
+#                                         via the app, Playwright clicking
 #                                         "Update now"
 #                                         (install-e2e-windows-run.yml)
-#     -> macos: <install> -> <update>     natively skipped until a macos
-#                                         workflow exists
-#                                         (install-e2e-skip.yml)
+#     -> macos: <install> -> <update>     one dispatch per combination
+#                                         (install-e2e-macos-run.yml)
 #
-# Every combination is dispatched; unimplemented ones natively skip (grey)
-# at the point that owns the knowledge -- macOS combos in the tag workflow
-# (no driver exists), windows method pairs inside the windows run workflow
-# (next to the driver that will implement them).
+# Every combination is dispatched to its OS's run workflow; the run
+# workflow natively skips (grey) the method pairs its driver cannot run
+# yet. Capability knowledge lives next to each driver -- the generator and
+# the callers know nothing about what is implemented.
 #
 # The starting versions are chosen at runtime from the repo's release tags
 # (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread
@@ -102,12 +102,8 @@ jobs:
 
   # One sub-graph per starting tag: install-e2e-tag.yml expands the
   # {os, install-method, update-method} support matrix for that tag and
-  # fans out one job per combination, so the graph reads
-  # "from vX -> windows: install -> update" per leg. Skips happen where
-  # the knowledge lives: macOS combos natively skip inside the tag
-  # workflow (no workflow exists for them at all); unimplemented windows
-  # method pairs natively skip inside install-e2e-windows-run.yml, next
-  # to the driver that will implement them.
+  # dispatches one job per combination to the OS's run workflow, so the
+  # graph reads "from vX -> windows: install -> update" per leg.
   from-tag:
     name: "from ${{ matrix.install-ref }}"
     needs: pick-releases

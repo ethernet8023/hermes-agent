@@ -3,9 +3,12 @@
  * Expand the install/update support matrix into concrete E2E combinations.
  *
  * One source of truth for every {os, install-method, update-method} pair a
- * user could be on. Implemented combos fan out into real CI jobs -- one job
- * per combination -- and everything else lands in a "skipped" matrix so the
- * TODO surface stays visible in every run instead of buried in comments.
+ * user could be on. This file only DECLARES and EXPANDS: it knows nothing
+ * about which combinations CI can drive. Every combination is dispatched to
+ * its OS's run workflow, and THAT workflow natively skips the method pairs
+ * its driver cannot run yet -- capability knowledge lives next to each
+ * driver (install-e2e-run.yml, install-e2e-windows-run.yml,
+ * install-e2e-macos-run.yml).
  *
  * Used by .github/workflows/install-e2e-tag.yml, which runs it once per
  * starting release tag:
@@ -14,12 +17,8 @@
  *     --tags '["v2026.8.3"]' --route all
  *
  * Prints JSON: { linux: {include:[...]}, windows: {include:[...]},
- * skipped: {include:[...]} }. linux entries carry {name, route,
- * install_ref} for install-e2e-run.yml; windows entries carry {name,
- * install_method, update_method, install_ref} for
- * install-e2e-windows-run.yml (which itself natively skips method pairs it
- * cannot drive yet); skipped entries are the macOS combos (no workflow
- * exists at all).
+ * macos: {include:[...]} } -- every entry is
+ * {name, install_method, update_method, install_ref}.
  */
 
 import path from 'node:path';
@@ -86,22 +85,6 @@ const KNOWN_METHODS = new Set([
 ]);
 
 const ALLOWED_VERSIONS = new Set(['latest']);
-
-/**
- * How each implemented combination maps onto a reusable workflow.
- *
- * linux: every combo is implemented; `route` is install-e2e-run.yml's input.
- * windows: ALL combos dispatch to install-e2e-windows-run.yml -- the run
- *   workflow itself natively skips (grey) any {install, update} method pair
- *   it cannot drive yet, so "which windows methods work" lives THERE, next
- *   to the driver, not here.
- * macos: nothing is implemented; combos surface as native skips in the
- *   caller via install-e2e-skip.yml without burning a tag fanout.
- */
-export const LINUX_ROUTES = {
-  'hermes-update': 'update',
-  'curl-bash': 'installer',
-};
 
 function validateEntry(os, kind, entry) {
   if (typeof entry.method !== 'string' || !KNOWN_METHODS.has(entry.method)) {
@@ -175,70 +158,37 @@ function routeWants(route, env) {
 }
 
 /**
- * Split the combinations into per-workflow matrices.
+ * Split the combinations into one matrix per OS.
  *
- * `tags` (the released versions we test updating FROM) is the OUTER axis,
- * applied to every OS with a driving workflow: for each tag, for each
- * combo, one job that installs the tag and updates to HEAD. Linux legs
- * pass the tag as install-ref for the sandbox to install; Windows legs
- * pass it as the ref the staged serve.git parks `main` at -- the published
- * installer has no commit pin, so that IS the installed version.
- *
- * Skip placement follows where the knowledge lives: macOS combos are known
- * unimplementable HERE (no workflow exists), so they go to the `skipped`
- * matrix -- one native grey check per combo, not multiplied by tags, since
- * no tag would change the outcome. Windows combos ALL dispatch to the run
- * workflow, which natively skips the method pairs it cannot drive.
+ * `tags` (the released versions we test updating FROM) is the OUTER axis:
+ * for each tag, for each combination, one dispatch that installs the tag
+ * and updates to HEAD. No capability filtering happens here -- every
+ * declared combination is dispatched, and the OS's run workflow natively
+ * skips what its driver cannot run yet.
  */
 export function buildMatrices(envs, { tags = [], route = 'all' } = {}) {
-  const linux = [];
-  const windows = [];
-  const skipped = [];
-  const needTags = () => {
-    if (tags.length === 0) {
-      throw new Error('a combo with a driving workflow was selected but no --tags given');
-    }
-  };
+  const byOs = { linux: [], windows: [], macos: [] };
   for (const env of envs) {
     if (!routeWants(route, env)) continue;
-    if (env.os === 'macos') {
-      skipped.push({ ...env, reason: 'no macos workflow yet' });
-      continue;
+    const bucket = byOs[env.os];
+    if (!bucket) {
+      throw new Error(`no matrix bucket for os ${JSON.stringify(env.os)}`);
     }
-    if (env.os === 'linux') {
-      const linuxRoute = LINUX_ROUTES[env.update];
-      if (!linuxRoute) {
-        throw new Error(`linux update method ${JSON.stringify(env.update)} has no route mapping`);
-      }
-      needTags();
-      for (const tag of tags) {
-        linux.push({
-          name: `${env.install} -> ${env.update}`,
-          route: linuxRoute,
-          install_ref: tag,
-        });
-      }
-      continue;
+    if (tags.length === 0) {
+      throw new Error('combinations were selected but no --tags given');
     }
-    if (env.os === 'windows') {
-      needTags();
-      for (const tag of tags) {
-        windows.push({
-          name: `${env.install} -> ${env.update}`,
-          install_method: env.install,
-          update_method: env.update,
-          install_ref: tag,
-        });
-      }
-      continue;
+    for (const tag of tags) {
+      bucket.push({
+        name: `${env.install} -> ${env.update}`,
+        install_method: env.install,
+        update_method: env.update,
+        install_ref: tag,
+      });
     }
-    throw new Error(`no workflow routing for os ${JSON.stringify(env.os)}`);
   }
-  return {
-    linux: { include: linux },
-    windows: { include: windows },
-    skipped: { include: skipped },
-  };
+  return Object.fromEntries(
+    Object.entries(byOs).map(([os, include]) => [os, { include }]),
+  );
 }
 
 function main() {

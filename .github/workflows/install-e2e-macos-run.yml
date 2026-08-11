@@ -1,0 +1,51 @@
+name: Install & Update E2E — macOS (reusable)
+
+# Runs ONE {install-method, update-method} combination on macOS, installing
+# a starting version and updating it to HEAD.
+#
+# NOTHING is implemented yet: every method pair NATIVELY SKIPS (grey check,
+# no runner) until a macOS driver exists. The workflow exists now so the
+# combination generator (scripts/sandbox/generate-e2e-matrix.mjs) can
+# dispatch every declared macOS combination the same way it does for linux
+# and windows -- capability knowledge lives here, next to where the driver
+# will be, and implementing a method flips this workflow's job-level `if`.
+#
+# Declared methods (see the generator's SPEC):
+#   install: curl-bash, packaged-app
+#   update:  curl-bash, hermes-update, app-update
+
+on:
+  workflow_call:
+    inputs:
+      install-method:
+        description: 'How the starting version gets installed. All macOS methods are TODO and skip.'
+        required: true
+        type: string
+      update-method:
+        description: 'How the install updates to HEAD. All macOS methods are TODO and skip.'
+        required: true
+        type: string
+      install-ref:
+        description: 'What to install before updating: a branch, a tag (v2026.7.7), or a SHA reachable from main.'
+        required: false
+        type: string
+        default: refs/heads/main
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    # Static name on purpose: the caller's job name already carries the
+    # method pair, and GitHub renders name expressions UNEXPANDED (literal
+    # "${{ inputs... }}") on natively skipped jobs.
+    name: run
+    # No macOS driver exists yet: every pair is a declared TODO, so this is
+    # constant-false until the first method lands. Written as an impossible
+    # input comparison rather than `if: false` because actionlint rejects
+    # constant conditions.
+    if: inputs.install-method == inputs.update-method && inputs.install-method == 'implemented'
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - run: 'true'

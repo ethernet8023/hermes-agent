@@ -147,6 +147,13 @@ attempts := 0
 while (!clicked && attempts < 5) {
     attempts += 1
     try {
+        ; ImageSearch reads SCREEN pixels: anything covering the installer
+        ; (the runner session keeps a maximized console in front) makes the
+        ; button invisible even though WinWait's title match succeeded.
+        ; Force the installer to the foreground before every attempt.
+        WinActivate(winTitle)
+        WinMoveTop(winTitle)
+        Sleep(500)
         ClickCenterOfImageInWindow(winTitle, A_ScriptDir "\install-button.png", 20000, 250)
         clicked := true
     } catch as err {

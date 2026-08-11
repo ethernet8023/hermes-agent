@@ -335,8 +335,13 @@ function Invoke-PhaseInstallGui {
     Stop-HermesAppProcesses "post-install"
 
     # The website exe installs its baked release pin — record it as the
-    # "before" version. Must be an ancestor of CURRENT (i.e. genuinely
-    # "before" this commit) and must not already BE CURRENT.
+    # "before" version. It must differ from CURRENT (an update is genuinely
+    # available). We do NOT require it to be an ancestor of CURRENT: on a
+    # real `push: main` run CURRENT is main's tip and the release pin is
+    # behind it (ancestor), but on a feature branch CURRENT has diverged
+    # from main, so the release pin legitimately isn't in its ancestry. The
+    # update leg resets the checkout to serve.git's main ref regardless, and
+    # asserts it lands on CURRENT — that is the real forward-update proof.
     $installedSha = Get-InstalledHead
     Write-Host "  installer landed on: $installedSha (website release pin)"
     Assert-True ($installedSha -ne $state.current) "installed pin differs from CURRENT (an update is genuinely available)"
@@ -344,7 +349,11 @@ function Invoke-PhaseInstallGui {
     & git -C $InstallDir merge-base --is-ancestor $installedSha $state.current 2>&1 | Out-Null
     $isAncestor = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEap
-    Assert-True $isAncestor "installed pin is an ancestor of CURRENT (before -> current is a forward update)"
+    if ($isAncestor) {
+        Write-Host "  [ok] installed pin is an ancestor of CURRENT (linear before -> current)"
+    } else {
+        Write-Host "  [note] installed pin is NOT an ancestor of CURRENT — expected on a diverged feature branch; the update leg still resets to CURRENT"
+    }
     Test-HermesRuns "post-install-gui"
     Assert-True ($null -ne (Get-DesktopExe)) "packaged Desktop Hermes.exe exists"
 

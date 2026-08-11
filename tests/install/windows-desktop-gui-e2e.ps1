@@ -9,10 +9,10 @@
 #   INSTALL   - downloads the production Hermes-Setup.exe from the website,
 #               launches it HEADED, and AutoHotkey clicks Install, waits,
 #               then clicks Launch. The real Electron Hermes.exe must appear.
-#               The exe runs EXACTLY as shipped: it downloads its own pinned
-#               install.ps1 from GitHub raw and installs its baked
-#               BUILD_PIN_COMMIT -- so OLD is the website release pin, the
-#               literal starting point of every real GUI user.
+#               The exe runs EXACTLY as shipped against serve.git, whose
+#               `main` is parked at OLD (-InstallRef, default: the newest
+#               release tag) -- so the install lands on OLD the same way a
+#               user's install landed on whatever main served that day.
 #   UPDATE    - OLD -> HEAD through the route selected by -Route:
 #                 desktop    (implemented) launch the installed Hermes.exe
 #                            under Playwright's Electron driver and CLICK
@@ -35,10 +35,12 @@
 #   GIT_CONFIG_GLOBAL. (NOT GIT_CONFIG_COUNT/KEY_n/VALUE_n env config --
 #   install.ps1 sets those itself and silently clobbers them.) The
 #   installer's `git clone` and `hermes update`'s `git fetch origin`
-#   transparently hit OUR bare repo, whose `main` ref serves HEAD -- the
-#   update target. Installer and updater run byte-for-byte as shipped;
-#   everything else (uv, PyPI, npm, the installer's raw.githubusercontent
-#   install.ps1 download) uses the real network, same as a user install.
+#   transparently hit OUR bare repo. Its `main` serves OLD for the install
+#   phase; the update phase advances it to HEAD -- an update becomes
+#   available exactly the way it does for a real user. Installer and
+#   updater run byte-for-byte as shipped; everything else (uv, PyPI, npm,
+#   the installer's raw.githubusercontent install.ps1 download) uses the
+#   real network, same as a user install.
 #
 # PROOF: screenshots at every renderer step (Playwright), full-desktop
 # screenshots around the installer/AHK phases, a rolling desktop capture
@@ -75,6 +77,15 @@ param(
     # so the workflow surface is stable when they land.
     [ValidateSet("desktop", "update", "installer")]
     [string]$Route = "desktop",
+
+    # The OLD version: the ref served as `main` while the installer runs,
+    # i.e. what the user starts on. The published Hermes-Setup.exe carries
+    # no commit pin (Pin { commit: None, branch: "main" }) -- it installs
+    # whatever `main` points at, so staging OLD means serving it there.
+    # Empty = newest release tag in the checkout (the "user on the current
+    # release" starting point, same philosophy as the linux axis's tag
+    # matrix).
+    [string]$InstallRef = "",
 
     # Repo checkout whose HEAD is the update target.
     [string]$RepoRoot = "",
@@ -271,10 +282,10 @@ function Get-ManagedNode {
 }
 
 # ----------------------------------------------------------------------------
-# Phase: stage -- serve.git with `main` at HEAD (the update target)
+# Phase: stage -- serve.git with `main` at OLD (advanced to HEAD by update-gui)
 # ----------------------------------------------------------------------------
 function Invoke-PhaseStage {
-    Write-Step "STAGE: bare serve repo, main -> HEAD (update target)"
+    Write-Step "STAGE: bare serve repo, main -> OLD (install base)"
 
     if (Test-Path -LiteralPath $WorkRoot) {
         Remove-Item -LiteralPath $WorkRoot -Recurse -Force
@@ -287,22 +298,35 @@ function Invoke-PhaseStage {
     $current = Invoke-Git @("-C", $RepoRoot, "rev-parse", "HEAD")
     Write-Host "  HEAD (update target): $current"
 
+    # OLD: explicit -InstallRef, or the newest release tag -- the version a
+    # user who installed on release day is on.
+    $oldRef = $InstallRef
+    if (-not $oldRef) {
+        $oldRef = (Invoke-Git @("-C", $RepoRoot, "tag", "--list", "v*", "--sort=-creatordate") -split "`r?`n" | Select-Object -First 1)
+        if (-not $oldRef) { throw "no v* release tags in the checkout and no -InstallRef given -- cannot pick an OLD version" }
+    }
+    $old = Invoke-Git @("-C", $RepoRoot, "rev-parse", "$oldRef^{commit}")
+    Write-Host "  OLD  ($oldRef): $old"
+    Assert-True ($old -ne $current) "OLD differs from HEAD (an update is genuinely available)"
+
     # Bare-clone the checkout: this is the repo the installer and updater
     # actually talk to. Local-path clone hardlinks objects, so it's fast
-    # even for full history. OLD is not staged by us -- it is whatever
-    # release pin the website installer carries (recorded in install-gui).
+    # even for full history. The published installer carries NO commit pin
+    # (Pin { commit: None, branch: main }) -- it installs whatever `main`
+    # serves, so staging OLD means parking `main` there; the update phase
+    # advances it to HEAD.
     Invoke-Git @("clone", "--bare", "--quiet", $RepoRoot, $ServeRepo) | Out-Null
-    Invoke-Git @("-C", $ServeRepo, "update-ref", "refs/heads/main", $current) | Out-Null
+    Invoke-Git @("-C", $ServeRepo, "update-ref", "refs/heads/main", $old) | Out-Null
     Invoke-Git @("-C", $ServeRepo, "symbolic-ref", "HEAD", "refs/heads/main") | Out-Null
 
-    # The website installer pins a specific release commit (-Commit <sha>).
-    # That sha is in serve.git's history but not at a ref tip, so the
-    # redirected fetch needs any-SHA1 upload-pack permission (GitHub grants
-    # the equivalent for fetch of reachable commits).
+    # Belt-and-braces: SOME installer builds do bake a -Commit pin. A pinned
+    # sha is in serve.git's history but not at a ref tip, so the redirected
+    # fetch needs any-SHA1 upload-pack permission (GitHub grants the
+    # equivalent for fetch of reachable commits).
     Invoke-Git @("-C", $ServeRepo, "config", "uploadpack.allowAnySHA1InWant", "true") | Out-Null
-    Write-Host "  serve.git: uploadpack.allowAnySHA1InWant=true (installer commit pin)"
+    Write-Host "  serve.git: uploadpack.allowAnySHA1InWant=true (installer commit pin, if any)"
 
-    @{ current = $current } |
+    @{ old = $old; old_ref = $oldRef; current = $current } |
         ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8
     Write-Host "  state written: $StatePath"
     New-Item -ItemType Directory -Path $ProofRoot -Force | Out-Null
@@ -399,26 +423,13 @@ function Invoke-PhaseInstallGui {
     # Close the freshly launched app (user quits after first look).
     Stop-HermesAppProcesses "post-install"
 
-    # The website exe installs its baked release pin -- that IS the OLD
-    # version. It must differ from HEAD (an update is genuinely available).
-    # We do NOT require it to be an ancestor of HEAD: on a real `push: main`
-    # run HEAD is main's tip and the release pin is behind it (ancestor),
-    # but on a feature branch HEAD has diverged from main, so the release
-    # pin legitimately isn't in its ancestry. The update leg resets the
-    # checkout to serve.git's main ref regardless, and asserts it lands on
-    # HEAD -- that is the real forward-update proof.
+    # The installer cloned serve.git's `main`, which stage parked at OLD.
+    # (A pinned installer build would land on its baked pin instead; either
+    # way the requirement is the same: not already on HEAD.)
     $installedSha = Get-InstalledHead
-    Write-Host "  installer landed on: $installedSha (website release pin = OLD)"
-    Assert-True ($installedSha -ne $state.current) "installed pin differs from HEAD (an update is genuinely available)"
-    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    & git -C $InstallDir merge-base --is-ancestor $installedSha $state.current 2>&1 | Out-Null
-    $isAncestor = ($LASTEXITCODE -eq 0)
-    $ErrorActionPreference = $prevEap
-    if ($isAncestor) {
-        Write-Host "  [ok] installed pin is an ancestor of HEAD (linear old -> new)"
-    } else {
-        Write-Host "  [note] installed pin is NOT an ancestor of HEAD -- expected on a diverged feature branch; the update leg still resets to HEAD"
-    }
+    Write-Host "  installer landed on: $installedSha (OLD = $($state.old) [$($state.old_ref)])"
+    Assert-True ($installedSha -eq $state.old) "installed checkout is at OLD ($($state.old_ref))"
+    Assert-True ($installedSha -ne $state.current) "installed checkout differs from HEAD (an update is genuinely available)"
     Test-HermesRuns "post-install-gui"
     Assert-True ($null -ne (Get-DesktopExe)) "packaged Desktop Hermes.exe exists"
 
@@ -448,11 +459,16 @@ function Invoke-PhaseInstallGui {
 # Phase: update-gui -- OLD -> HEAD through the selected route
 # ----------------------------------------------------------------------------
 function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
-    Write-Step "UPDATE (GUI, route=desktop): click Update now, land on $TargetSha"
+    Write-Step "UPDATE (GUI, route=desktop): advance served main -> $TargetSha, click Update now"
     $proof = Join-Path $ProofRoot "update-gui"
     New-Item -ItemType Directory -Path $proof -Force | Out-Null
 
     $env:HERMES_HOME = $HermesHome
+
+    # The update becomes available the way it does for a real user: the
+    # remote's main moves forward. (Install ran against main = OLD.)
+    Invoke-Git @("-C", $ServeRepo, "update-ref", "refs/heads/main", $TargetSha) | Out-Null
+    Write-Host "  serve.git main advanced to $TargetSha"
 
     $desktopExe = Get-DesktopExe
     Assert-True ($null -ne $desktopExe) "packaged Hermes.exe present before update"

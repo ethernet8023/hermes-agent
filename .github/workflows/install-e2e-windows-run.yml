@@ -10,9 +10,10 @@ name: Install & Update E2E — Windows desktop (reusable)
 # git's own transport rewrite: a driver-owned GIT_CONFIG_GLOBAL carrying
 # url.<file://serve.git>.insteadOf for both canonical repo URLs, so the
 # installer and updater run byte-for-byte against their real URLs and land
-# on a local bare repo serving HEAD as `main`. OLD is not staged: it is
-# the release pin baked into the website exe — the literal starting point
-# of every real GUI user.
+# on a local bare repo. Its `main` serves OLD (install-ref, default: the
+# newest release tag) during the install, then advances to HEAD for the
+# update leg — an update becomes available exactly the way it does for a
+# real user.
 #
 # Routes (the update mechanism under test):
 #   desktop    the app's own Update button: the installed Hermes.exe runs
@@ -39,6 +40,11 @@ on:
         required: false
         type: string
         default: desktop
+      install-ref:
+        description: 'Ref to install as OLD (served as main while the installer runs). Empty = the newest release tag in the checkout.'
+        required: false
+        type: string
+        default: ''
       setup-exe-url:
         description: 'Bootstrap installer to install OLD with. Default: the latest published one — what a user downloads today.'
         required: false
@@ -76,17 +82,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Stage serve repo (main -> HEAD)
+      - name: Stage serve repo (main -> OLD)
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route ${{ inputs.route }} -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route ${{ inputs.route }} -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
       - name: Install OLD via website Hermes-Setup.exe (headed, AHK-clicked)
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase install-gui -Route ${{ inputs.route }} -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase install-gui -Route ${{ inputs.route }} -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
       - name: Update OLD -> HEAD (${{ inputs.route }} route)
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route ${{ inputs.route }} -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route ${{ inputs.route }} -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
       - name: Collect proof + logs
         if: always()

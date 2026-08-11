@@ -29,8 +29,11 @@ on:
   schedule:
     # Nightly, off the hour to dodge the top-of-hour runner crunch.
     - cron: '40 6 * * *'
+  # TEMP (revert before merge): validate on this branch from the fork, where
+  # workflow_dispatch is unavailable until the file lands on the default
+  # branch. Same pattern tek used pre-merge on the upstream PR.
   push:
-    branches: [main]
+    branches: [main, ethie/desktop-update-tests]
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'

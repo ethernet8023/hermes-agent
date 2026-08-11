@@ -1,15 +1,18 @@
 name: Install & Update E2E — unsupported combo (reusable)
 
-# A declared-but-unimplemented {os, install-method, update-method}
-# combination from scripts/sandbox/generate-e2e-matrix.mjs. The caller fans
-# out one of these per unsupported combo so every coverage gap is its own
-# named, NATIVELY SKIPPED check (grey, conclusion=skipped, no runner) in the
-# Checks tab.
+# A declared {os, install-method, update-method} combination whose OS has
+# no driving E2E workflow at all (today: every macOS combo). The per-tag
+# caller (install-e2e-tag.yml) fans out one of these per such combo so the
+# coverage gap is its own named, NATIVELY SKIPPED check (grey,
+# conclusion=skipped, no runner) in the Checks tab.
 #
-# `implemented` stays at its false default until the combo has a real
-# driver; flipping a combo to implemented happens in the generator (move it
-# into IMPLEMENTED and point it at a real reusable workflow), never by
-# setting this input.
+# OSes WITH a driving workflow don't come here: their unimplemented method
+# pairs natively skip inside that workflow, next to the driver that will
+# implement them (see install-e2e-windows-run.yml).
+#
+# `implemented` stays at its false default until the OS has a real driving
+# workflow; flipping happens by routing the combo to that workflow in
+# generate-e2e-matrix.mjs, never by setting this input.
 
 on:
   workflow_call:

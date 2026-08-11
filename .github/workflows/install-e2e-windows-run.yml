@@ -15,31 +15,43 @@ name: Install & Update E2E — Windows desktop (reusable)
 # update leg — an update becomes available exactly the way it does for a
 # real user.
 #
-# Routes (the update mechanism under test):
-#   desktop    the app's own Update button: the installed Hermes.exe runs
-#              under Playwright's Electron driver, which clicks Settings ->
-#              About -> "Update now"; the production hand-off chain runs
-#              untouched (marker, app quit, detached updater, hermes
-#              update, desktop rebuild, relaunch).
-#   update     TODO: `hermes update` from the installed venv.
-#   installer  TODO: re-run the bootstrap exe over the existing install.
+# Routes (from the update-method input):
+#   desktop-app             the app's own Update button: the installed
+#                           Hermes.exe runs under Playwright's Electron
+#                           driver, which clicks Settings -> About ->
+#                           "Update now"; the production hand-off chain runs
+#                           untouched (marker, app quit, detached updater,
+#                           hermes update, desktop rebuild, relaunch).
+#   hermes-update           TODO: `hermes update` from the installed venv.
+#   desktop-installer-rerun@latest
+#                           TODO: re-run the bootstrap exe over the install.
+#   irm-iex                 TODO: re-run the irm | iex one-liner.
+#
+# Method pairs without a driver yet NATIVELY SKIP (grey check, no runner):
+# the capability knowledge lives here, next to the driver, so the caller
+# can dispatch every declared combination without knowing which ones work.
 #
 # Call it:
 #
 #   jobs:
-#     windows-desktop:
+#     windows:
 #       uses: ./.github/workflows/install-e2e-windows-run.yml
 #       with:
-#         route: desktop
+#         install-method: desktop-installer@latest
+#         update-method: desktop-app
+#         install-ref: v2026.8.3
 
 on:
   workflow_call:
     inputs:
-      route:
-        description: 'Update mechanism to exercise: desktop (Update button; implemented), update (hermes update; TODO), installer (re-run bootstrap exe; TODO).'
-        required: false
+      install-method:
+        description: 'How OLD gets installed. Supported: desktop-installer@latest (website exe, AHK-clicked). Declared-but-TODO methods skip.'
+        required: true
         type: string
-        default: desktop
+      update-method:
+        description: 'How the install updates to HEAD. Supported: desktop-app (Update button under Playwright). Declared-but-TODO methods skip.'
+        required: true
+        type: string
       install-ref:
         description: 'Ref to install as OLD (served as main while the installer runs). auto = the newest release tag in the checkout.'
         required: false
@@ -61,7 +73,10 @@ permissions:
 
 jobs:
   e2e:
-    name: "${{ inputs.route }} route from website installer"
+    name: "${{ inputs.install-method }} -> ${{ inputs.update-method }}"
+    # The one pair the driver can run today. Anything else is a declared
+    # TODO: native skip, so the coverage gap is a grey check on every run.
+    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'desktop-app'
     runs-on: windows-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -110,15 +125,15 @@ jobs:
 
       - name: Stage serve repo (main -> OLD)
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route ${{ inputs.route }} -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
       - name: Install OLD via website Hermes-Setup.exe (headed, AHK-clicked)
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase install-gui -Route ${{ inputs.route }} -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase install-gui -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
-      - name: Update OLD -> HEAD (${{ inputs.route }} route)
+      - name: Update OLD -> HEAD (${{ inputs.update-method }})
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route ${{ inputs.route }} -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
       - name: Collect proof + logs
         if: always()
@@ -141,7 +156,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: install-e2e-windows-${{ inputs.route }}-${{ github.sha }}
+          name: install-e2e-windows-${{ inputs.update-method }}-${{ inputs.install-ref }}-${{ github.sha }}
           path: gui-e2e-proof
           retention-days: 14
           if-no-files-found: ignore

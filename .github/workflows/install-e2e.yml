@@ -4,27 +4,34 @@ name: Install & Update E2E
 #
 # The support matrix -- every {os, install-method, update-method} combination
 # a user could be on -- lives in scripts/sandbox/generate-e2e-matrix.mjs.
-# The generate-matrix job expands it into ONE JOB PER COMBINATION:
+# The job graph nests one sub-graph per starting release tag:
 #
-#   * linux legs install a sampled release through the real
-#     `curl | install.sh` one-liner (uv, a managed Python, Node, the venv)
-#     inside scripts/dev-sandbox.sh, then apply the combo's update route and
-#     require the checkout to land on this commit with a working `hermes`;
-#   * windows legs run the real desktop user flow (install-e2e-windows-run
-#     .yml): the website's Hermes-Setup.exe clicked by AutoHotkey, then the
-#     update driven through the app itself, Playwright clicking "Update now";
-#   * combinations the spec declares but CI can't drive yet (macOS, the
-#     remaining windows install/update methods) fan out too, one NATIVELY
-#     SKIPPED check per combo, so every coverage gap is enumerable from the
-#     Checks tab.
+#   from <tag> (install-e2e-tag.yml)
+#     -> linux: <install> -> <update>     one job per combination, a real
+#                                         curl|bash install in bubblewrap
+#                                         (install-e2e-run.yml)
+#     -> windows: <install> -> <update>   one job per combination, the real
+#                                         desktop user flow: website exe
+#                                         clicked by AutoHotkey, update via
+#                                         the app, Playwright clicking
+#                                         "Update now"
+#                                         (install-e2e-windows-run.yml)
+#     -> macos: <install> -> <update>     natively skipped until a macos
+#                                         workflow exists
+#                                         (install-e2e-skip.yml)
 #
-# The linux starting versions are chosen at runtime from the repo's release
-# tags (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread
+# Every combination is dispatched; unimplemented ones natively skip (grey)
+# at the point that owns the knowledge -- macOS combos in the tag workflow
+# (no driver exists), windows method pairs inside the windows run workflow
+# (next to the driver that will implement them).
+#
+# The starting versions are chosen at runtime from the repo's release tags
+# (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread
 # between. A hardcoded list would stop covering the newest release the day
-# after it ships, and would pin an "oldest" that nobody still runs. The
-# windows starting version is the newest release tag (the published
-# installer has no commit pin -- it installs what `main` serves, which the
-# harness stages to that tag).
+# after it ships, and would pin an "oldest" that nobody still runs. The tag
+# axis is applied to EVERY os: linux legs install the tag in the sandbox;
+# windows legs stage serve.git's `main` at it, which is what the published
+# installer (no commit pin) then installs.
 #
 # Triggers:
 #   * every 12 hours, so upstream drift (a new uv, a Node bump, a PyPI change)
@@ -68,8 +75,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Which released versions do we test updating FROM? Resolved once and shared
-  # by every linux leg, so all routes cover the same set.
+  # Which released versions do we test updating FROM? Resolved once; the
+  # generator applies the tag axis to every OS's legs.
   pick-releases:
     name: Pick release tags
     runs-on: ubuntu-latest
@@ -93,79 +100,24 @@ jobs:
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
-  # Expand the {os, install-method, update-method} support matrix
-  # (scripts/sandbox/generate-e2e-matrix.mjs) into one job per combination.
-  # Implemented combos land in the linux/windows matrices below; everything
-  # the spec declares but CI can't drive yet lands in `skipped`, so the TODO
-  # surface is visible in every run instead of buried in comments.
-  generate-matrix:
-    name: Generate combination matrix
+  # One sub-graph per starting tag: install-e2e-tag.yml expands the
+  # {os, install-method, update-method} support matrix for that tag and
+  # fans out one job per combination, so the graph reads
+  # "from vX -> windows: install -> update" per leg. Skips happen where
+  # the knowledge lives: macOS combos natively skip inside the tag
+  # workflow (no workflow exists for them at all); unimplemented windows
+  # method pairs natively skip inside install-e2e-windows-run.yml, next
+  # to the driver that will implement them.
+  from-tag:
+    name: "from ${{ matrix.install-ref }}"
     needs: pick-releases
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      linux: ${{ steps.gen.outputs.linux }}
-      windows: ${{ steps.gen.outputs.windows }}
-      skipped: ${{ steps.gen.outputs.skipped }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          sparse-checkout: scripts/sandbox/generate-e2e-matrix.mjs
-          sparse-checkout-cone-mode: false
-      - id: gen
-        run: |
-          set -euo pipefail
-          matrices="$(node scripts/sandbox/generate-e2e-matrix.mjs \
-            --tags '${{ needs.pick-releases.outputs.tags }}' \
-            --route '${{ inputs.route || 'all' }}')"
-          echo "$matrices"
-          for key in linux windows skipped; do
-            echo "$key=$(echo "$matrices" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(d)[process.argv[1]])))' "$key")" >> "$GITHUB_OUTPUT"
-          done
-
-  # Linux sandbox legs: one job per {install-method -> update-method, release
-  # tag} combination, each a real curl|bash install in bubblewrap followed by
-  # the combo's update route.
-  linux:
-    name: "linux: ${{ matrix.name }}"
-    if: fromJSON(needs.generate-matrix.outputs.linux).include[0] != null
-    needs: generate-matrix
     strategy:
-      # One combo breaking is worth knowing about even if another already
-      # failed, so let every leg report.
+      # One tag breaking is worth knowing about even if another already
+      # failed, so let every sub-graph report.
       fail-fast: false
-      max-parallel: 4
-      matrix: ${{ fromJSON(needs.generate-matrix.outputs.linux) }}
-    uses: ./.github/workflows/install-e2e-run.yml
+      matrix:
+        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+    uses: ./.github/workflows/install-e2e-tag.yml
     with:
-      route: ${{ matrix.route }}
-      install-ref: ${{ matrix.install_ref }}
-
-  # Windows GUI legs: one job per combination of the real desktop user flow
-  # (website installer clicked by AutoHotkey, update driven through the app).
-  windows:
-    name: "windows: ${{ matrix.name }}"
-    if: fromJSON(needs.generate-matrix.outputs.windows).include[0] != null
-    needs: generate-matrix
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.generate-matrix.outputs.windows) }}
-    uses: ./.github/workflows/install-e2e-windows-run.yml
-    with:
-      route: ${{ matrix.route }}
-      install-ref: ${{ matrix.install_ref }}
-
-  # Declared-but-unimplemented combinations: one job per combo, each a
-  # NATIVE skip (grey, conclusion=skipped, no runner). Matrix context is not
-  # available in job-level `if`, so the native skip lives in the called
-  # workflow instead: its inner job is gated on an input that defaults to
-  # false and is never passed. Implementing a combo moves it into
-  # IMPLEMENTED in the generator.
-  skipped:
-    name: "todo: ${{ matrix.os }}: ${{ matrix.install }} -> ${{ matrix.update }}"
-    if: fromJSON(needs.generate-matrix.outputs.skipped).include[0] != null
-    needs: generate-matrix
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.generate-matrix.outputs.skipped) }}
-    uses: ./.github/workflows/install-e2e-skip.yml
+      install-ref: ${{ matrix.install-ref }}
+      route: ${{ inputs.route || 'all' }}

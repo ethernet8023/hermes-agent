@@ -1,0 +1,100 @@
+name: Install & Update E2E — one starting tag (reusable)
+
+# Everything a user starting on ONE released version could do: for each
+# {os, install-method, update-method} combination the support matrix
+# (scripts/sandbox/generate-e2e-matrix.mjs) declares, one job that installs
+# this tag and updates to HEAD.
+#
+# Skips happen where the knowledge lives:
+#   * macOS combos have no workflow at all -- they natively skip right
+#     here via install-e2e-skip.yml;
+#   * windows combos ALL dispatch to install-e2e-windows-run.yml, which
+#     natively skips the method pairs its driver cannot run yet;
+#   * linux combos are all implemented.
+#
+# Call it:
+#
+#   jobs:
+#     tag:
+#       strategy:
+#         matrix: { install-ref: [v2026.8.3, v2026.3.12] }
+#       uses: ./.github/workflows/install-e2e-tag.yml
+#       with:
+#         install-ref: ${{ matrix.install-ref }}
+
+on:
+  workflow_call:
+    inputs:
+      install-ref:
+        description: 'The released version to start from: installed first, then updated to HEAD.'
+        required: true
+        type: string
+      route:
+        description: 'Combination filter, mirroring the dispatch route choice: all, both, update, installer, windows-desktop.'
+        required: false
+        type: string
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  generate-matrix:
+    name: expand combinations
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux: ${{ steps.gen.outputs.linux }}
+      windows: ${{ steps.gen.outputs.windows }}
+      skipped: ${{ steps.gen.outputs.skipped }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: scripts/sandbox/generate-e2e-matrix.mjs
+          sparse-checkout-cone-mode: false
+      - id: gen
+        run: |
+          set -euo pipefail
+          matrices="$(node scripts/sandbox/generate-e2e-matrix.mjs \
+            --tags '["${{ inputs.install-ref }}"]' \
+            --route '${{ inputs.route }}')"
+          echo "$matrices"
+          for key in linux windows skipped; do
+            echo "$key=$(echo "$matrices" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(d)[process.argv[1]])))' "$key")" >> "$GITHUB_OUTPUT"
+          done
+
+  linux:
+    name: "linux: ${{ matrix.name }}"
+    if: fromJSON(needs.generate-matrix.outputs.linux).include[0] != null
+    needs: generate-matrix
+    strategy:
+      # One combo breaking is worth knowing about even if another already
+      # failed, so let every leg report.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.linux) }}
+    uses: ./.github/workflows/install-e2e-run.yml
+    with:
+      route: ${{ matrix.route }}
+      install-ref: ${{ matrix.install_ref }}
+
+  windows:
+    name: "windows: ${{ matrix.name }}"
+    if: fromJSON(needs.generate-matrix.outputs.windows).include[0] != null
+    needs: generate-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.windows) }}
+    uses: ./.github/workflows/install-e2e-windows-run.yml
+    with:
+      install-method: ${{ matrix.install_method }}
+      update-method: ${{ matrix.update_method }}
+      install-ref: ${{ matrix.install_ref }}
+
+  skipped:
+    name: "${{ matrix.os }}: ${{ matrix.install }} -> ${{ matrix.update }}"
+    if: fromJSON(needs.generate-matrix.outputs.skipped).include[0] != null
+    needs: generate-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.skipped) }}
+    uses: ./.github/workflows/install-e2e-skip.yml

@@ -71,12 +71,13 @@ param(
     [ValidateSet("stage", "install-gui", "update-gui", "all")]
     [string]$Phase = "all",
 
-    # Update route to exercise in the update-gui phase. Only "desktop" (the
-    # app's own Update button) is implemented; "update" (CLI `hermes
-    # update`) and "installer" (re-run the bootstrap exe) are declared arms
-    # so the workflow surface is stable when they land.
-    [ValidateSet("desktop", "update", "installer")]
-    [string]$Route = "desktop",
+    # Update method to exercise in the update-gui phase, named by the same
+    # ids the combination generator (scripts/sandbox/generate-e2e-matrix
+    # .mjs) uses. Only "desktop-app" (the app's own Update button) is
+    # implemented; the others are declared arms so the surface is stable
+    # when they land.
+    [ValidateSet("desktop-app", "hermes-update", "desktop-installer-rerun@latest", "irm-iex")]
+    [string]$Route = "desktop-app",
 
     # The OLD version: the ref served as `main` while the installer runs,
     # i.e. what the user starts on. The published Hermes-Setup.exe carries
@@ -657,20 +658,25 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
 function Invoke-PhaseUpdateGui {
     $state = Read-State
     switch ($Route) {
-        "desktop" {
+        "desktop-app" {
             Invoke-GuiUpdateDesktopRoute $state.current
         }
-        "update" {
+        "hermes-update" {
             # TODO: run `hermes update` from the installed venv -- the CLI
-            # route. Needs the same completion/sha/relaunch asserts minus
-            # the app-quit dance.
-            throw "route 'update' (CLI hermes update) is not implemented yet"
+            # route. Needs the same completion/sha asserts minus the
+            # app-quit dance.
+            throw "update method 'hermes-update' is not implemented yet"
         }
-        "installer" {
+        "desktop-installer-rerun@latest" {
             # TODO: re-run the bootstrap Hermes-Setup.exe over the existing
             # install (its --update flow jumps straight to progress and
             # runs unattended).
-            throw "route 'installer' (re-run bootstrap exe) is not implemented yet"
+            throw "update method 'desktop-installer-rerun@latest' is not implemented yet"
+        }
+        "irm-iex" {
+            # TODO: re-run the irm | iex one-liner over the existing
+            # install.
+            throw "update method 'irm-iex' is not implemented yet"
         }
     }
 }

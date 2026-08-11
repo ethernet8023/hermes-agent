@@ -7,15 +7,19 @@
  * per combination -- and everything else lands in a "skipped" matrix so the
  * TODO surface stays visible in every run instead of buried in comments.
  *
- * Used by .github/workflows/install-e2e.yml:
+ * Used by .github/workflows/install-e2e-tag.yml, which runs it once per
+ * starting release tag:
  *
  *   node scripts/sandbox/generate-e2e-matrix.mjs \
- *     --tags '["v2026.8.3","v2026.3.12"]' --route all
+ *     --tags '["v2026.8.3"]' --route all
  *
  * Prints JSON: { linux: {include:[...]}, windows: {include:[...]},
- * skipped: {include:[...]} }. The linux include entries carry
- * {name, route, install_ref} for install-e2e-run.yml; windows entries carry
- * {name, route, install_ref} for install-e2e-windows-run.yml.
+ * skipped: {include:[...]} }. linux entries carry {name, route,
+ * install_ref} for install-e2e-run.yml; windows entries carry {name,
+ * install_method, update_method, install_ref} for
+ * install-e2e-windows-run.yml (which itself natively skips method pairs it
+ * cannot drive yet); skipped entries are the macOS combos (no workflow
+ * exists at all).
  */
 
 import path from 'node:path';
@@ -84,18 +88,20 @@ const KNOWN_METHODS = new Set([
 const ALLOWED_VERSIONS = new Set(['latest']);
 
 /**
- * The combinations CI actually runs today, and which reusable workflow +
- * route input drives each. Everything in SPEC but not here is emitted as a
- * skipped combo. Install ids include the expanded @version suffix.
+ * How each implemented combination maps onto a reusable workflow.
+ *
+ * linux: every combo is implemented; `route` is install-e2e-run.yml's input.
+ * windows: ALL combos dispatch to install-e2e-windows-run.yml -- the run
+ *   workflow itself natively skips (grey) any {install, update} method pair
+ *   it cannot drive yet, so "which windows methods work" lives THERE, next
+ *   to the driver, not here.
+ * macos: nothing is implemented; combos surface as native skips in the
+ *   caller via install-e2e-skip.yml without burning a tag fanout.
  */
-export const IMPLEMENTED = [
-  // scripts/dev-sandbox.sh legs (install-e2e-run.yml, bubblewrap sandbox).
-  { os: 'linux', install: 'curl-bash', update: 'hermes-update', workflow: 'linux', route: 'update' },
-  { os: 'linux', install: 'curl-bash', update: 'curl-bash', workflow: 'linux', route: 'installer' },
-  // Real Windows GUI flow (install-e2e-windows-run.yml): website exe clicked
-  // by AutoHotkey, Update now clicked by Playwright.
-  { os: 'windows', install: 'desktop-installer@latest', update: 'desktop-app', workflow: 'windows', route: 'desktop' },
-];
+export const LINUX_ROUTES = {
+  'hermes-update': 'update',
+  'curl-bash': 'installer',
+};
 
 function validateEntry(os, kind, entry) {
   if (typeof entry.method !== 'string' || !KNOWN_METHODS.has(entry.method)) {
@@ -150,25 +156,19 @@ export function generateEnvironments(spec) {
   return envs;
 }
 
-function findImplementation(env) {
-  return IMPLEMENTED.find(
-    (m) => m.os === env.os && m.install === env.install && m.update === env.update,
-  );
-}
-
 /** Mirror of install-e2e.yml's dispatch `route` choice. */
-function routeWants(route, env, impl) {
+function routeWants(route, env) {
   switch (route) {
     case 'all':
       return true;
     case 'both':
-      return env.os === 'linux' && Boolean(impl);
+      return env.os === 'linux';
     case 'update':
-      return impl?.route === 'update';
+      return env.os === 'linux' && env.update === 'hermes-update';
     case 'installer':
-      return impl?.route === 'installer';
+      return env.os === 'linux' && env.update === 'curl-bash';
     case 'windows-desktop':
-      return env.os === 'windows' && Boolean(impl);
+      return env.os === 'windows';
     default:
       throw new Error(`unknown route filter: ${JSON.stringify(route)}`);
   }
@@ -176,39 +176,63 @@ function routeWants(route, env, impl) {
 
 /**
  * Split the combinations into per-workflow matrices.
- * Linux combos fan out further over `tags` (which released version the leg
- * installs first); Windows install versions come from the method id instead
- * (desktop-installer@latest = whatever the website serves).
+ *
+ * `tags` (the released versions we test updating FROM) is the OUTER axis,
+ * applied to every OS with a driving workflow: for each tag, for each
+ * combo, one job that installs the tag and updates to HEAD. Linux legs
+ * pass the tag as install-ref for the sandbox to install; Windows legs
+ * pass it as the ref the staged serve.git parks `main` at -- the published
+ * installer has no commit pin, so that IS the installed version.
+ *
+ * Skip placement follows where the knowledge lives: macOS combos are known
+ * unimplementable HERE (no workflow exists), so they go to the `skipped`
+ * matrix -- one native grey check per combo, not multiplied by tags, since
+ * no tag would change the outcome. Windows combos ALL dispatch to the run
+ * workflow, which natively skips the method pairs it cannot drive.
  */
 export function buildMatrices(envs, { tags = [], route = 'all' } = {}) {
   const linux = [];
   const windows = [];
   const skipped = [];
+  const needTags = () => {
+    if (tags.length === 0) {
+      throw new Error('a combo with a driving workflow was selected but no --tags given');
+    }
+  };
   for (const env of envs) {
-    const impl = findImplementation(env);
-    if (!routeWants(route, env, impl)) continue;
-    if (!impl) {
-      skipped.push({ ...env, reason: 'not implemented yet' });
-    } else if (impl.workflow === 'linux') {
-      if (tags.length === 0) {
-        throw new Error(`linux combo ${env.install} -> ${env.update} selected but no --tags given`);
+    if (!routeWants(route, env)) continue;
+    if (env.os === 'macos') {
+      skipped.push({ ...env, reason: 'no macos workflow yet' });
+      continue;
+    }
+    if (env.os === 'linux') {
+      const linuxRoute = LINUX_ROUTES[env.update];
+      if (!linuxRoute) {
+        throw new Error(`linux update method ${JSON.stringify(env.update)} has no route mapping`);
       }
+      needTags();
       for (const tag of tags) {
         linux.push({
-          name: `${env.install} @ ${tag} -> ${env.update}`,
-          route: impl.route,
+          name: `${env.install} -> ${env.update}`,
+          route: linuxRoute,
           install_ref: tag,
         });
       }
-    } else if (impl.workflow === 'windows') {
-      windows.push({
-        name: `${env.install} -> ${env.update}`,
-        route: impl.route,
-        install_ref: 'auto',
-      });
-    } else {
-      throw new Error(`unknown workflow ${JSON.stringify(impl.workflow)} for ${env.os}`);
+      continue;
     }
+    if (env.os === 'windows') {
+      needTags();
+      for (const tag of tags) {
+        windows.push({
+          name: `${env.install} -> ${env.update}`,
+          install_method: env.install,
+          update_method: env.update,
+          install_ref: tag,
+        });
+      }
+      continue;
+    }
+    throw new Error(`no workflow routing for os ${JSON.stringify(env.os)}`);
   }
   return {
     linux: { include: linux },

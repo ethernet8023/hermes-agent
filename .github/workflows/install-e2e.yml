@@ -2,22 +2,28 @@ name: Install & Update E2E
 
 # Can a user on a released version get to this commit?
 #
-# For each release we sample, a leg installs that release through the real
-# `curl | install.sh` one-liner (uv, a managed Python, Node, the venv) inside
-# scripts/dev-sandbox.sh, then applies one update route and requires the
-# checkout to land on this commit with a working `hermes`.
+# The support matrix -- every {os, install-method, update-method} combination
+# a user could be on -- lives in scripts/sandbox/generate-e2e-matrix.mjs.
+# The generate-matrix job expands it into ONE JOB PER COMBINATION:
 #
-# The starting versions are chosen at runtime from the repo's release tags
-# (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread between.
-# A hardcoded list would stop covering the newest release the day after it
-# ships, and would pin an "oldest" that nobody still runs.
+#   * linux legs install a sampled release through the real
+#     `curl | install.sh` one-liner (uv, a managed Python, Node, the venv)
+#     inside scripts/dev-sandbox.sh, then apply the combo's update route and
+#     require the checkout to land on this commit with a working `hermes`;
+#   * windows legs run the real desktop user flow (install-e2e-windows-run
+#     .yml): the website's Hermes-Setup.exe clicked by AutoHotkey, then the
+#     update driven through the app itself, Playwright clicking "Update now";
+#   * combinations the spec declares but CI can't drive yet (macOS, the
+#     remaining windows install/update methods) surface as skipped jobs so
+#     the coverage gap is enumerable instead of buried in comments.
 #
-# A separate Windows axis (install-e2e-windows-run.yml) covers the desktop
-# user flow: install OLD with the website's published bootstrap installer
-# (headed, AutoHotkey-clicked), then update to HEAD through a real update
-# surface — the app's own Update button clicked by Playwright. No tag
-# matrix there: the published exe's own build pin is the starting point
-# users actually have.
+# The linux starting versions are chosen at runtime from the repo's release
+# tags (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread
+# between. A hardcoded list would stop covering the newest release the day
+# after it ships, and would pin an "oldest" that nobody still runs. The
+# windows starting version is the newest release tag (the published
+# installer has no commit pin -- it installs what `main` serves, which the
+# harness stages to that tag).
 #
 # Triggers:
 #   * every 12 hours, so upstream drift (a new uv, a Node bump, a PyPI change)
@@ -62,7 +68,7 @@ concurrency:
 
 jobs:
   # Which released versions do we test updating FROM? Resolved once and shared
-  # by both route matrices, so the two routes cover the same set.
+  # by every linux leg, so all routes cover the same set.
   pick-releases:
     name: Pick release tags
     runs-on: ubuntu-latest
@@ -86,44 +92,81 @@ jobs:
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
-  # `hermes update` -- the route most users take.
-  update:
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "update"]'), inputs.route)
+  # Expand the {os, install-method, update-method} support matrix
+  # (scripts/sandbox/generate-e2e-matrix.mjs) into one job per combination.
+  # Implemented combos land in the linux/windows matrices below; everything
+  # the spec declares but CI can't drive yet lands in `skipped`, so the TODO
+  # surface is visible in every run instead of buried in comments.
+  generate-matrix:
+    name: Generate combination matrix
     needs: pick-releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      linux: ${{ steps.gen.outputs.linux }}
+      windows: ${{ steps.gen.outputs.windows }}
+      skipped: ${{ steps.gen.outputs.skipped }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: scripts/sandbox/generate-e2e-matrix.mjs
+          sparse-checkout-cone-mode: false
+      - id: gen
+        run: |
+          set -euo pipefail
+          matrices="$(node scripts/sandbox/generate-e2e-matrix.mjs \
+            --tags '${{ needs.pick-releases.outputs.tags }}' \
+            --route '${{ inputs.route || 'all' }}')"
+          echo "$matrices"
+          for key in linux windows skipped; do
+            echo "$key=$(echo "$matrices" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(d)[process.argv[1]])))' "$key")" >> "$GITHUB_OUTPUT"
+          done
+
+  # Linux sandbox legs: one job per {install-method -> update-method, release
+  # tag} combination, each a real curl|bash install in bubblewrap followed by
+  # the combo's update route.
+  linux:
+    name: "linux: ${{ matrix.name }}"
+    if: fromJSON(needs.generate-matrix.outputs.linux).include[0] != null
+    needs: generate-matrix
     strategy:
-      # One release breaking is worth knowing about even if another already
+      # One combo breaking is worth knowing about even if another already
       # failed, so let every leg report.
       fail-fast: false
-      matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.linux) }}
     uses: ./.github/workflows/install-e2e-run.yml
     with:
-      route: update
-      install-ref: ${{ matrix.install-ref }}
+      route: ${{ matrix.route }}
+      install-ref: ${{ matrix.install_ref }}
 
-  # Re-running the curl one-liner over an existing checkout: autostash + pull
-  # rather than the updater's own git handling.
-  installer:
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "installer"]'), inputs.route)
-    needs: pick-releases
+  # Windows GUI legs: one job per combination of the real desktop user flow
+  # (website installer clicked by AutoHotkey, update driven through the app).
+  windows:
+    name: "windows: ${{ matrix.name }}"
+    if: fromJSON(needs.generate-matrix.outputs.windows).include[0] != null
+    needs: generate-matrix
     strategy:
       fail-fast: false
-      max-parallel: 3
-      matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
-    uses: ./.github/workflows/install-e2e-run.yml
-    with:
-      route: installer
-      install-ref: ${{ matrix.install-ref }}
-
-  # Windows desktop: install OLD with the website's published bootstrap
-  # installer (the exact bits a user downloads today, AutoHotkey-clicked),
-  # then update to HEAD by clicking the app's own Update button under
-  # Playwright. The reusable workflow's route input selects the update
-  # mechanism; `hermes update` and installer-rerun arms are declared TODOs
-  # there.
-  windows-desktop:
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.windows) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
-      route: desktop
+      route: ${{ matrix.route }}
+      install-ref: ${{ matrix.install_ref }}
+
+  # Declared-but-unimplemented combinations. Each shows up as its own skipped
+  # check so coverage gaps are enumerable from the Checks tab; implementing
+  # one moves it from here into IMPLEMENTED in the generator.
+  skipped:
+    name: "skipped: ${{ matrix.os }}: ${{ matrix.install }} -> ${{ matrix.update }}"
+    if: fromJSON(needs.generate-matrix.outputs.skipped).include[0] != null
+    needs: generate-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.skipped) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: >-
+          echo "SKIPPED (${{ matrix.reason }}) -- ${{ matrix.os }} install via
+          '${{ matrix.install }}', update via '${{ matrix.update }}'"

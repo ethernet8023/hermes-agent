@@ -39,7 +39,7 @@ jobs:
     # Static name on purpose: the caller's job name already carries the
     # method pair, and GitHub renders name expressions UNEXPANDED (literal
     # "${{ inputs... }}") on natively skipped jobs.
-    name: run
+    name: e2e
     # No macOS driver exists yet: every pair is a declared TODO, so this is
     # constant-false until the first method lands. Written as an impossible
     # input comparison rather than `if: false` because actionlint rejects

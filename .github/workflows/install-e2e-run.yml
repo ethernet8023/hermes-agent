@@ -60,11 +60,11 @@ jobs:
   e2e:
     # Static name on purpose: the caller's job name already carries the
     # method pair, and GitHub renders name expressions UNEXPANDED (literal
-    # "${{ inputs... }}") on natively skipped jobs.
-    name: run
-    # The pairs the sandbox driver can run today. Anything else is a
-    # declared TODO: native skip, so the coverage gap is a grey check on
-    # every run.
+    # "${{ inputs... }}") on natively skipped jobs. Short because it is
+    # only a rendered tail ("<tag> -> HEAD / e2e").
+    name: e2e
+    # The pairs the sandbox driver can run today; anything else is a
+    # declared TODO and natively skips.
     if: inputs.install-method == 'curl-bash' && contains(fromJSON('["hermes-update", "curl-bash"]'), inputs.update-method)
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}

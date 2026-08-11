@@ -95,12 +95,22 @@ jobs:
           set -euo pipefail
           tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
           echo "Testing updates from: $tags"
-          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          # Annotate each tag with what its own tree supports, so legs can
+          # natively skip surfaces the starting version does not have.
+          # Today: does the release ship the desktop app (apps/desktop,
+          # #20059)? Cheaper and simpler here -- the tags are already
+          # checked out -- than a probe job per windows leg.
+          enriched="$(for t in $(echo "$tags" | jq -r '.[]'); do
+            if git ls-tree -d "$t" apps/desktop | grep -q .; then d=true; else d=false; fi
+            echo "{\"ref\":\"$t\",\"desktop\":$d}"
+          done | jq -sc .)"
+          echo "Annotated: $enriched"
+          echo "tags=$enriched" >> "$GITHUB_OUTPUT"
 
   # ---- linux: install via curl-bash ---------------------------------------
 
   linux-curl-bash-to-hermes-update:
-    name: "linux: curl-bash -> hermes-update"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "update"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -108,32 +118,32 @@ jobs:
       # failed, so let every leg report.
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-run.yml
     with:
       install-method: curl-bash
       update-method: hermes-update
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   linux-curl-bash-to-curl-bash:
-    name: "linux: curl-bash -> curl-bash"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "installer"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       max-parallel: 3
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-run.yml
     with:
       install-method: curl-bash
       update-method: curl-bash
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   # ---- windows: install via the website's Hermes-Setup.exe ----------------
 
   windows-desktop-installer-to-desktop-app:
-    name: "windows: desktop-installer@latest -> desktop-app"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
@@ -142,195 +152,203 @@ jobs:
       # enough for a 5-tag axis without hogging the Windows pool.
       max-parallel: 2
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: desktop-installer@latest
       update-method: desktop-app
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   windows-desktop-installer-to-installer-rerun:
-    name: "windows: desktop-installer@latest -> desktop-installer-rerun@latest"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: desktop-installer@latest
       update-method: desktop-installer-rerun@latest
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   windows-desktop-installer-to-hermes-update:
-    name: "windows: desktop-installer@latest -> hermes-update"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: desktop-installer@latest
       update-method: hermes-update
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   windows-desktop-installer-to-irm-iex:
-    name: "windows: desktop-installer@latest -> irm-iex"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: desktop-installer@latest
       update-method: irm-iex
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   # ---- windows: install via irm | iex --------------------------------------
 
   windows-irm-iex-to-desktop-app:
-    name: "windows: irm-iex -> desktop-app"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: irm-iex
       update-method: desktop-app
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   windows-irm-iex-to-installer-rerun:
-    name: "windows: irm-iex -> desktop-installer-rerun@latest"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: irm-iex
       update-method: desktop-installer-rerun@latest
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   windows-irm-iex-to-hermes-update:
-    name: "windows: irm-iex -> hermes-update"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: irm-iex
       update-method: hermes-update
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   windows-irm-iex-to-irm-iex:
-    name: "windows: irm-iex -> irm-iex"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      tag-has-desktop: ${{ matrix.tag.desktop }}
       install-method: irm-iex
       update-method: irm-iex
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   # ---- macos: no driver yet (every leg natively skips in the run workflow) -
 
   macos-curl-bash-to-curl-bash:
-    name: "macos: curl-bash -> curl-bash"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
       install-method: curl-bash
       update-method: curl-bash
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   macos-curl-bash-to-hermes-update:
-    name: "macos: curl-bash -> hermes-update"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
       install-method: curl-bash
       update-method: hermes-update
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   macos-curl-bash-to-app-update:
-    name: "macos: curl-bash -> app-update"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
       install-method: curl-bash
       update-method: app-update
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   macos-packaged-app-to-curl-bash:
-    name: "macos: packaged-app -> curl-bash"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
       install-method: packaged-app
       update-method: curl-bash
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   macos-packaged-app-to-hermes-update:
-    name: "macos: packaged-app -> hermes-update"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
       install-method: packaged-app
       update-method: hermes-update
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}
 
   macos-packaged-app-to-app-update:
-    name: "macos: packaged-app -> app-update"
+    name: "${{ matrix.tag.ref }} -> HEAD"
     if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: pick-releases
     strategy:
       fail-fast: false
       matrix:
-        install-ref: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
+        tag: ${{ fromJSON(needs.pick-releases.outputs.tags) }}
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
       install-method: packaged-app
       update-method: app-update
-      install-ref: ${{ matrix.install-ref }}
+      install-ref: ${{ matrix.tag.ref }}

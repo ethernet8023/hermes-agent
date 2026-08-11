@@ -18,7 +18,13 @@ logPath := A_Args.Length >= 1 ? A_Args[1] : "ahk.log"
 Log(text) {
     msg := Format("[autohotkey] {}`n", text)
     ToolTip(text)
-    FileAppend(msg, '*')
+    ; stdout only exists when the launcher attached a console (Start-Process
+    ; -NoNewWindow). AutoHotkey64 is a GUI-subsystem exe, so a bare spawn has
+    ; an invalid stdout handle and FileAppend('*') throws "(6) The handle is
+    ; invalid" -- recursively, from inside OnError's own Log call, which
+    ; wedges the script instead of exiting. The log FILE is the record;
+    ; stdout is best-effort.
+    try FileAppend(msg, '*')
     FileAppend(msg, logPath)
 }
 

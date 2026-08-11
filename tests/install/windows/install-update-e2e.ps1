@@ -211,7 +211,9 @@ $installerOk = $false
 try {
     $proc = Start-Process -FilePath $InstallerPath -PassThru
     $ahkLog = Join-Path $LogDir "ahk.log"
-    $ahkProc = Start-Process -FilePath "AutoHotkey64.exe" `
+    # -NoNewWindow attaches our console as the GUI-subsystem exe's stdout so
+    # the helper's live lines land in the job log as they happen.
+    $ahkProc = Start-Process -FilePath "AutoHotkey64.exe" -NoNewWindow `
         -ArgumentList "`"$PSScriptRoot\install-hermes-desktop.ahk`"", "`"$ahkLog`"" -PassThru
 
     # Tail the bootstrap log into the job log while we wait: the install IS

@@ -292,8 +292,10 @@ function Invoke-PhaseInstallGui {
         Write-Host "  Hermes-Setup.exe launched (pid $($installer.Id))"
 
         # Drive it: Install click -> wait -> Launch click -> Hermes.exe window.
+        # Arg 3 lets the AHK script use the installer's own log as the
+        # install-finished fallback signal.
         $ahk = Start-Process -FilePath $ahkExe `
-            -ArgumentList (Join-Path $AhkDir "install-and-launch.ahk"), $ahkLog `
+            -ArgumentList (Join-Path $AhkDir "install-and-launch.ahk"), $ahkLog, "Hermes-Setup.exe", (Join-Path $HermesHome "logs\bootstrap-installer.log") `
             -PassThru
         # Install on a cold runner takes a while; the AHK script's own inner
         # timeout (45 min on the Launch wait) is the effective budget.

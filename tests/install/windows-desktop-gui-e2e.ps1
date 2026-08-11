@@ -364,6 +364,19 @@ function Invoke-PhaseInstallGui {
         Add-Content -LiteralPath $envFile -Value "OPENROUTER_API_KEY=sk-or-e2e-placeholder-not-a-real-key"
     }
     Write-Host "  seeded placeholder provider key for update legs"
+
+    # Suppress the interactive "add upstream remote?" prompt during the GUI
+    # update legs. Our serve.git origin (file://) looks like a fork to
+    # `hermes update`, so `_sync_with_upstream_if_needed` would call bare
+    # input() -- which HANGS FOREVER when the Desktop spawns the hand-off via
+    # `cmd start /min` (a real but empty console; input() blocks waiting for a
+    # keystroke that never comes). Real GUI users on the official github
+    # origin never hit this path (_is_fork is false). The skip marker
+    # (.skip_upstream_prompt in HERMES_HOME) is the product's own mechanism
+    # for "don't ask about upstream", so setting it keeps the update flow
+    # faithful while avoiding the fork-only prompt.
+    New-Item -ItemType File -Path (Join-Path $HermesHome ".skip_upstream_prompt") -Force | Out-Null
+    Write-Host "  set .skip_upstream_prompt (serve.git origin looks like a fork; avoids the fork-only input() hang)"
 }
 
 # ----------------------------------------------------------------------------

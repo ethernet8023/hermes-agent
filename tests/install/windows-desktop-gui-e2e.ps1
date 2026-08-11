@@ -9,7 +9,7 @@
 #               then clicks Launch. The real Electron Hermes.exe must appear.
 #               The exe runs EXACTLY as shipped: it downloads its own pinned
 #               install.ps1 from GitHub raw and installs its baked
-#               BUILD_PIN_COMMIT — so the "before" version in this harness is
+#               BUILD_PIN_COMMIT -- so the "before" version in this harness is
 #               the website release pin, the literal starting point of every
 #               real GUI user. (The strict HEAD~1 -> HEAD guarantee is the
 #               contract harness's job; this one covers the production pin.)
@@ -30,7 +30,7 @@
 #
 # DEVIATIONS FROM PRODUCTION (each one deliberate and small):
 #   * git URL redirect (GIT_CONFIG_GLOBAL) routes the canonical repo URLs
-#     to the staged serve.git — the staging requirement itself. The
+#     to the staged serve.git -- the staging requirement itself. The
 #     installer's raw.githubusercontent install.ps1 download and the pinned
 #     ZIP fallback are NOT redirected (real network, as shipped).
 #   * serve.git gets uploadpack.allowAnySHA1InWant=true so the installer's
@@ -198,7 +198,7 @@ function Stop-DesktopRecorder($proc, [string]$OutDir) {
 
 function Stop-HermesAppProcesses([string]$Label) {
     # Close the desktop app the blunt way between legs (a user quitting).
-    # Only Hermes.exe (Electron) — never hermes.exe (the venv CLI shim).
+    # Only Hermes.exe (Electron) -- never hermes.exe (the venv CLI shim).
     $procs = @(Get-Process -Name "Hermes" -ErrorAction SilentlyContinue)
     foreach ($p in $procs) {
         try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
@@ -226,7 +226,7 @@ function Get-ManagedNode {
 }
 
 # ----------------------------------------------------------------------------
-# Phase: stage — reuse the contract driver's stage (identical staging)
+# Phase: stage -- reuse the contract driver's stage (identical staging)
 # ----------------------------------------------------------------------------
 function Invoke-PhaseStage {
     Write-Step "STAGE (gui): delegating to windows-desktop-e2e.ps1 -Phase stage"
@@ -244,7 +244,7 @@ function Invoke-PhaseStage {
 }
 
 # ----------------------------------------------------------------------------
-# Phase: install-gui — website Hermes-Setup.exe, headed, AHK-driven
+# Phase: install-gui -- website Hermes-Setup.exe, headed, AHK-driven
 # ----------------------------------------------------------------------------
 function Invoke-PhaseInstallGui {
     $state = Read-State
@@ -287,7 +287,7 @@ function Invoke-PhaseInstallGui {
     try {
         Save-DesktopScreenshot (Join-Path $proof "00-before-installer.png")
 
-        # Launch the REAL installer, headed — exactly a double-click.
+        # Launch the REAL installer, headed -- exactly a double-click.
         $installer = Start-Process -FilePath $setupExe -PassThru
         Write-Host "  Hermes-Setup.exe launched (pid $($installer.Id))"
 
@@ -334,14 +334,14 @@ function Invoke-PhaseInstallGui {
     # Close the freshly launched app (user quits after first look).
     Stop-HermesAppProcesses "post-install"
 
-    # The website exe installs its baked release pin — record it as the
+    # The website exe installs its baked release pin -- record it as the
     # "before" version. It must differ from CURRENT (an update is genuinely
     # available). We do NOT require it to be an ancestor of CURRENT: on a
     # real `push: main` run CURRENT is main's tip and the release pin is
     # behind it (ancestor), but on a feature branch CURRENT has diverged
     # from main, so the release pin legitimately isn't in its ancestry. The
     # update leg resets the checkout to serve.git's main ref regardless, and
-    # asserts it lands on CURRENT — that is the real forward-update proof.
+    # asserts it lands on CURRENT -- that is the real forward-update proof.
     $installedSha = Get-InstalledHead
     Write-Host "  installer landed on: $installedSha (website release pin)"
     Assert-True ($installedSha -ne $state.current) "installed pin differs from CURRENT (an update is genuinely available)"
@@ -352,7 +352,7 @@ function Invoke-PhaseInstallGui {
     if ($isAncestor) {
         Write-Host "  [ok] installed pin is an ancestor of CURRENT (linear before -> current)"
     } else {
-        Write-Host "  [note] installed pin is NOT an ancestor of CURRENT — expected on a diverged feature branch; the update leg still resets to CURRENT"
+        Write-Host "  [note] installed pin is NOT an ancestor of CURRENT -- expected on a diverged feature branch; the update leg still resets to CURRENT"
     }
     Test-HermesRuns "post-install-gui"
     Assert-True ($null -ne (Get-DesktopExe)) "packaged Desktop Hermes.exe exists"

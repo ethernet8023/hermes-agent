@@ -6,14 +6,14 @@
 ; the real Hermes.exe (Electron desktop) window to appear.
 ;
 ; Adapted from @ethernet8023's e2e/windows/install-hermes-desktop.ahk
-; (PR #68183) — same ImageSearch approach; the install-button template was
+; (PR #68183) -- same ImageSearch approach; the install-button template was
 ; re-captured from a live CI frame (the #68183 templates predated the
 ; installer UI restyle to the "[ INSTALL ]" bracket look and never matched).
 ;
-; Robustness beyond the original — every one earned from a real CI failure:
+; Robustness beyond the original -- every one earned from a real CI failure:
 ;   * Log() survives a missing stdout. GUI-subsystem AHK started via
 ;     Start-Process has no console, so FileAppend to '*' throws
-;     "(6) The handle is invalid" — that single throw killed attempt 1.
+;     "(6) The handle is invalid" -- that single throw killed attempt 1.
 ;   * We wait for a REAL-sized installer window before reading geometry.
 ;     ahk_exe matched a hidden 16x16 helper window first (attempt 2's
 ;     "Window found at ... w=16 h=16"), so relative-position math was
@@ -131,7 +131,7 @@ try {
     Log("WARNING: could not activate installer window")
 }
 
-; ── Step 1: click Install ───────────────────────────────────────────────
+; -- Step 1: click Install -----------------------------------------------
 installClicked := false
 deadline := A_TickCount + 30000
 while (A_TickCount < deadline) {
@@ -150,8 +150,8 @@ if !installClicked {
     Log("FALLBACK: install template never matched; clicked window-relative position")
 }
 
-; ── Step 2: wait for the install to finish ──────────────────────────────
-; Primary: the "bootstrap complete" line in the installer's own log — the
+; -- Step 2: wait for the install to finish ------------------------------
+; Primary: the "bootstrap complete" line in the installer's own log -- the
 ; authoritative done signal. Secondary: the Launch button template.
 launchX := 0, launchY := 0
 launchFound := false
@@ -187,7 +187,7 @@ if (complete and !launchFound) {
     }
 }
 
-; ── Step 3: click Launch — the hand-off under test ──────────────────────
+; -- Step 3: click Launch -- the hand-off under test ----------------------
 if launchFound {
     ClickWithMarker(launchX, launchY)
     Log("Launch clicked (template)")

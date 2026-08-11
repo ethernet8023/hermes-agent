@@ -211,10 +211,13 @@ $installerOk = $false
 try {
     $proc = Start-Process -FilePath $InstallerPath -PassThru
     $ahkLog = Join-Path $LogDir "ahk.log"
+    # The helper polls for the installer's own completion signal instead of a
+    # second button screenshot (see paths.rs likely_bootstrap_marker).
+    $bootstrapMarker = Join-Path $InstallRoot ".hermes-bootstrap-complete"
     # -NoNewWindow attaches our console as the GUI-subsystem exe's stdout so
     # the helper's live lines land in the job log as they happen.
     $ahkProc = Start-Process -FilePath "AutoHotkey64.exe" -NoNewWindow `
-        -ArgumentList "`"$PSScriptRoot\install-hermes-desktop.ahk`"", "`"$ahkLog`"" -PassThru
+        -ArgumentList "`"$PSScriptRoot\install-hermes-desktop.ahk`"", "`"$ahkLog`"", "`"$bootstrapMarker`"" -PassThru
 
     # Tail the bootstrap log into the job log while we wait: the install IS
     # the substance of this test, and a failure explanation should not need

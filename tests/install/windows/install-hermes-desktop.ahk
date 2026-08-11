@@ -2,18 +2,25 @@
 #SingleInstance Force
 
 ; Drives the Hermes bootstrap installer (Hermes-Setup.exe) through a real
-; install: waits for the window, clicks Install, waits for the Launch button
-; to appear (install finished), then closes the window WITHOUT launching the
-; app -- the E2E driver verifies the install and runs the update route itself.
+; install: waits for the window, clicks Install, waits for the
+; bootstrap-complete marker file (the installer writes it after every stage
+; has finished, before the Launch screen renders), then closes the window
+; WITHOUT launching the app -- the E2E driver verifies the install and runs
+; the update route itself.
 ;
 ; Args:
 ;   1: log file path (default ahk.log in the working dir)
+;   2: bootstrap-complete marker path to poll for (required)
 ;
-; Button images live next to this script. They are literal screenshots of the
-; installer's buttons; ImageSearch runs with *10 shade tolerance so minor
-; rendering differences (ClearType, DPI rounding) still match.
+; The Install button image lives next to this script. It is a literal crop
+; of the published installer's button from a CI screen recording;
+; ImageSearch runs with a generous shade tolerance because the reference
+; passed through video compression. Completion deliberately does NOT use a
+; second button image: the marker file is the installer's own completion
+; signal and cannot go stale with a UI restyle.
 
 logPath := A_Args.Length >= 1 ? A_Args[1] : "ahk.log"
+markerPath := A_Args.Length >= 2 ? A_Args[2] : ""
 
 Log(text) {
     msg := Format("[autohotkey] {}`n", text)
@@ -91,7 +98,9 @@ FindImageInWindow(winTitle, imageFile, &outX, &outY, timeoutMs := 10000, interva
     timeLeft := 1
 
     Log(Format("Searching for button file {} in window {}...", imageFile, winTitle))
-    searchImage := Format("*10 {}", imageFile)
+    ; *60: the reference crop survived H.264 video compression, so per-channel
+    ; drift up to ~60 shades must still count as a match.
+    searchImage := Format("*60 {}", imageFile)
     while (timeLeft > 0)
     {
         if ImageSearch(&x, &y, wx, wy, wx + ww, wy + wh, searchImage)
@@ -126,18 +135,44 @@ try {
 WinGetPos(&x, &y, &w, &h, winTitle)
 Log(Format("Window found at x={1} y={2} w={3} h={4}", x, y, w, h))
 
-ClickCenterOfImageInWindow(winTitle, A_ScriptDir "\install-button.png")
+if (markerPath = "") {
+    throw Error("marker path argument is required")
+}
 
-; Wait for the install to finish. The Launch button only renders when every
-; stage (git, uv, Python, Node, venv, desktop build) has completed, so its
-; appearance IS the success signal. A real install takes many minutes.
-FindImageInWindow(winTitle, A_ScriptDir "\launch-button.png", &launchX, &launchY, 1000 * 60 * 25)
+; The reference crop went through H.264 compression, so allow a wide shade
+; tolerance; retry the click a few times in case the first lands during a
+; window animation frame.
+clicked := false
+attempts := 0
+while (!clicked && attempts < 5) {
+    attempts += 1
+    try {
+        ClickCenterOfImageInWindow(winTitle, A_ScriptDir "\install-button.png", 20000, 250)
+        clicked := true
+    } catch as err {
+        Log(Format("Install click attempt {} failed: {}", attempts, err.Message))
+        Sleep(2000)
+    }
+}
+if (!clicked) {
+    throw Error("could not find/click the Install button after " attempts " attempts")
+}
 
-; Close instead of clicking Launch: the E2E driver owns everything after the
-; install, and a launched desktop would hold the venv shim open and block the
-; update route.
-WinClose(winTitle)
-
-Sleep(2000)
-
-ExitApp(0)
+; Wait for the installer's own completion signal: the bootstrap-complete
+; marker is written after the last stage succeeds. A real install takes many
+; minutes (git, uv, Python, Node, venv, desktop build).
+Log(Format("Waiting for bootstrap-complete marker: {}", markerPath))
+deadline := A_TickCount + 1000 * 60 * 25
+while (A_TickCount < deadline) {
+    if FileExist(markerPath) {
+        Log("Marker found -- install complete")
+        ; Close instead of clicking Launch: the E2E driver owns everything
+        ; after the install, and a launched desktop would hold the venv shim
+        ; open and block the update route.
+        try WinClose(winTitle)
+        Sleep(2000)
+        ExitApp(0)
+    }
+    Sleep(5000)
+}
+throw Error("bootstrap-complete marker never appeared within 25 minutes")

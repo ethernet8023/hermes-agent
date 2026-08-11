@@ -146,8 +146,10 @@ if (markerPath = "") {
 ; recording, whose chroma subsampling smears the glyph edges -- the same
 ; crop matches a RECORDING of this screen within 8 shades/channel while
 ; missing the live screen entirely. The reliable path is PixelSearch for
-; the saturated blue of the "[ INSTALL ]" text, which is the only blue in
-; the lower half of the window (the title is in the upper third).
+; the saturated blue of the "[ INSTALL ]" text. Scan only BELOW 55% of the
+; window height: the HERMES AGENT title is blue too, and its bottom rows
+; reach ~47% -- a boundary that clips them makes every attempt click the
+; title (run 31446691812 clicked "blue text at 220, 330" ten times).
 FindInstallClickPoint(winTitle, &outX, &outY) {
     WinGetPos(&wx, &wy, &ww, &wh, winTitle)
     try {
@@ -156,7 +158,7 @@ FindInstallClickPoint(winTitle, &outX, &outY) {
         return true
     } catch {
     }
-    lowerY := wy + Floor(wh * 0.45)
+    lowerY := wy + Floor(wh * 0.55)
     if PixelSearch(&px, &py, wx, lowerY, wx + ww, wy + wh, 0x3B82F6, 90) {
         outX := px
         outY := py
@@ -170,7 +172,7 @@ FindInstallClickPoint(winTitle, &outX, &outY) {
 ; the progress view, so lingering blue in the lower half means it did not.
 InstallButtonStillVisible(winTitle) {
     WinGetPos(&wx, &wy, &ww, &wh, winTitle)
-    lowerY := wy + Floor(wh * 0.45)
+    lowerY := wy + Floor(wh * 0.55)
     return PixelSearch(&px, &py, wx, lowerY, wx + ww, wy + wh, 0x3B82F6, 90)
 }
 

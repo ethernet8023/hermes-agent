@@ -201,20 +201,64 @@ async function main() {
   await page.waitForTimeout(1200)
   await shot(page, '05-updating-overlay')
 
-  // ── Wait for the app to quit for the hand-off ─────────────────────────
-  await new Promise((resolve, reject) => {
-    const t = setTimeout(
-      () => reject(new Error('app did not quit within 120s of Update now — hand-off did not start')),
-      120_000
-    )
+  // ── Wait for the hand-off to take over ────────────────────────────────
+  // Clicking Update now spawns the detached updater (desktop-update.ps1 or
+  // the staged binary), which claims HERMES_HOME/.hermes-update-in-progress
+  // and then the desktop quits. We do NOT rely on Playwright's app 'close'
+  // event: when the app self-quits for the hand-off that event is
+  // unreliable (attempt 8 timed out on it even though the hand-off log
+  // proved the desktop had exited and `hermes update` was already running).
+  //
+  // The authoritative "hand-off started" signal is the marker file (or the
+  // result JSON, if the whole update finished fast). Poll for either, and
+  // also accept a genuine app close. Any one is success — the PowerShell
+  // driver owns asserting the update's OUTCOME (sha, marker cleanup,
+  // relaunch) after we return.
+  const hermesHome = process.env.HERMES_HOME
+  const markerPath = hermesHome ? path.join(hermesHome, '.hermes-update-in-progress') : null
+  const resultPath = hermesHome ? path.join(hermesHome, '.hermes-update-result.json') : null
 
-    app.on('close', () => {
-      clearTimeout(t)
-      resolve()
-    })
+  let appClosed = false
+  app.on('close', () => {
+    appClosed = true
   })
 
-  log('app quit for updater hand-off — success, the detached updater owns the rest')
+  const handoffDeadline = Date.now() + 150_000
+  let handoffStarted = false
+
+  while (Date.now() < handoffDeadline) {
+    if (markerPath && fs.existsSync(markerPath)) {
+      log('hand-off marker present — updater has taken over')
+      handoffStarted = true
+      break
+    }
+    if (resultPath && fs.existsSync(resultPath)) {
+      log('update result JSON already present — updater finished fast')
+      handoffStarted = true
+      break
+    }
+    if (appClosed) {
+      log('app closed — hand-off in progress')
+      handoffStarted = true
+      break
+    }
+    // Secondary: if the renderer window is gone, evaluate throws.
+    try {
+      await page.evaluate(() => true)
+    } catch {
+      log('renderer window gone — app quit for hand-off')
+      handoffStarted = true
+      break
+    }
+    await new Promise(r => setTimeout(r, 2000))
+  }
+
+  if (!handoffStarted) {
+    await shot(page, 'ERROR-no-handoff')
+    throw new Error('no hand-off within 150s of Update now (no marker, no result, app still alive)')
+  }
+
+  log('hand-off confirmed — detached updater owns the rest')
 }
 
 main()

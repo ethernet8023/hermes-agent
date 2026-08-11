@@ -127,8 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           matrices="$(node scripts/sandbox/generate-e2e-matrix.mjs \
-            --tags '${{ needs.pick-releases.outputs.tags }}' \
-            --route '${{ inputs.route || 'all' }}')"
+            --tags '${{ needs.pick-releases.outputs.tags }}')"
           echo "$matrices"
           for key in linux windows macos; do
             echo "$key=$(echo "$matrices" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(d)[process.argv[1]])))' "$key")" >> "$GITHUB_OUTPUT"
@@ -136,7 +135,10 @@ jobs:
 
   linux:
     name: ${{ matrix.name }}
-    if: fromJSON(needs.generate-matrix.outputs.linux).include[0] != null
+    # The update/installer route choices map to the linux update methods;
+    # either way the whole linux matrix runs (legs are cheap and the
+    # distinction wasn't worth a filter layer in the generator).
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "both", "update", "installer"]'), inputs.route)
     needs: generate-matrix
     strategy:
       # One leg breaking is worth knowing about even if another already
@@ -152,7 +154,7 @@ jobs:
 
   windows:
     name: ${{ matrix.name }}
-    if: fromJSON(needs.generate-matrix.outputs.windows).include[0] != null
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "windows-desktop"]'), inputs.route)
     needs: generate-matrix
     strategy:
       fail-fast: false
@@ -169,7 +171,7 @@ jobs:
 
   macos:
     name: ${{ matrix.name }}
-    if: fromJSON(needs.generate-matrix.outputs.macos).include[0] != null
+    if: github.event_name != 'workflow_dispatch' || inputs.route == 'all'
     needs: generate-matrix
     strategy:
       fail-fast: false

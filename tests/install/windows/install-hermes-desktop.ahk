@@ -146,10 +146,11 @@ if (markerPath = "") {
 ; recording, whose chroma subsampling smears the glyph edges -- the same
 ; crop matches a RECORDING of this screen within 8 shades/channel while
 ; missing the live screen entirely. The reliable path is PixelSearch for
-; the saturated blue of the "[ INSTALL ]" text. Scan only BELOW 55% of the
-; window height: the HERMES AGENT title is blue too, and its bottom rows
-; reach ~47% -- a boundary that clips them makes every attempt click the
-; title (run 31446691812 clicked "blue text at 220, 330" ten times).
+; the saturated blue of the "[ INSTALL ]" text. Scan only the CENTER THIRD
+; horizontally and BELOW 55% of the window height: the HERMES AGENT title
+; is blue too (bottom rows ~47% -- run 31446691812 clicked it ten times),
+; and the post-click PROGRESS view has blue stage text on the left side
+; (run 31447405319 clicked that while the install was running fine).
 FindInstallClickPoint(winTitle, &outX, &outY) {
     WinGetPos(&wx, &wy, &ww, &wh, winTitle)
     try {
@@ -158,8 +159,10 @@ FindInstallClickPoint(winTitle, &outX, &outY) {
         return true
     } catch {
     }
-    lowerY := wy + Floor(wh * 0.55)
-    if PixelSearch(&px, &py, wx, lowerY, wx + ww, wy + wh, 0x3B82F6, 90) {
+    x1 := wx + Floor(ww * 0.33)
+    x2 := wx + Floor(ww * 0.67)
+    y1 := wy + Floor(wh * 0.55)
+    if PixelSearch(&px, &py, x1, y1, x2, wy + wh, 0x3B82F6, 90) {
         outX := px
         outY := py
         Log(Format("Install button located via PixelSearch (blue text at {1}, {2})", px, py))
@@ -168,17 +171,22 @@ FindInstallClickPoint(winTitle, &outX, &outY) {
     return false
 }
 
-; Did the click land? The button's blue text vanishes when the UI flips to
-; the progress view, so lingering blue in the lower half means it did not.
-InstallButtonStillVisible(winTitle) {
-    WinGetPos(&wx, &wy, &ww, &wh, winTitle)
-    lowerY := wy + Floor(wh * 0.55)
-    return PixelSearch(&px, &py, wx, lowerY, wx + ww, wy + wh, 0x3B82F6, 90)
+; Did the click land? Check whether the blue we clicked is still at THAT
+; SPOT (small box around the click point): the button vanishes when the UI
+; flips to the progress view, and a point check cannot false-positive on
+; the progress view's own blue elsewhere in the window.
+BlueStillAt(x, y) {
+    return PixelSearch(&px, &py, x - 12, y - 12, x + 12, y + 12, 0x3B82F6, 90)
 }
 
-clicked := false
+; Best-effort clicking: NEVER throw here. The authoritative signals are
+; owned elsewhere -- the driver aborts on "bootstrap FAILED" in the
+; installer log, and the marker wait below caps the run. Run 31447405319
+; killed a healthy mid-install run because this loop threw on its own
+; flawed UI heuristic; that class of failure must stay impossible.
 attempts := 0
-while (!clicked && attempts < 10) {
+everClicked := false
+while (attempts < 10) {
     attempts += 1
     ; ImageSearch/PixelSearch read SCREEN pixels: anything covering the
     ; installer (the runner session keeps a maximized console in front)
@@ -190,20 +198,24 @@ while (!clicked && attempts < 10) {
     x := 0
     y := 0
     if (!FindInstallClickPoint(winTitle, &x, &y)) {
-        Log(Format("Install click attempt {}: button not found on screen", attempts))
+        if (everClicked) {
+            ; Click already landed and this is the progress view.
+            Log(Format("Attempt {}: button gone after click; proceeding to marker wait", attempts))
+            break
+        }
+        ; Welcome screen may still be rendering.
+        Log(Format("Attempt {}: no Install button in scan band yet; waiting", attempts))
         Sleep(2000)
         continue
     }
     ClickWithMarker(x, y)
+    everClicked := true
     Sleep(3000)
-    if (InstallButtonStillVisible(winTitle)) {
-        Log(Format("Install click attempt {}: UI did not advance; retrying", attempts))
-        continue
+    if (!BlueStillAt(x, y)) {
+        Log("Install click landed (button gone from click point)")
+        break
     }
-    clicked := true
-}
-if (!clicked) {
-    throw Error("could not find/click the Install button after " attempts " attempts")
+    Log(Format("Install click attempt {}: blue persists at click point; retrying", attempts))
 }
 
 ; Wait for the installer's own completion signal: the bootstrap-complete

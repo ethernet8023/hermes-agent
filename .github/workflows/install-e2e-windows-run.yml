@@ -82,6 +82,32 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ffmpeg records the screen for the whole run so a failed click is
+      # diagnosable from the artifact instead of by guesswork. NOT
+      # preinstalled on windows-latest; the driver skips recording
+      # gracefully when it's absent, so this step is what makes the
+      # recording actually happen. Cached — winget's ffmpeg download is
+      # the slow part.
+      - name: Restore cached ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ${{ runner.temp }}\test-bins\ffmpeg
+          key: e2e-ffmpeg-${{ runner.os }}-v1
+
+      - name: Install ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $bins = "$env:RUNNER_TEMP\test-bins\ffmpeg"
+          New-Item -ItemType Directory -Path $bins -Force | Out-Null
+          winget install -e --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements --disable-interactivity --location "$env:RUNNER_TEMP\ffmpeg_dir"
+          Copy-Item -Path "$env:RUNNER_TEMP\ffmpeg_dir\*\*" -Destination $bins -Recurse -Force
+
+      - name: Add ffmpeg to PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\test-bins\ffmpeg\bin"
+
       - name: Stage serve repo (main -> OLD)
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route ${{ inputs.route }} -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}

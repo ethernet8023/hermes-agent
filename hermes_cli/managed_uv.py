@@ -832,9 +832,10 @@ def _stage_candidate_venv(
     # drains the child's stdout while the child runs; a full stderr pipe
     # (~64KB) blocks uv forever. Run 31453853006 hung 43 minutes in this
     # exact call. Merging into stdout keeps the output streaming through
-    # the pipe that IS drained. Old installed bases run their old copy of
-    # the hand-off script, so the fix must live here, on the Python side
-    # the update refreshes before dependencies are installed.
+    # the pipe that IS drained. This module is imported lazily by
+    # update_cmd AFTER the git reset, so even an update running from an
+    # old base executes THIS copy — unlike main.py, which is imported at
+    # startup and only protects bases that already ship its twin fix.
     synced = subprocess.run(
         [
             uv_bin,

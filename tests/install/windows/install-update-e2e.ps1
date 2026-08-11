@@ -416,12 +416,14 @@ switch ($Route) {
             $handoffErrLog = Join-Path $LogDir "desktop-update.err.log"
             # Run 31449642122 hung 65 minutes inside "Updating Python
             # dependencies" with zero output from uv, and the job-level
-            # timeout killed the run before anything could say why. Two
-            # countermeasures: uv debug tracing (uv reads RUST_LOG), and a
-            # driver-owned deadline (same 45 minutes the staged-exe branch
-            # gets) so THIS script outlives the hang and can dump the live
-            # process table before GitHub cancels the job.
-            $env:RUST_LOG = "uv=debug"
+            # timeout killed the run before anything could say why. So the
+            # hand-off runs under a driver-owned deadline (same 45 minutes
+            # the staged-exe branch gets): THIS script outlives a hang and
+            # dumps the live process table before GitHub cancels the job.
+            # Do NOT set RUST_LOG here: the installed base's Python pipes
+            # uv's stderr without draining it (the very bug this axis
+            # exposed), so debug tracing FLOODS that pipe and manufactures
+            # the deadlock it was meant to diagnose (run 31457301901).
             $hp = Start-Process -FilePath "powershell" -ArgumentList @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $handoff,
                 "-InstallRoot", $InstallRoot, "-Branch", "main",
@@ -441,7 +443,6 @@ switch ($Route) {
                     }
                 }
             }
-            $env:RUST_LOG = $null
             if (-not $hp.HasExited) {
                 Write-Host "--- handoff still running at the 45-minute deadline ---"
                 Write-Host "--- live processes (who is actually stuck): ---"

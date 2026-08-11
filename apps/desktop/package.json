@@ -275,6 +275,7 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false,
+      "include": "assets/installer.nsh",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico",

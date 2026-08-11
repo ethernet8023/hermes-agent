@@ -73,7 +73,10 @@ permissions:
 
 jobs:
   e2e:
-    name: "${{ inputs.install-method }} -> ${{ inputs.update-method }}"
+    # Static name on purpose: the caller's job name already carries the
+    # method pair, and GitHub renders name expressions UNEXPANDED (literal
+    # "${{ inputs... }}") on natively skipped jobs.
+    name: run
     # The one pair the driver can run today. Anything else is a declared
     # TODO: native skip, so the coverage gap is a grey check on every run.
     if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'desktop-app'

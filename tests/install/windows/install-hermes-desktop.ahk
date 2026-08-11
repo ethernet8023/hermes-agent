@@ -139,27 +139,66 @@ if (markerPath = "") {
     throw Error("marker path argument is required")
 }
 
-; The reference crop went through H.264 compression, so allow a wide shade
-; tolerance; retry the click a few times in case the first lands during a
-; window animation frame.
+; Find the Install button and click it.
+;
+; ImageSearch against the reference crop is attempted first, but it is
+; expected to fail on a real screen: the crop came from an H.264/yuv420p
+; recording, whose chroma subsampling smears the glyph edges -- the same
+; crop matches a RECORDING of this screen within 8 shades/channel while
+; missing the live screen entirely. The reliable path is PixelSearch for
+; the saturated blue of the "[ INSTALL ]" text, which is the only blue in
+; the lower half of the window (the title is in the upper third).
+FindInstallClickPoint(winTitle, &outX, &outY) {
+    WinGetPos(&wx, &wy, &ww, &wh, winTitle)
+    try {
+        FindImageInWindow(winTitle, A_ScriptDir "\install-button.png", &outX, &outY, 3000, 250)
+        Log("Install button located via ImageSearch")
+        return true
+    } catch {
+    }
+    lowerY := wy + Floor(wh * 0.45)
+    if PixelSearch(&px, &py, wx, lowerY, wx + ww, wy + wh, 0x3B82F6, 90) {
+        outX := px
+        outY := py
+        Log(Format("Install button located via PixelSearch (blue text at {1}, {2})", px, py))
+        return true
+    }
+    return false
+}
+
+; Did the click land? The button's blue text vanishes when the UI flips to
+; the progress view, so lingering blue in the lower half means it did not.
+InstallButtonStillVisible(winTitle) {
+    WinGetPos(&wx, &wy, &ww, &wh, winTitle)
+    lowerY := wy + Floor(wh * 0.45)
+    return PixelSearch(&px, &py, wx, lowerY, wx + ww, wy + wh, 0x3B82F6, 90)
+}
+
 clicked := false
 attempts := 0
-while (!clicked && attempts < 5) {
+while (!clicked && attempts < 10) {
     attempts += 1
-    try {
-        ; ImageSearch reads SCREEN pixels: anything covering the installer
-        ; (the runner session keeps a maximized console in front) makes the
-        ; button invisible even though WinWait's title match succeeded.
-        ; Force the installer to the foreground before every attempt.
-        WinActivate(winTitle)
-        WinMoveTop(winTitle)
-        Sleep(500)
-        ClickCenterOfImageInWindow(winTitle, A_ScriptDir "\install-button.png", 20000, 250)
-        clicked := true
-    } catch as err {
-        Log(Format("Install click attempt {} failed: {}", attempts, err.Message))
+    ; ImageSearch/PixelSearch read SCREEN pixels: anything covering the
+    ; installer (the runner session keeps a maximized console in front)
+    ; hides the button even though WinWait's title match succeeded. Force
+    ; the installer to the foreground before every attempt.
+    WinActivate(winTitle)
+    WinMoveTop(winTitle)
+    Sleep(500)
+    x := 0
+    y := 0
+    if (!FindInstallClickPoint(winTitle, &x, &y)) {
+        Log(Format("Install click attempt {}: button not found on screen", attempts))
         Sleep(2000)
+        continue
     }
+    ClickWithMarker(x, y)
+    Sleep(3000)
+    if (InstallButtonStillVisible(winTitle)) {
+        Log(Format("Install click attempt {}: UI did not advance; retrying", attempts))
+        continue
+    }
+    clicked := true
 }
 if (!clicked) {
     throw Error("could not find/click the Install button after " attempts " attempts")

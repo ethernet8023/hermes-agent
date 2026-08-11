@@ -6,20 +6,23 @@
 ; the real Hermes.exe (Electron desktop) window to appear.
 ;
 ; Adapted from @ethernet8023's e2e/windows/install-hermes-desktop.ahk
-; (PR #68183) — same ImageSearch approach and button templates; this
-; variant targets windows by process name (ahk_exe) so the installer
-; window and the launched app window (both titled "Hermes") can't be
-; confused, and it clicks Launch instead of closing the window, because
-; the Launch hand-off is part of the flow under test.
+; (PR #68183) — same ImageSearch approach; the install-button template was
+; re-captured from a live CI frame (the #68183 templates predated the
+; installer UI restyle to the "[ INSTALL ]" bracket look and never matched).
 ;
-; Robustness beyond the original:
-;   * Log() survives a missing stdout (GUI-subsystem AHK started without a
-;     console throws "(6) The handle is invalid" on FileAppend to '*' —
-;     that single throw killed the whole first CI attempt).
-;   * If a button template doesn't match (installer UI restyled), falls
-;     back to clicking the button's known relative position, and the
-;     install-finished signal falls back to "bootstrap complete" in
-;     bootstrap-installer.log. Every fallback is logged loudly.
+; Robustness beyond the original — every one earned from a real CI failure:
+;   * Log() survives a missing stdout. GUI-subsystem AHK started via
+;     Start-Process has no console, so FileAppend to '*' throws
+;     "(6) The handle is invalid" — that single throw killed attempt 1.
+;   * We wait for a REAL-sized installer window before reading geometry.
+;     ahk_exe matched a hidden 16x16 helper window first (attempt 2's
+;     "Window found at ... w=16 h=16"), so relative-position math was
+;     computed against a phantom rect.
+;   * Clicks fall back to a SCREEN-fraction position when the template
+;     doesn't match (the Tauri window is effectively full-screen on the
+;     runner, so screen ~= window). Button center measured at ~0.50, 0.59.
+;   * Install-finished has a second signal: "bootstrap complete" in
+;     bootstrap-installer.log, so a Launch-template miss can't strand us.
 ;
 ; Args: [1] log path  [2] setup exe name  [3] bootstrap-installer.log path
 
@@ -30,61 +33,64 @@ bootstrapLog := A_Args.Length >= 3 ? A_Args[3] : ""
 Log(text) {
     msg := Format("[autohotkey] {}`n", text)
     ToolTip(text)
-    ; stdout only exists when AHK was launched from a console. Under
-    ; Start-Process (no console) FileAppend to '*' throws "(6) The handle
-    ; is invalid" — and a Log() that throws kills the whole script from
-    ; inside OnError. The file log below is the real record.
-    try FileAppend(msg, '*')
+    try FileAppend(msg, '*')   ; stdout may not exist (no console)
     FileAppend(msg, logPath)
 }
 
 OnError(LogError)
-
 LogError(err, mode) {
     Log(Format("Unhandled error: {}", err.Message))
     ExitApp(1)
-    return -1  ; suppress the standard error dialog
+    return -1
 }
 
 SetWorkingDir(A_ScriptDir)
 CoordMode("Pixel", "Screen")
 CoordMode("Mouse", "Screen")
 
-ClickWithMarker(x, y, button := "Left") {
-    Click(x, y, button)
+ClickWithMarker(x, y) {
+    Click(x, y)
     Sleep(10)
     MouseMove(30, 30)
     Log(Format("Clicked at {1}, {2}", x, y))
 }
 
-; Single-pass image search inside a window. Returns true + center coords.
-TryFindImage(winTitle, imageFile, &outX, &outY) {
-    try {
-        WinGetPos(&wx, &wy, &ww, &wh, winTitle)
-    } catch {
-        return false
+; Wait until an installer window exists AND has a real (non-phantom) size,
+; then return its rect. ahk_exe can transiently match a hidden helper.
+WaitForRealWindow(winTitle, timeoutMs) {
+    deadline := A_TickCount + timeoutMs
+    while (A_TickCount < deadline) {
+        for hwnd in WinGetList(winTitle) {
+            try {
+                WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " hwnd)
+                if (ww > 400 && wh > 300) {
+                    return { hwnd: hwnd, x: wx, y: wy, w: ww, h: wh }
+                }
+            } catch {
+                continue
+            }
+        }
+        Sleep(500)
     }
+    throw Error(Format("no real-sized window matched {} within {}ms", winTitle, timeoutMs))
+}
+
+; Image search inside a rect. Returns true + center coords.
+TryFindImage(rect, imageFile, &outX, &outY) {
     hBitmap := LoadPicture(imageFile)
     if !hBitmap {
         throw Error("LoadPicture failed: " imageFile)
     }
-    bm := Buffer(32, 0) ; BITMAP structure on x64
+    bm := Buffer(32, 0)
     DllCall("GetObject", "Ptr", hBitmap, "Int", bm.Size, "Ptr", bm)
     width := NumGet(bm, 4, "Int")
     height := NumGet(bm, 8, "Int")
-    if ImageSearch(&x, &y, wx, wy, wx + ww, wy + wh, Format("*10 {}", imageFile)) {
+    if ImageSearch(&x, &y, rect.x, rect.y, rect.x + rect.w, rect.y + rect.h, Format("*20 {}", imageFile)) {
         outX := x + Floor(width / 2)
         outY := y + Floor(height / 2)
         return true
     }
     return false
-}
-
-; Fractional window position -> screen coords (fallback click target).
-WindowRelPoint(winTitle, fx, fy, &outX, &outY) {
-    WinGetPos(&wx, &wy, &ww, &wh, winTitle)
-    outX := wx + Floor(ww * fx)
-    outY := wy + Floor(wh * fy)
 }
 
 BootstrapLogContains(needle) {
@@ -93,8 +99,7 @@ BootstrapLogContains(needle) {
         return false
     }
     try {
-        ; Read-share open: the installer still holds the file for writing.
-        f := FileOpen(bootstrapLog, "r-d")
+        f := FileOpen(bootstrapLog, "r-d")   ; read, share read+write
         if !f {
             return false
         }
@@ -109,26 +114,26 @@ BootstrapLogContains(needle) {
 installerWin := "ahk_exe " setupExe
 appWin := "ahk_exe Hermes.exe"
 
-; The Install/Launch button sits centered horizontally near the bottom of
-; the installer window (measured from production screenshots; used only
-; when the image template fails to match a restyled UI).
+; Button center as a fraction of the window rect (installer is ~full-screen
+; on the runner). Measured from a live CI frame: center ~ (0.50, 0.59).
 BTN_FX := 0.50
-BTN_FY := 0.87
+BTN_FY := 0.59
 
-Log("Waiting for the installer window (" installerWin ") ...")
+Log("Waiting for a real-sized installer window (" installerWin ") ...")
+rect := WaitForRealWindow(installerWin, 90000)
+Log(Format("Installer window: x={1} y={2} w={3} h={4}", rect.x, rect.y, rect.w, rect.h))
 try {
-    WinWait(installerWin, , 60)
+    WinActivate("ahk_id " rect.hwnd)
+    Sleep(500)
 } catch {
-    throw Error("installer window did not appear within 60s")
+    Log("WARNING: could not activate installer window")
 }
-WinGetPos(&x, &y, &w, &h, installerWin)
-Log(Format("Window found at x={1} y={2} w={3} h={4}", x, y, w, h))
 
-; ── Step 1: click Install (template first, relative-position fallback) ──
+; ── Step 1: click Install ───────────────────────────────────────────────
 installClicked := false
-deadline := A_TickCount + 60000
+deadline := A_TickCount + 30000
 while (A_TickCount < deadline) {
-    if TryFindImage(installerWin, A_ScriptDir "\install-button.png", &ix, &iy) {
+    if TryFindImage(rect, A_ScriptDir "\install-button.png", &ix, &iy) {
         ClickWithMarker(ix, iy)
         Log("Install clicked (template match)")
         installClicked := true
@@ -137,48 +142,58 @@ while (A_TickCount < deadline) {
     Sleep(500)
 }
 if !installClicked {
-    WindowRelPoint(installerWin, BTN_FX, BTN_FY, &ix, &iy)
+    ix := rect.x + Floor(rect.w * BTN_FX)
+    iy := rect.y + Floor(rect.h * BTN_FY)
     ClickWithMarker(ix, iy)
-    Log("FALLBACK: install template never matched; clicked relative position")
+    Log("FALLBACK: install template never matched; clicked window-relative position")
 }
 
 ; ── Step 2: wait for the install to finish ──────────────────────────────
-; Primary signal: the Launch button template appears. Secondary signal:
-; "bootstrap complete" in bootstrap-installer.log (the installer's own
-; completion line) — after which we give the template 2 more minutes and
-; then fall back to the relative-position click.
+; Primary: the "bootstrap complete" line in the installer's own log — the
+; authoritative done signal. Secondary: the Launch button template.
 launchX := 0, launchY := 0
 launchFound := false
-completeSince := 0
+complete := false
 waitDeadline := A_TickCount + 1000 * 60 * 45
-Log("Waiting for install to finish (Launch template or bootstrap log) ...")
+Log("Waiting for install to finish (bootstrap log or Launch template) ...")
 while (A_TickCount < waitDeadline) {
-    if TryFindImage(installerWin, A_ScriptDir "\launch-button.png", &launchX, &launchY) {
+    if BootstrapLogContains("bootstrap complete") {
+        complete := true
+        Log("bootstrap-installer.log reports completion")
+        break
+    }
+    ; refresh the rect (window can move/resize between stages)
+    try rect := WaitForRealWindow(installerWin, 2000)
+    if TryFindImage(rect, A_ScriptDir "\launch-button.png", &launchX, &launchY) {
         launchFound := true
         Log("Install finished (Launch template visible)")
         break
     }
-    if (completeSince = 0 and BootstrapLogContains("bootstrap complete")) {
-        completeSince := A_TickCount
-        Log("bootstrap-installer.log reports completion; giving the Launch template 120s")
-    }
-    if (completeSince > 0 and A_TickCount - completeSince > 120000) {
-        Log("FALLBACK: log says complete but Launch template never matched")
-        break
-    }
     Sleep(2000)
 }
-if (!launchFound and completeSince = 0) {
-    throw Error("install did not finish within 45 minutes (no Launch button, no completion log line)")
+if (!launchFound and !complete) {
+    throw Error("install did not finish within 45 minutes (no completion log line, no Launch button)")
+}
+
+; Give the button a moment to swap Install -> Launch after completion.
+if (complete and !launchFound) {
+    Sleep(2000)
+    try rect := WaitForRealWindow(installerWin, 10000)
+    if TryFindImage(rect, A_ScriptDir "\launch-button.png", &launchX, &launchY) {
+        launchFound := true
+        Log("Launch template matched after completion")
+    }
 }
 
 ; ── Step 3: click Launch — the hand-off under test ──────────────────────
 if launchFound {
     ClickWithMarker(launchX, launchY)
+    Log("Launch clicked (template)")
 } else {
-    WindowRelPoint(installerWin, BTN_FX, BTN_FY, &lx, &ly)
+    lx := rect.x + Floor(rect.w * BTN_FX)
+    ly := rect.y + Floor(rect.h * BTN_FY)
     ClickWithMarker(lx, ly)
-    Log("FALLBACK: clicked Launch at relative position")
+    Log("FALLBACK: clicked Launch at window-relative position")
 }
 Log("Launch clicked; waiting for the Hermes desktop app window")
 
@@ -191,9 +206,6 @@ try {
 WinGetPos(&ax, &ay, &aw, &ah, appWin)
 Log(Format("App window appeared at x={1} y={2} w={3} h={4}", ax, ay, aw, ah))
 
-; Give the renderer a few seconds on screen (recorded as proof), then hand
-; control back to the PowerShell driver, which closes the app and re-launches
-; it under Playwright for the update legs.
-Sleep(8000)
+Sleep(8000)   ; let the renderer paint (recorded as proof)
 Log("done")
 ExitApp(0)

@@ -114,6 +114,32 @@ if (-not $env:HERMES_HOME) {
 $InstallRoot = Join-Path $env:HERMES_HOME "hermes-agent"
 $TargetSha = Invoke-Git @("rev-parse", "HEAD")
 
+# Pre-seed the managed uv. install.ps1's Install-Uv runs astral's installer
+# with UV_INSTALL_DIR pointing into HERMES_HOME\bin and discards its output --
+# but when an astral install RECEIPT exists (GitHub runners ship uv
+# preinstalled with one), the cargo-dist installer updates the receipt's
+# location in place and ignores UV_INSTALL_DIR, so the managed path stays
+# empty and the stage fails blind ("uv installed but not found", run
+# 31447045981). Install-Uv short-circuits on an existing managed uv, so
+# seeding it is a legitimate user state, not a bypass.
+$managedBin = Join-Path $env:HERMES_HOME "bin"
+New-Item -ItemType Directory -Force -Path $managedBin | Out-Null
+$uvOnRunner = Get-Command uv.exe -ErrorAction SilentlyContinue
+if ($uvOnRunner) {
+    Copy-Item $uvOnRunner.Source (Join-Path $managedBin "uv.exe") -Force
+    Ok "seeded managed uv from runner: $($uvOnRunner.Source)"
+} else {
+    # No preinstalled uv means no receipt, so the plain astral path works --
+    # with output visible, unlike Install-Uv's.
+    $env:UV_INSTALL_DIR = $managedBin
+    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+    Remove-Item Env:\UV_INSTALL_DIR
+    if (-not (Test-Path (Join-Path $managedBin "uv.exe"))) {
+        Fail "could not seed managed uv into $managedBin"
+    }
+    Ok "seeded managed uv via astral installer"
+}
+
 # --- fake GitHub -------------------------------------------------------------
 
 Step "seeding fake remote at $FakeRepo"
@@ -238,6 +264,14 @@ try {
                 $line = $logReader.ReadLine()
                 while ($null -ne $line) {
                     Write-Host "[bootstrap] $line"
+                    # The installer's failure screen waits for a human (Retry
+                    # button); the AHK helper would idle out its full marker
+                    # deadline. Abort as soon as the log says the run is dead.
+                    if ($line -match "bootstrap FAILED") {
+                        Stop-Process -Id $ahkProc.Id -Force -ErrorAction SilentlyContinue
+                        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                        Fail "installer reported: $line"
+                    }
                     $line = $logReader.ReadLine()
                 }
             }

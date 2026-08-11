@@ -304,7 +304,10 @@ function Invoke-PhaseStage {
     # user who installed on release day is on.
     $oldRef = $InstallRef
     if (-not $oldRef -or $oldRef -eq "auto") {
-        $oldRef = (Invoke-Git @("-C", $RepoRoot, "tag", "--list", "v*", "--sort=-creatordate") -split "`r?`n" | Select-Object -First 1)
+        # Parens matter: without them PowerShell binds -split as an
+        # argument to Invoke-Git instead of an operator on its result.
+        $tagList = Invoke-Git @("-C", $RepoRoot, "tag", "--list", "v*", "--sort=-creatordate")
+        $oldRef = ($tagList -split "\r?\n" | Select-Object -First 1)
         if (-not $oldRef) { throw "no v* release tags in the checkout and no -InstallRef given -- cannot pick an OLD version" }
     }
     $old = Invoke-Git @("-C", $RepoRoot, "rev-parse", "$oldRef^{commit}")

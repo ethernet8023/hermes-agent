@@ -413,10 +413,57 @@ switch ($Route) {
             # the wait-for-desktop gate (no desktop is running); no
             # -RelaunchExe so nothing is launched afterwards.
             $handoffLog = Join-Path $LogDir "desktop-update.log"
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $handoff `
-                -InstallRoot $InstallRoot -Branch main -DesktopPid 0 -NoUi 2>&1 |
-                Tee-Object -FilePath $handoffLog
-            $handoffExit = $LASTEXITCODE
+            $handoffErrLog = Join-Path $LogDir "desktop-update.err.log"
+            # Run 31449642122 hung 65 minutes inside "Updating Python
+            # dependencies" with zero output from uv, and the job-level
+            # timeout killed the run before anything could say why. Two
+            # countermeasures: uv debug tracing (uv reads RUST_LOG), and a
+            # driver-owned deadline (same 45 minutes the staged-exe branch
+            # gets) so THIS script outlives the hang and can dump the live
+            # process table before GitHub cancels the job.
+            $env:RUST_LOG = "uv=debug"
+            $hp = Start-Process -FilePath "powershell" -ArgumentList @(
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $handoff,
+                "-InstallRoot", $InstallRoot, "-Branch", "main",
+                "-DesktopPid", "0", "-NoUi"
+            ) -RedirectStandardOutput $handoffLog -RedirectStandardError $handoffErrLog `
+                -PassThru -NoNewWindow
+            $handoffDeadline = (Get-Date).AddMinutes(45)
+            $tailPos = 0
+            # Poll-tail the log into the job console so progress stays live.
+            while (-not $hp.HasExited -and (Get-Date) -lt $handoffDeadline) {
+                Start-Sleep -Seconds 15
+                if (Test-Path $handoffLog) {
+                    $content = Get-Content $handoffLog -Raw -ErrorAction SilentlyContinue
+                    if ($content -and $content.Length -gt $tailPos) {
+                        Write-Host ($content.Substring($tailPos)) -NoNewline
+                        $tailPos = $content.Length
+                    }
+                }
+            }
+            $env:RUST_LOG = $null
+            if (-not $hp.HasExited) {
+                Write-Host "--- handoff still running at the 45-minute deadline ---"
+                Write-Host "--- live processes (who is actually stuck): ---"
+                Get-CimInstance Win32_Process |
+                    Where-Object { $_.Name -match "uv|python|git|node|hermes|powershell|pip" } |
+                    Select-Object ProcessId, ParentProcessId, CreationDate, Name, CommandLine |
+                    Format-Table -AutoSize -Wrap | Out-String -Width 4096 | Write-Host
+                if (Test-Path $handoffErrLog) {
+                    Write-Host "--- desktop-update.err.log (last 100 lines) ---"
+                    Get-Content $handoffErrLog -Tail 100 | ForEach-Object { Write-Host $_ }
+                }
+                taskkill /PID $hp.Id /T /F 2>$null | Out-Null
+                Fail "desktop-update.ps1 hung past 45 minutes -- process table above, full logs in artifacts"
+            }
+            # Flush whatever the poll loop had not printed yet.
+            if (Test-Path $handoffLog) {
+                $content = Get-Content $handoffLog -Raw -ErrorAction SilentlyContinue
+                if ($content -and $content.Length -gt $tailPos) {
+                    Write-Host ($content.Substring($tailPos)) -NoNewline
+                }
+            }
+            $handoffExit = $hp.ExitCode
 
             $handoffInternalLog = Join-Path $env:HERMES_HOME "logs\desktop-update-handoff.log"
             if (Test-Path $handoffInternalLog) { Copy-Item $handoffInternalLog $LogDir -Force }

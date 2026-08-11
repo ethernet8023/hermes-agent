@@ -236,6 +236,23 @@ Step "installing via Hermes-Setup.exe (real toolchains: git, uv, Python, Node, v
 $installerOk = $false
 try {
     $proc = Start-Process -FilePath $InstallerPath -PassThru
+
+    # Lossless PNG of the welcome screen, taken BEFORE the AHK helper starts
+    # so no tooltip or click marker contaminates it. This is the artifact the
+    # ImageSearch reference crop is made from: the ffmpeg recording is
+    # H.264/yuv420p, whose chroma subsampling shifts glyph pixels enough that
+    # a crop from video never matches the live screen.
+    Start-Sleep -Seconds 10
+    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+    $gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+    $gfx.Dispose()
+    $bmp.Save((Join-Path $LogDir "welcome-screen.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    Ok "welcome screen captured (lossless) to welcome-screen.png"
+
     $ahkLog = Join-Path $LogDir "ahk.log"
     # The helper polls for the installer's own completion signal instead of a
     # second button screenshot (see paths.rs likely_bootstrap_marker).

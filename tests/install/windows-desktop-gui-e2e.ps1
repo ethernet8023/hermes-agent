@@ -428,14 +428,34 @@ function Invoke-GuiUpdateLeg([string]$TargetSha, [string]$LegName, [string]$LegS
         # target sha AND the marker is gone). The sha/marker/hermes/relaunch
         # asserts below are the hard gate either way; the JSON is asserted
         # only when the script path produced it.
-        Write-Host "  waiting for the detached updater to finish ..."
-        $deadline = (Get-Date).AddMinutes(40)
+        #
+        # This can take a LONG time: the website release we installed is weeks
+        # of main behind CURRENT, so the update pulls a large diff AND does a
+        # full Electron desktop rebuild (vite + electron-builder) plus a uv
+        # sync. The desktop-build output goes to logs/update.log (not the
+        # streamed handoff log), so we tail update.log here to show progress
+        # instead of going silent for tens of minutes.
+        Write-Host "  waiting for the detached updater to finish (up to 90 min; large release->CURRENT rebuild) ..."
+        $updateLog = Join-Path $HermesHome "logs\update.log"
+        $updateLogPos = 0
+        $deadline = (Get-Date).AddMinutes(90)
         while ((Get-Date) -lt $deadline) {
             if (Test-Path -LiteralPath $resultPath) { break }
             $head = ""
             try { $head = Get-InstalledHead } catch {}
             if ($head -eq $TargetSha -and -not (Test-Path -LiteralPath $markerPath)) { break }
-            Start-Sleep -Seconds 10
+            # Tail any new update.log lines so the desktop-rebuild phase is
+            # visible in the CI step output.
+            if (Test-Path -LiteralPath $updateLog) {
+                try {
+                    $lines = Get-Content -LiteralPath $updateLog -ErrorAction SilentlyContinue
+                    if ($lines.Count -gt $updateLogPos) {
+                        $lines[$updateLogPos..($lines.Count - 1)] | ForEach-Object { Write-Host "    update.log| $_" }
+                        $updateLogPos = $lines.Count
+                    }
+                } catch {}
+            }
+            Start-Sleep -Seconds 20
         }
         if (Test-Path -LiteralPath $resultPath) {
             $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json

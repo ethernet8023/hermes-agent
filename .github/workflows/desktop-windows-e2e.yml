@@ -121,7 +121,7 @@ jobs:
   gui-e2e:
     name: "REAL flow: website setup.exe → GUI update → GUI update"
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     # Deliberately NOT `needs: e2e` — the jobs run independently, so each
     # provides rollback coverage for the other and a GUI-layer flake cannot
     # mask a machinery regression.

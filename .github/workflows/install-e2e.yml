@@ -14,8 +14,9 @@ name: Install & Update E2E
 #     .yml): the website's Hermes-Setup.exe clicked by AutoHotkey, then the
 #     update driven through the app itself, Playwright clicking "Update now";
 #   * combinations the spec declares but CI can't drive yet (macOS, the
-#     remaining windows install/update methods) surface as skipped jobs so
-#     the coverage gap is enumerable instead of buried in comments.
+#     remaining windows install/update methods) fan out too, one NATIVELY
+#     SKIPPED check per combo, so every coverage gap is enumerable from the
+#     Checks tab.
 #
 # The linux starting versions are chosen at runtime from the repo's release
 # tags (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread
@@ -154,19 +155,17 @@ jobs:
       route: ${{ matrix.route }}
       install-ref: ${{ matrix.install_ref }}
 
-  # Declared-but-unimplemented combinations. Each shows up as its own skipped
-  # check so coverage gaps are enumerable from the Checks tab; implementing
-  # one moves it from here into IMPLEMENTED in the generator.
+  # Declared-but-unimplemented combinations: one job per combo, each a
+  # NATIVE skip (grey, conclusion=skipped, no runner). Matrix context is not
+  # available in job-level `if`, so the native skip lives in the called
+  # workflow instead: its inner job is gated on an input that defaults to
+  # false and is never passed. Implementing a combo moves it into
+  # IMPLEMENTED in the generator.
   skipped:
-    name: "skipped: ${{ matrix.os }}: ${{ matrix.install }} -> ${{ matrix.update }}"
+    name: "todo: ${{ matrix.os }}: ${{ matrix.install }} -> ${{ matrix.update }}"
     if: fromJSON(needs.generate-matrix.outputs.skipped).include[0] != null
     needs: generate-matrix
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.skipped) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - run: >-
-          echo "SKIPPED (${{ matrix.reason }}) -- ${{ matrix.os }} install via
-          '${{ matrix.install }}', update via '${{ matrix.update }}'"
+    uses: ./.github/workflows/install-e2e-skip.yml

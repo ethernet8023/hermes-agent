@@ -1,0 +1,33 @@
+name: Install & Update E2E — unsupported combo (reusable)
+
+# A declared-but-unimplemented {os, install-method, update-method}
+# combination from scripts/sandbox/generate-e2e-matrix.mjs. The caller fans
+# out one of these per unsupported combo so every coverage gap is its own
+# named, NATIVELY SKIPPED check (grey, conclusion=skipped, no runner) in the
+# Checks tab.
+#
+# `implemented` stays at its false default until the combo has a real
+# driver; flipping a combo to implemented happens in the generator (move it
+# into IMPLEMENTED and point it at a real reusable workflow), never by
+# setting this input.
+
+on:
+  workflow_call:
+    inputs:
+      implemented:
+        description: 'Never set this. Combos become implemented by moving into IMPLEMENTED in generate-e2e-matrix.mjs, not by flipping the flag.'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  todo:
+    name: not implemented yet
+    if: inputs.implemented
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: 'true'

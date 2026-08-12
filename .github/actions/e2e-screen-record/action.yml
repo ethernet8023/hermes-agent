@@ -58,6 +58,14 @@ runs:
         # Do not trust "preinstalled" claims - verify, install on miss.
         command -v ffmpeg >/dev/null 2>&1 || brew install --quiet ffmpeg
 
+        # until new runner image is published by github, we have to hack on screen record approvals
+        # see hhttps://github.com/actions/runner-images/issues/14474 - as of this hermes agent commit,
+        # it's merged but the image isn't updated.
+        approvalsPlist="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals.plist"
+        mkdir -p "$(dirname "$approvalsPlist")"
+        defaults write "$approvalsPlist" "/opt/hca/hosted-compute-agent" -date "3024-01-01 00:00:00 +0000"
+        killall cfprefsd 2>/dev/null || true
+
     - name: Restore cached ffmpeg (windows)
       if: inputs.mode == 'start' && runner.os == 'Windows'
       id: ffmpeg-cache

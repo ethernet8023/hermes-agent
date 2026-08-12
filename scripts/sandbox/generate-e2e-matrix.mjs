@@ -254,10 +254,10 @@ export function renderMarkdownPlan(envs, tags) {
  */
 export function renderMarkdownResults(jobs) {
   const LEG = /^(linux|windows|macos): (\S+) -> (\S+) \((\S+) -> HEAD\) \//;
-  // A combination can surface as SEVERAL jobs with the same leg name (the
-  // windows run workflow has one arm per driver; exactly one runs and the
-  // others natively skip), so cells merge by significance: a real outcome
-  // always beats a skip, and a bad outcome beats a good one.
+  // A combination can surface as SEVERAL jobs with the same leg name (a
+  // run workflow may have one inner job per driver arm; exactly one runs
+  // and the others natively skip), so cells merge by significance: a real
+  // outcome always beats a skip, and a bad outcome beats a good one.
   const RANK = ['skip', '&#x2705;', 'running', 'cancelled', '&#x274C;'];
   /** @type {Map<string, Map<string, string>>} */
   const rows = new Map();

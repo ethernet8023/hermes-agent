@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prove a user who installed OLD via the installer script can reach HEAD.
 #
-# The POSIX sibling of tests/install/windows-desktop-gui-e2e.ps1, sharing its
+# The POSIX sibling of tests/install/windows-e2e.ps1, sharing its
 # staging trick and replacing the old bubblewrap sandbox: instead of a fake
 # Internet (MITM proxy + upload-pack shim), every git process is pointed at a
 # local bare clone with url.<file://serve.git>.insteadOf rewrites for both

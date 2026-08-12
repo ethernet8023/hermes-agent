@@ -1,48 +1,34 @@
-name: Install & Update E2E — Windows desktop (reusable)
-
-# Runs ONE Windows {install-method, update-method} combination: install
-# OLD, then update OLD -> HEAD through the route a user would take.
+# Reusable runner for ONE Windows install/update combination.
 #
-# The Windows sibling of install-e2e-run.yml. No bubblewrap anywhere -- the
-# drivers fake GitHub with git's own transport rewrite: a driver-owned
-# GIT_CONFIG_GLOBAL carrying url.<file://serve.git>.insteadOf for both
-# canonical repo URLs, so the installer and updater run byte-for-byte
-# against their real URLs and land on a local bare repo. Its `main` serves
-# OLD (install-ref, default: the newest release tag) during the install,
-# then advances to HEAD for the update leg -- an update becomes available
-# exactly the way it does for a real user.
+# One job, two orthogonal axes: tests/install/windows-e2e.ps1 dispatches its
+# install phase on install-method and its update phase on update-method, so
+# implementing a new pair is a driver function + a gate edit here - never a
+# new job. The driver's phases share state via the workroot, and every leg
+# runs the REAL user surface for its methods:
 #
-# Two install arms, two drivers:
-#   desktop-installer@latest  the REAL desktop user flow
-#                             (tests/install/windows-desktop-gui-e2e.ps1):
-#                             the website's published Hermes-Setup.exe runs
-#                             headed, AutoHotkey clicks Install -> Launch,
-#                             the real Electron window must appear. Update
-#                             methods:
-#                               open-app-update  the app's own Update
-#                                           button, app launched from the
-#                                           installed Hermes.exe: it runs
-#                                           under Playwright's Electron
-#                                           driver, which clicks Settings
-#                                           -> About -> "Update now"; the
-#                                           production hand-off chain runs
-#                                           untouched.
-#                               (hermes-update, desktop-installer@latest,
-#                               installer-script re-run,
-#                               hermes-desktop-app-update: declared TODOs.)
-#   installer-script          the irm | iex one-liner
-#                             (tests/install/windows-installer-script-e2e
-#                             .ps1): runs the install.ps1 shipped AT the
-#                             OLD ref, headless. Update methods:
-#                               hermes-update     venv hermes.exe update
-#                               installer-script  re-run HEAD's install.ps1
-#                               (open-app-update and
-#                               hermes-desktop-app-update from a script
-#                               install: TODO.)
+#   desktop-installer@latest    the website's Hermes-Setup.exe, downloaded and
+#                               run headed, AutoHotkey clicks Install ->
+#                               Launch, the real Electron window must appear.
+#   installer-script            the irm | iex one-liner: the install.ps1
+#                               shipped AT the OLD ref, headless.
+#   installer-script+desktop    the same one-liner with -IncludeDesktop:
+#                               builds Hermes.exe AND registers Start Menu /
+#                               Desktop shortcuts.
+#   hermes-update               venv hermes.exe update.
+#   open-app-update             the app's own Update button, app launched
+#                               from the installed exe under Playwright's
+#                               Electron driver (Settings -> About ->
+#                               "Update now"); the production hand-off chain
+#                               runs untouched.
+#   hermes-desktop-app-update   the same button, app launched via `hermes
+#                               desktop`: the driver captures the product's
+#                               own spawn (argv/cwd/env) and re-executes it
+#                               under Playwright.
 #
-# Method pairs without a driver yet NATIVELY SKIP (grey check, no runner):
-# the capability knowledge lives here, next to the drivers, so the caller
-# can dispatch every declared combination without knowing which ones work.
+# Method pairs without a driver arm yet NATIVELY SKIP (grey check, no
+# runner): the capability knowledge lives here, next to the driver, so the
+# caller can dispatch every declared combination without knowing which ones
+# work.
 #
 # Call it:
 #
@@ -54,6 +40,8 @@ name: Install & Update E2E — Windows desktop (reusable)
 #         update-method: open-app-update
 #         install-ref: v2026.8.3
 
+name: install-e2e windows leg
+
 on:
   workflow_call:
     inputs:
@@ -62,7 +50,7 @@ on:
         required: true
         type: string
       update-method:
-        description: 'How the install updates to HEAD. Supported: open-app-update (Update button under Playwright, app launched from the installed exe, from a desktop install) and hermes-update / installer-script (from a script install). Declared-but-TODO pairs (incl. hermes-desktop-app-update) skip.'
+        description: 'How the install updates to HEAD. Supported: open-app-update (Update button under Playwright, from a desktop-bearing install), hermes-desktop-app-update (same button, app launched via hermes desktop), hermes-update, installer-script, installer-script+desktop. desktop-installer@latest re-run is a declared TODO and skips.'
         required: true
         type: string
       install-ref:
@@ -90,15 +78,24 @@ permissions:
   contents: read
 
 jobs:
-  # ---- arm 1: install via the website's Hermes-Setup.exe (GUI) -------------
   e2e:
-    name: Hermes-Setup.exe
-    # The one pair the driver can run today, and only from a starting
-    # version that ships the desktop app (the caller annotates
-    # tag-has-desktop from the tag's own tree; releases before #20059 have
-    # no window to launch and no Update button to click). Anything else is
-    # a native skip: a declared-TODO method pair, or a pre-desktop tag.
-    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'open-app-update' && inputs.tag-has-desktop
+    # Short static name on purpose: name expressions render UNEXPANDED on
+    # skipped jobs.
+    name: e2e
+    # The implemented {install x update} pairs. Two rules feed the table:
+    #   * every desktop-surface method needs the starting tag to ship
+    #     apps/desktop (pre-desktop releases have no window to launch, no
+    #     Update button to click, no -IncludeDesktop to pass);
+    #   * open-app-update needs an OS entry point, which only the
+    #     desktop-bearing installs create.
+    # desktop-installer@latest as an UPDATE method is the one declared TODO.
+    if: >-
+      (inputs.install-method == 'installer-script'
+        || (contains(fromJSON('["installer-script+desktop", "desktop-installer@latest"]'), inputs.install-method) && inputs.tag-has-desktop))
+      && (contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
+        || (contains(fromJSON('["installer-script+desktop", "hermes-desktop-app-update"]'), inputs.update-method) && inputs.tag-has-desktop)
+        || (inputs.update-method == 'open-app-update' && inputs.tag-has-desktop
+            && contains(fromJSON('["desktop-installer@latest", "installer-script+desktop"]'), inputs.install-method)))
     runs-on: windows-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -112,9 +109,8 @@ jobs:
 
     steps:
       # Full history: the driver bare-clones this checkout as the repo the
-      # installer/updater talk to, and the installer's baked release pin
-      # must be reachable in that clone. A shallow checkout cannot serve
-      # either need.
+      # installer/updater talk to, and both OLD and HEAD must be reachable
+      # in that clone. A shallow checkout cannot serve either need.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
@@ -131,15 +127,15 @@ jobs:
 
       - name: Stage serve repo (main -> ${{ inputs.install-ref }})
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-e2e.ps1 -Phase stage -InstallMethod "${{ inputs.install-method }}" -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
-      - name: Install ${{ inputs.install-ref }} via website Hermes-Setup.exe (headed, AHK-clicked)
+      - name: Install ${{ inputs.install-ref }} (${{ inputs.install-method }})
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase install-gui -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-e2e.ps1 -Phase install -InstallMethod "${{ inputs.install-method }}" -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
       - name: Update ${{ inputs.install-ref }} -> HEAD (${{ inputs.update-method }})
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-e2e.ps1 -Phase update -InstallMethod "${{ inputs.install-method }}" -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
       - name: Stop screen recording
         if: always()
@@ -158,6 +154,7 @@ jobs:
           $home_ = Join-Path $work "hermes-home"
           foreach ($pair in @(
             @{ src = (Join-Path $work "proof");                          dst = "proof" },
+            @{ src = (Join-Path $work "logs");                           dst = "driver-logs" },
             @{ src = (Join-Path $work "shas.json");                      dst = "shas.json" },
             @{ src = (Join-Path $home_ "logs");                          dst = "logs" },
             @{ src = (Join-Path $home_ ".hermes-update-result.json");    dst = ".hermes-update-result.json" }
@@ -169,60 +166,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: install-e2e-windows-${{ inputs.update-method }}-${{ inputs.install-ref }}-${{ github.sha }}
+          name: install-e2e-windows-${{ inputs.install-method }}-${{ inputs.update-method }}-${{ inputs.install-ref }}-${{ github.sha }}
           path: gui-e2e-proof
-          retention-days: 14
-          if-no-files-found: ignore
-
-  # ---- arm 2: install via the irm | iex one-liner (headless) ---------------
-  script-e2e:
-    # Same static-name reasoning as e2e above.
-    name: install.ps1
-    # The pairs the script driver can run today. open-app-update and
-    # hermes-desktop-app-update from a script install are declared TODOs
-    # (the desktop app also has to be BUILT by
-    # that path first). The +desktop variants also need the starting tag
-    # to ship apps/desktop (the -IncludeDesktop parameter shipped with it).
-    if: >-
-      (inputs.install-method == 'installer-script'
-        || (inputs.install-method == 'installer-script+desktop' && inputs.tag-has-desktop))
-      && (contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
-        || (inputs.update-method == 'installer-script+desktop' && inputs.tag-has-desktop))
-    runs-on: windows-latest
-    timeout-minutes: ${{ inputs.timeout-minutes }}
-
-    steps:
-      # Full history: the driver bare-clones this checkout as the repo the
-      # installer/updater talk to, and both OLD and HEAD must be reachable
-      # in that clone.
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-
-      - name: Start screen recording
-        uses: ./.github/actions/e2e-screen-record
-        with:
-          mode: start
-          output: ${{ runner.temp }}\e2e-logs\recording.mkv
-
-      - name: Run install + update E2E
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-installer-script-e2e.ps1 -InstallMethod "${{ inputs.install-method }}" -UpdateMethod "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}"
-        env:
-          HERMES_E2E_LOG_DIR: ${{ runner.temp }}\e2e-logs
-
-      - name: Stop screen recording
-        if: always()
-        uses: ./.github/actions/e2e-screen-record
-        with:
-          mode: stop
-          output: ${{ runner.temp }}\e2e-logs\recording.mkv
-
-      - name: Upload installer logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: install-e2e-windows-script-${{ inputs.update-method }}-${{ inputs.install-ref }}-${{ github.sha }}
-          path: ${{ runner.temp }}\e2e-logs
           retention-days: 14
           if-no-files-found: ignore

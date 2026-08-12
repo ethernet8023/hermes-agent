@@ -11,7 +11,7 @@ The test family has four layers. Each layer has one job.
 1. `scripts/sandbox/generate-e2e-matrix.mjs` declares the support matrix. It lists every {os, install-method, update-method} pair. It expands the pairs against the sampled release tags. It knows nothing about which pairs CI can run.
 2. `.github/workflows/install-e2e.yml` is the primary workflow. It picks the release tags, runs the generator, and fans out one matrix job per OS. It also writes the plan chart and the result chart on the run summary.
 3. The run workflows own the capability knowledge. `install-e2e-run.yml` serves linux and macos with one OS-agnostic driver. `install-e2e-windows-run.yml` serves windows. A job-level `if:` gate in each run workflow lists the pairs its driver can run. All other pairs skip natively and show as grey.
-4. The drivers do the work. `tests/install/installer-script-e2e.sh` is the POSIX driver. `tests/install/windows-installer-script-e2e.ps1` is the windows script driver. `tests/install/windows-desktop-gui-e2e.ps1` is the windows GUI driver.
+4. The drivers do the work. `tests/install/installer-script-e2e.sh` is the POSIX driver. `tests/install/windows-e2e.ps1` is the windows driver; its install phase and update phase dispatch on separate method parameters, so any implemented update method can follow any implemented install method.
 
 To declare a new method, edit the generator. To implement a method, flip the gate in the run workflow and extend a driver.
 
@@ -33,7 +33,7 @@ Each leg with the script drivers has these phases:
 4. Update: move `main` to HEAD. Apply one update method. Make sure that the checkout is at HEAD and that `hermes --version` works.
 5. Desktop smoke again, at HEAD.
 
-The windows GUI driver replaces phases 2 and 4. It downloads the published `Hermes-Setup.exe`, clicks through the installer window with AutoHotkey, and clicks "Update now" in the running app with Playwright.
+The windows GUI driver replaces phases 2 and 4 when the install method is `desktop-installer@latest`. It downloads the published `Hermes-Setup.exe`, clicks through the installer window with AutoHotkey, and clicks "Update now" in the running app with Playwright.
 
 ## Old versions
 

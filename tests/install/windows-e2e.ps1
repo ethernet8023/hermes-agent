@@ -61,22 +61,31 @@
 #     Real GUI users are on the official origin and never see it.
 #
 # USAGE (local Windows box or CI):
-#   powershell -File tests\install\windows-desktop-gui-e2e.ps1 -Phase all
-#   ... -Phase stage / install-gui / update-gui
+#   powershell -File tests\install\windows-e2e.ps1 -Phase all
+#   ... -Phase stage / install / update
 #   Phases share state via <workroot>\shas.json, so CI can run them as
-#   separate steps for readable logs.
+#   separate steps for readable logs. -InstallMethod and -Route are
+#   orthogonal axes: the install phase dispatches on -InstallMethod, the
+#   update phase on -Route, and install writes what update needs (paths,
+#   how OLD landed) into the shared state - so any implemented update can
+#   follow any implemented install.
 # ============================================================================
 
 param(
-    [ValidateSet("stage", "install-gui", "update-gui", "all")]
+    [ValidateSet("stage", "install", "update", "all")]
     [string]$Phase = "all",
 
-    # Update method to exercise in the update-gui phase, named by the same
-    # ids the combination generator (scripts/sandbox/generate-e2e-matrix
-    # .mjs) declares. Only "open-app-update" (the app's own Update button,
-    # app launched from the installed exe) is implemented; the others are
-    # declared arms so the surface is stable when they land.
-    [ValidateSet("open-app-update", "hermes-desktop-app-update", "hermes-update", "desktop-installer@latest", "installer-script")]
+    # How OLD gets installed, named by the same ids the combination
+    # generator (scripts/sandbox/generate-e2e-matrix.mjs) declares.
+    [ValidateSet("desktop-installer@latest", "installer-script", "installer-script+desktop")]
+    [string]$InstallMethod = "desktop-installer@latest",
+
+    # Update method to exercise in the update phase, same id namespace.
+    # open-app-update (from a desktop-installer install) and hermes-update /
+    # installer-script / installer-script+desktop (from script installs) are
+    # implemented; the rest are declared arms so the surface is stable when
+    # they land.
+    [ValidateSet("open-app-update", "hermes-desktop-app-update", "hermes-update", "desktop-installer@latest", "installer-script", "installer-script+desktop")]
     [string]$Route = "open-app-update",
 
     # The OLD version: the ref served as `main` while the installer runs,
@@ -207,6 +216,130 @@ function Test-HermesRuns([string]$Label) {
     Assert-True (Test-Path -LiteralPath $hermesExe) "$Label -- venv\Scripts\hermes.exe exists"
     & $hermesExe --version 2>&1 | ForEach-Object { Write-Host "    hermes --version| $_" }
     Assert-True ($LASTEXITCODE -eq 0) "$Label -- hermes --version exits 0"
+}
+
+# ----------------------------------------------------------------------------
+# Script-install arm: the irm | iex one-liner, headless (the install.ps1
+# shipped AT the ref under test, run with flags probed from that ref's own
+# script text - older releases reject parameters added later).
+# ----------------------------------------------------------------------------
+function Write-LogGroup([string]$Title, [string]$LogPath) {
+    Write-Host "::group::$Title"
+    if (Test-Path -LiteralPath $LogPath) { Get-Content -LiteralPath $LogPath | Write-Host }
+    Write-Host "::endgroup::"
+}
+
+function Invoke-RefInstaller {
+    param([string]$Ref, [string]$Label, [switch]$IncludeDesktop)
+    $script = Join-Path $WorkRoot "install-$Label.ps1"
+    (Invoke-Git @("-C", $RepoRoot, "show", "$Ref`:scripts/install.ps1")) -join "`n" |
+        Set-Content -LiteralPath $script -Encoding UTF8
+    $flags = @("-SkipSetup", "-HermesHome", $HermesHome, "-InstallDir", $InstallDir)
+    $text = Get-Content -LiteralPath $script -Raw
+    if ($text -match '\$NonInteractive') { $flags += "-NonInteractive" }
+    if ($IncludeDesktop) {
+        # The desktop stage is the point of this leg: a ref without the
+        # parameter is a hard failure, not a silent plain install.
+        if ($text -notmatch '\$IncludeDesktop') {
+            throw "E2E ASSERTION FAILED: ref $Ref does not support -IncludeDesktop; this leg cannot mean what it claims"
+        }
+        $flags += "-IncludeDesktop"
+    }
+    New-Item -ItemType Directory -Path (Join-Path $WorkRoot "logs") -Force | Out-Null
+    $log = Join-Path $WorkRoot "logs\install-$Label.log"
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $script @flags *> $log
+    $installExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    Write-LogGroup "install.ps1 ($Label) transcript" $log
+    Assert-True ($installExit -eq 0) "install.ps1 ($Label) exited 0"
+}
+
+function Assert-DesktopArtifact([string]$Label) {
+    Assert-True ($null -ne (Get-DesktopExe)) "$Label -- desktop app built by installer under apps\desktop\release"
+}
+
+function Invoke-HermesUpdate {
+    # The venv updater. --yes reaches the update subcommand only in later
+    # releases; ask the installed binary, never parse its source.
+    $hermesExe = Join-Path $InstallDir "venv\Scripts\hermes.exe"
+    $updateArgs = @("update")
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    $helpText = & $hermesExe update --help 2>&1 | Out-String
+    if ($helpText -match '--yes') { $updateArgs += "--yes" }
+    New-Item -ItemType Directory -Path (Join-Path $WorkRoot "logs") -Force | Out-Null
+    $log = Join-Path $WorkRoot "logs\update.log"
+    Push-Location $InstallDir
+    try {
+        & $hermesExe @updateArgs *> $log
+        $updateExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $prevEap
+    }
+    Write-LogGroup "hermes update transcript" $log
+    Assert-True ($updateExit -eq 0) "hermes update exited 0"
+}
+
+function Invoke-HermesDesktopAppUpdate([string]$TargetSha) {
+    # The hermes-desktop launch surface: `hermes desktop` runs its whole
+    # real pipeline; the driver intercepts the product's final spawn
+    # (argv/cwd/env captured by e2e-assets/launch-capture/sitecustomize.py)
+    # and re-executes it under Playwright, which clicks Update now.
+    $hermesExe = Join-Path $InstallDir "venv\Scripts\hermes.exe"
+    $spec = Join-Path $WorkRoot "launch-spec.json"
+    New-Item -ItemType Directory -Path (Join-Path $WorkRoot "logs") -Force | Out-Null
+    $log = Join-Path $WorkRoot "logs\desktop-launch-capture.log"
+
+    $capDir = Join-Path $AssetsDir "launch-capture"
+    $prevPy = $env:PYTHONPATH
+    $prevCap = $env:HERMES_E2E_CAPTURE_LAUNCH
+    $env:PYTHONPATH = if ($prevPy) { "$capDir;$prevPy" } else { $capDir }
+    $env:HERMES_E2E_CAPTURE_LAUNCH = $spec
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    Push-Location $InstallDir
+    try {
+        & $hermesExe desktop *> $log
+        $capExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $prevEap
+        $env:PYTHONPATH = $prevPy
+        $env:HERMES_E2E_CAPTURE_LAUNCH = $prevCap
+    }
+    Write-LogGroup "hermes desktop (launch capture) transcript" $log
+    Assert-True ($capExit -eq 0) "hermes desktop exited 0 during launch capture"
+    Assert-True (Test-Path -LiteralPath "$spec.captured") "a launch was actually captured (exit 0 without a launch must not pass)"
+
+    $node = Get-ManagedNode
+    $driverDir = Join-Path $WorkRoot "pw-driver"
+    New-Item -ItemType Directory -Path $driverDir -Force | Out-Null
+    $npmCli = Join-Path (Split-Path -Parent $node) "node_modules\npm\bin\npm-cli.js"
+    Assert-True (Test-Path -LiteralPath $npmCli) "managed npm exists beside the managed node"
+    Push-Location $driverDir
+    try {
+        & $node $npmCli install --no-save --no-audit --no-fund "@playwright/test@$PlaywrightVersion" 2>&1 |
+            Select-Object -Last 5 | ForEach-Object { Write-Host "  npm| $_" }
+        $npmExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    Assert-True ($npmExit -eq 0) "npm install @playwright/test@$PlaywrightVersion into the driver dir"
+
+    Copy-Item (Join-Path $AssetsDir "launch-from-spec.mjs") (Join-Path $driverDir "launch-from-spec.mjs") -Force
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    Push-Location $driverDir
+    try {
+        & $node "launch-from-spec.mjs" --spec $spec `
+            --result (Join-Path $HermesHome ".hermes-update-result.json") `
+            --expect-sha $TargetSha --repo-dir $InstallDir 2>&1 |
+            ForEach-Object { Write-Host "  pw| $_" }
+        $driveExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $prevEap
+    }
+    Assert-True ($driveExit -eq 0) "app driven via captured hermes desktop spec; update completed"
 }
 
 function Save-DesktopScreenshot([string]$OutFile) {
@@ -633,23 +766,70 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
     }
 }
 
-function Invoke-PhaseUpdateGui {
+function Invoke-PhaseInstall {
+    # Dispatch on the install axis. Each arm ends with the same contract:
+    # checkout at OLD, hermes runs, and state carries how OLD landed so any
+    # update arm can follow any install arm.
     $state = Read-State
+    # Isolated install target for every arm; serve.git's file:// origin
+    # looks like a fork to the updater, whose "add the official repo as
+    # upstream?" prompt would hang a headless run - the marker is the
+    # product's own suppression mechanism.
+    $env:HERMES_HOME = $HermesHome
+    New-Item -ItemType Directory -Path $HermesHome -Force | Out-Null
+    New-Item -ItemType File -Path (Join-Path $HermesHome ".skip_upstream_prompt") -Force | Out-Null
+    switch ($InstallMethod) {
+        "desktop-installer@latest" {
+            Invoke-PhaseInstallGui
+        }
+        "installer-script" {
+            Write-Step "INSTALL (script): OLD's own install.ps1, headless"
+            Invoke-RefInstaller $state.old "old"
+            Assert-True ((Get-InstalledHead) -eq $state.old) "installed checkout is at OLD"
+            Test-HermesRuns "post-install-script"
+        }
+        "installer-script+desktop" {
+            Write-Step "INSTALL (script+desktop): OLD's own install.ps1 -IncludeDesktop, headless"
+            Invoke-RefInstaller $state.old "old" -IncludeDesktop
+            Assert-True ((Get-InstalledHead) -eq $state.old) "installed checkout is at OLD"
+            Test-HermesRuns "post-install-script-desktop"
+            Assert-DesktopArtifact "OLD"
+        }
+    }
+}
+
+function Invoke-PhaseUpdate {
+    $state = Read-State
+    $env:HERMES_HOME = $HermesHome
+
+    # The update becomes available the way it does for a real user: the
+    # remote's main moves forward. The GUI route re-advances harmlessly
+    # (same sha); script routes need it here because only the GUI arm's
+    # helper used to own this step.
+    Invoke-Git @("-C", $ServeRepo, "update-ref", "refs/heads/main", $state.current) | Out-Null
+    Write-Host "  serve.git main advanced to $($state.current)"
+
     switch ($Route) {
         "open-app-update" {
+            # Meaningful only where an OS entry point exists - install.ps1
+            # -IncludeDesktop registers shortcuts too, so both desktop-
+            # bearing installs qualify; the workflow gate enforces which
+            # pairs are dispatched.
             Invoke-GuiUpdateDesktopRoute $state.current
         }
         "hermes-desktop-app-update" {
-            # TODO: launch the app via `hermes desktop` (spawn interception
-            # captures the real argv/cwd/env; Playwright launches from the
-            # captured spec), then the same Update-now click.
-            throw "update method 'hermes-desktop-app-update' is not implemented yet"
+            Invoke-HermesDesktopAppUpdate $state.current
         }
         "hermes-update" {
-            # TODO: run `hermes update` from the installed venv -- the CLI
-            # route. Needs the same completion/sha asserts minus the
-            # app-quit dance.
-            throw "update method 'hermes-update' is not implemented yet"
+            Invoke-HermesUpdate
+        }
+        "installer-script" {
+            # A user re-running the one-liner today gets the CURRENT script.
+            Invoke-RefInstaller $state.current "head"
+        }
+        "installer-script+desktop" {
+            Invoke-RefInstaller $state.current "head" -IncludeDesktop
+            Assert-DesktopArtifact "HEAD"
         }
         "desktop-installer@latest" {
             # TODO: re-run the bootstrap Hermes-Setup.exe over the existing
@@ -657,19 +837,18 @@ function Invoke-PhaseUpdateGui {
             # runs unattended).
             throw "update method 'desktop-installer@latest' is not implemented yet"
         }
-        "installer-script" {
-            # TODO: re-run the irm | iex one-liner over the existing
-            # install.
-            throw "update method 'installer-script' is not implemented yet"
-        }
     }
+
+    Assert-True ((Get-InstalledHead) -eq $state.current) "checkout landed on HEAD"
+    Test-HermesRuns "post-update"
 }
 
 # ----------------------------------------------------------------------------
 # Dispatch
 # ----------------------------------------------------------------------------
-Write-Host "Windows Desktop GUI E2E driver (real user flow)"
+Write-Host "Windows install/update E2E driver (real user flows)"
 Write-Host "  phase:    $Phase"
+Write-Host "  install:  $InstallMethod"
 Write-Host "  route:    $Route"
 Write-Host "  repo:     $RepoRoot"
 Write-Host "  workroot: $WorkRoot"
@@ -677,13 +856,13 @@ Write-Host "  workroot: $WorkRoot"
 Set-GitRedirect
 
 switch ($Phase) {
-    "stage"       { Invoke-PhaseStage }
-    "install-gui" { Invoke-PhaseInstallGui }
-    "update-gui"  { Invoke-PhaseUpdateGui }
+    "stage"   { Invoke-PhaseStage }
+    "install" { Invoke-PhaseInstall }
+    "update"  { Invoke-PhaseUpdate }
     "all" {
         Invoke-PhaseStage
-        Invoke-PhaseInstallGui
-        Invoke-PhaseUpdateGui
+        Invoke-PhaseInstall
+        Invoke-PhaseUpdate
     }
 }
 

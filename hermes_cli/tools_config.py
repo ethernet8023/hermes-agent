@@ -799,11 +799,48 @@ def _pip_install(
     ``[sys.executable, '-m', 'pip', 'install', ...]`` failed with
     ``No module named pip`` on every fresh install. uv-first sidesteps that.
 
+    Destination routing is delegated to ``tools.lazy_deps`` so this ladder
+    and the lazy-install ladder cannot disagree about where packages may be
+    written. On a sealed dep store that configures an overflow directory
+    (the Docker image) the install is redirected there; on one that does not
+    (a Nix build, a read-only distribution) it is refused up front with
+    packaging-level remediation instead of spending ~15s on an ensurepip
+    bootstrap that ends in EROFS. Callers pass raw pip arguments — wheel
+    URLs, ``--target``, ``-U`` — which the lazy-install allowlist cannot
+    accept, so only the routing decision is shared, not the spec validation.
+
     Returns the ``subprocess.CompletedProcess`` from whichever tier succeeded
     (or the last failure for the caller to inspect).
     """
-    venv_root = Path(sys.executable).parent.parent
-    uv_env = {**os.environ, "VIRTUAL_ENV": str(venv_root)}
+    try:
+        from tools.lazy_deps import resolve_install_route
+
+        route = resolve_install_route()
+    except Exception:
+        # Routing is an optimization over "just try it"; a broken import must
+        # not take down every post-setup hook on a normal writable install.
+        route = None
+
+    target_args: List[str] = []
+    if route is not None:
+        if route.blocked_reason:
+            return subprocess.CompletedProcess(
+                ["pip", "install", *args], returncode=1, stdout="",
+                stderr=f"cannot install packages: {route.blocked_reason}",
+            )
+        # A caller that already picked its own --target (agent/lsp/install.py
+        # installs into a hermes-owned dir) owns that decision; don't add a
+        # second, conflicting one.
+        if route.target is not None and "--target" not in args:
+            target_args = ["--target", str(route.target)]
+
+    uv_env = {**os.environ}
+    # VIRTUAL_ENV is only meaningful when a venv actually owns the dep store.
+    # Deriving it from sys.executable's ancestry names a real directory that
+    # is not a venv on bundled and read-only installs, so uv would be pointed
+    # at the wrong prefix.
+    if sys.prefix != sys.base_prefix:
+        uv_env["VIRTUAL_ENV"] = sys.prefix
 
     # Managed uv first: $HERMES_HOME/bin is never on PATH, so a bare which()
     # misses the uv Hermes installed and prefers a system one when both exist.
@@ -817,7 +854,7 @@ def _pip_install(
     if uv_bin:
         try:
             result = subprocess.run(
-                [uv_bin, "pip", "install", *args],
+                [uv_bin, "pip", "install", *target_args, *args],
                 capture_output=capture_output, text=True, encoding="utf-8", errors="replace", timeout=timeout,
                 env=uv_env,
                 creationflags=_post_setup_no_window_flags(
@@ -856,7 +893,7 @@ def _pip_install(
             )
 
     return subprocess.run(
-        pip_cmd + ["install", *args],
+        pip_cmd + ["install", *target_args, *args],
         capture_output=capture_output, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         creationflags=_post_setup_no_window_flags(
             streams_to_console=not capture_output

@@ -25,6 +25,7 @@ This is a pure-stdlib leaf module. It does not import hermes_cli.config.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -168,13 +169,22 @@ class Sealed:
 def read_build_info(project_root: Path) -> dict:
     """The baked build stamp of ``project_root``, or ``{}``.
 
+    ``HERMES_BUILD_INFO`` wins when set. Nix needs it: the derivation output
+    and the venv are separate store paths, so the stamp does not sit next to
+    the code and a path-relative lookup silently classifies a Nix install as
+    an unknown steward. The wrapper exports the var for exactly this reason
+    (``nix/hermes-agent.nix``), and ``version_info._resolve_stamp_file()``
+    already honours it.
+
     Raises ``RuntimeError`` on a ``payload: light`` stamp: a light artifact
     ships no Python runtime, so a Python process reading its own stamp as
     light means the artifact was mispackaged. Failing loudly here beats
     every consumer misclassifying the tree.
     """
+    override = os.environ.get("HERMES_BUILD_INFO", "").strip()
+    stamp = Path(override) if override else Path(project_root) / BUILD_INFO_NAME
     try:
-        data = json.loads((Path(project_root) / BUILD_INFO_NAME).read_text(encoding="utf-8"))
+        data = json.loads(stamp.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):

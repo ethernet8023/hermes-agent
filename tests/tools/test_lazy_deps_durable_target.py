@@ -179,7 +179,7 @@ class TestInstallArgConstruction:
         # ...and the spec is last.
         assert cmd[-1] == "somepkg==1.2.3"
 
-    def test_no_target_args_in_venv_scoped_mode(self, monkeypatch):
+    def test_no_target_args_in_venv_scoped_mode(self, monkeypatch, writable_store):
         # Env unset → plain venv-scoped install, no --target / --constraint.
         monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
         monkeypatch.setattr(ld.shutil, "which", lambda _: None)
@@ -197,7 +197,9 @@ class TestInstallArgConstruction:
         assert "--target" not in captured["cmd"]
         assert "--constraint" not in captured["cmd"]
 
-    def test_uv_resolution_failure_does_not_fall_through_to_pip(self, monkeypatch):
+    def test_uv_resolution_failure_does_not_fall_through_to_pip(
+        self, monkeypatch, writable_store
+    ):
         monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
         monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: "uv")
         calls = []

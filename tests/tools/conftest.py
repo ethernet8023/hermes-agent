@@ -67,3 +67,18 @@ def disable_lazy_stt_install():
     """
     with patch("tools.transcription_tools._try_lazy_install_stt", return_value=False):
         yield
+
+
+@pytest.fixture
+def writable_store(monkeypatch):
+    """Force the writable-dep-store shape for install-routing tests.
+
+    ``lazy_deps._site_packages_writable`` really probes ``os.access`` on the
+    interpreter's purelib, so on a sealed host — a Nix-built environment,
+    which is what CI and the devshell use — install routing correctly answers
+    "blocked" and a venv-scoped assertion tests the wrong branch. The
+    read-only route is owned by ``test_lazy_deps_managed.py``.
+    """
+    import tools.lazy_deps as ld
+
+    monkeypatch.setattr(ld, "_site_packages_writable", lambda: True)

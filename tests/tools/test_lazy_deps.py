@@ -18,6 +18,17 @@ import pytest
 import tools.lazy_deps as ld
 
 
+@pytest.fixture(autouse=True)
+def _writable_dep_store(writable_store):
+    """Assume the writable-dep-store shape for this whole module.
+
+    Every test here covers allowlist, gating, or reporting behaviour that
+    lives *after* the install-route check; on a sealed host (Nix — CI and the
+    devshell) ``ensure`` short-circuits before reaching any of it. The
+    read-only route is owned by ``test_lazy_deps_managed.py``.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Spec safety
 # ---------------------------------------------------------------------------

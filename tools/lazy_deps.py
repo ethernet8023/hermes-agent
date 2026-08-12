@@ -338,19 +338,35 @@ class FeatureUnavailable(RuntimeError):
     """A lazily-installable feature is missing and cannot be made available.
 
     Either the deps were never installed and the user has disabled lazy
-    installs, or the install attempt failed.
+    installs, or the install attempt failed, or the environment is sealed
+    and cannot receive runtime installs at all.
     """
 
-    def __init__(self, feature: str, missing: tuple[str, ...], reason: str):
+    def __init__(
+        self,
+        feature: str,
+        missing: tuple[str, ...],
+        reason: str,
+        *,
+        manual_install_possible: bool = True,
+    ):
         self.feature = feature
         self.missing = missing
         self.reason = reason
+        # On a read-only dep store the manual pip line is worse than
+        # useless: it contradicts the reason immediately above it and sends
+        # the user to a command that cannot succeed. The reason carries the
+        # steward's real mechanism instead.
+        self.manual_install_possible = manual_install_possible
         super().__init__(self._format())
 
     def _format(self) -> str:
+        reason = self.reason.rstrip(".")
+        if not self.manual_install_possible:
+            return f"Feature {self.feature!r} unavailable: {reason}."
         spec_list = " ".join(repr(s) for s in self.missing)
         return (
-            f"Feature {self.feature!r} unavailable: {self.reason}. "
+            f"Feature {self.feature!r} unavailable: {reason}. "
             f"To enable manually: uv pip install {spec_list}  "
             f"(or: pip install {spec_list})."
         )
@@ -467,6 +483,119 @@ def _ensure_target_ready(target: Path) -> Optional[str]:
     except OSError as e:
         return f"lazy install target {target} is not writable: {e}"
     return None
+
+
+@dataclass(frozen=True)
+class InstallRoute:
+    """Where a pip install is allowed to write in this environment.
+
+    ``target`` is a ``--target`` directory when installs must be redirected
+    away from a sealed dep store; ``None`` means a normal venv-scoped
+    install. ``blocked_reason`` is user-facing text explaining why no
+    writable destination exists — when it is set the caller must not run
+    the install at all.
+    """
+
+    target: Optional[Path] = None
+    blocked_reason: Optional[str] = None
+
+
+# Remediation per steward when the dep store is sealed. A read-only store is
+# not a broken install, it is a *declarative* one: the dependency set is
+# chosen at build time, so "run pip" is never the answer — the write is
+# rejected, and a rebuild would discard it even if it were not. Each entry
+# names the mechanism that deployment actually uses. Hermes keeps its lazy
+# extras out of ``[all]`` on purpose (see the policy note in pyproject.toml),
+# so on these installs the opt-in genuinely has to happen at build time.
+_SEALED_STORE_REMEDIATION = {
+    "nix": (
+        "this Hermes runs from the read-only Nix store, so packages cannot "
+        "be added at runtime. Declare them in your Nix config instead: add "
+        "the extra to `services.hermes-agent.extraDependencyGroups` "
+        '(pyproject extras, e.g. "matrix", "messaging", "tts-premium"), or '
+        "pass prebuilt packages via "
+        "`services.hermes-agent.extraPythonPackages`, then rebuild. Without "
+        "that, {what} are not present in the built environment."
+    ),
+    "docker": (
+        "the image's Python environment is read-only and no writable install "
+        "target is configured. Set HERMES_LAZY_INSTALL_TARGET to a directory "
+        "on the mounted data volume (the published image defaults it to "
+        "/opt/data/lazy-packages) so runtime installs persist across "
+        "container recreates."
+    ),
+    "desktop-app": (
+        "the desktop app's bundled runtime is sealed and no writable overlay "
+        "is configured, so packages cannot be added at runtime. Reinstall or "
+        "update the app to get a build that includes {what}."
+    ),
+}
+
+_SEALED_STORE_FALLBACK = (
+    "this build's Python environment is read-only (a Nix store path or "
+    "another sealed install), so packages cannot be added at runtime. "
+    "Rebuild the environment with {what} declared, using whichever "
+    "packaging system produced this install."
+)
+
+
+def _sealed_store_steward() -> str:
+    """The steward of this tree, or ``""`` when it is not sealed/unknown."""
+    try:
+        from hermes_cli.runtime_tree import Sealed, runtime_tree
+
+        tree = runtime_tree(Path(__file__).resolve().parent.parent)
+        return tree.steward if isinstance(tree, Sealed) else ""
+    except Exception:
+        return ""
+
+
+def _sealed_store_remediation(feature: Optional[str] = None) -> str:
+    """Why runtime installs cannot work here, and what to do instead."""
+    template = _SEALED_STORE_REMEDIATION.get(
+        _sealed_store_steward(), _SEALED_STORE_FALLBACK
+    )
+    what = f"the dependencies for {feature!r}" if feature else "these dependencies"
+    return template.format(what=what)
+
+
+def resolve_install_route(feature: Optional[str] = None) -> InstallRoute:
+    """Decide where pip may install, for any install ladder in the tree.
+
+    Three outcomes, matching the three deployment shapes:
+
+    * **Writable dep store** (source checkout, managed install) — venv-scoped
+      install; no target, no block.
+    * **Sealed dep store with an overflow target** (the immutable Docker
+      image sets ``HERMES_LAZY_INSTALL_TARGET``) — redirect to that
+      directory, after validating its ABI stamp.
+    * **Sealed dep store with no overflow target** (a Nix build, the desktop
+      bundle without a configured overlay) — blocked, with remediation that
+      names the steward's own mechanism. "Run pip" is never the answer on a
+      declarative install: the write fails, and would be discarded by the
+      next rebuild even if it did not.
+
+    Note the writability probe is on the real dep store: being *inside a
+    venv* says nothing about it. A Nix-built environment has ``pyvenv.cfg``
+    and ``sys.prefix != sys.base_prefix`` while its site-packages sits in
+    the read-only store.
+
+    This is the routing half of :func:`_venv_pip_install`, factored out so
+    ``hermes_cli.tools_config._pip_install`` (the post-setup install ladder,
+    which takes raw pip arguments this module's allowlist cannot accept)
+    applies the identical policy instead of its own.
+    """
+    target = _lazy_install_target()
+    if target is not None:
+        err = _ensure_target_ready(target)
+        if err:
+            return InstallRoute(blocked_reason=err)
+        return InstallRoute(target=target)
+
+    if not _site_packages_writable():
+        return InstallRoute(blocked_reason=_sealed_store_remediation(feature))
+
+    return InstallRoute()
 
 
 def _activate_target_on_syspath(target: Path) -> None:
@@ -736,13 +865,13 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
     if not specs:
         return _InstallResult(True, "", "")
 
-    target = _lazy_install_target()
+    route = resolve_install_route()
+    if route.blocked_reason:
+        return _InstallResult(False, "", route.blocked_reason)
+    target = route.target
     constraints: Optional[Path] = None
 
     if target is not None:
-        err = _ensure_target_ready(target)
-        if err:
-            return _InstallResult(False, "", err)
         constraints = _core_constraints_file()
 
     target_args: list[str] = []
@@ -883,30 +1012,35 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
 
     unsupported = _unsupported_feature_reason(feature)
     if unsupported:
-        raise FeatureUnavailable(feature, missing, unsupported)
+        # Platform-impossible, not merely absent: the reason carries the real
+        # workaround (e.g. "run under WSL"), and a pip line would just send
+        # the user at a build that cannot succeed on this host.
+        raise FeatureUnavailable(
+            feature, missing, unsupported, manual_install_possible=False
+        )
 
-    # A read-only site-packages (any nix build, or any other distro that
-    # ships Hermes from a read-only store) cannot receive lazy pip installs:
-    # the uv -> pip -> ensurepip ladder below burns ~15s bootstrapping
-    # ensurepip only to fail on the read-only target. Probe writability
-    # directly and fail fast with an actionable message instead — no
-    # install-method inference needed.
-    #
-    # Skipped when a durable install target is configured: the container
-    # deployment sets HERMES_LAZY_INSTALL_TARGET (a writable volume), where
-    # lazy installs legitimately work.
+    # A sealed dep store cannot receive lazy pip installs: the
+    # uv -> pip -> ensurepip ladder below burns ~15s bootstrapping ensurepip
+    # only to fail on the read-only target. resolve_install_route() probes
+    # writability directly (and returns a redirect target instead when the
+    # deployment configures one), so we fail fast with remediation that names
+    # the steward's declarative mechanism.
     #
     # The reason string starts with "unsupported " on purpose:
     # refresh_active_features classifies FeatureUnavailable by that prefix and
-    # reports anything else as a hard failure rather than a skip.
-    if _lazy_install_target() is None and not _site_packages_writable():
-        raise FeatureUnavailable(
-            feature, missing,
-            "unsupported on read-only installs: this build's site-packages "
-            "is not writable (e.g. a Nix store path), so Hermes cannot "
-            f"install packages at runtime. Add the dependencies for "
-            f"{feature!r} through the package manager that installed Hermes."
-        )
+    # reports anything else as a hard failure rather than a skip. A read-only
+    # build is a skip — nothing is broken, the packages simply were not built
+    # into this environment. A *misconfigured* redirect target is not: that
+    # one keeps the route's own text and is reported as a failure.
+    route = resolve_install_route(feature)
+    if route.blocked_reason:
+        if _lazy_install_target() is None:
+            raise FeatureUnavailable(
+                feature, missing,
+                f"unsupported on this install: {route.blocked_reason}",
+                manual_install_possible=False,
+            )
+        raise FeatureUnavailable(feature, missing, route.blocked_reason)
 
     # Validate every spec against the allowlist + safety regex. Belt and
     # braces — the keys-in-LAZY_DEPS check above already constrains this.
@@ -1083,6 +1217,15 @@ def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> 
     display = "uv pip install " + (
         f"--target {target} " if target is not None else ""
     ) + " ".join(cleaned)
+
+    # A sealed dep store with nowhere to redirect is a *blocked* outcome, not
+    # a failed one: nothing runs, and the remediation is packaging-level. The
+    # ladder below would otherwise surface it as an opaque EROFS/EACCES.
+    route = resolve_install_route()
+    if route.blocked_reason:
+        return InstallSpecsResult(
+            ok=False, blocked=True, reason=route.blocked_reason, command=display
+        )
 
     logger.info("Installing pip specs %s (target=%s)", " ".join(cleaned), target or "venv")
     try:

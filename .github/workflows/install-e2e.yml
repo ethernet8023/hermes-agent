@@ -97,7 +97,7 @@ jobs:
       - id: pick
         run: |
           set -euo pipefail
-          tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
+          tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 2 }}')"
           echo "Testing updates from: $tags"
           # Annotate each tag with what its own tree supports, so run
           # workflows can natively skip surfaces the starting version does

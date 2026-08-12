@@ -35,6 +35,9 @@
 #   --update-method  hermes-update      `hermes update`
 #                    installer-script   re-run install.sh (HEAD's copy)
 #                    installer-script+desktop  re-run with --include-desktop
+#                    hermes-desktop-app-update  launch the app via `hermes
+#                                       desktop` (spawn captured, Playwright
+#                                       drives it) and click Update now
 #   --install-ref    what to install first; anything git resolves. Default:
 #                    the newest release tag in the checkout.
 #
@@ -65,8 +68,8 @@ case "$INSTALL_METHOD" in
   *) echo "error: --install-method must be installer-script or installer-script+desktop, got '$INSTALL_METHOD'" >&2; exit 1 ;;
 esac
 case "$UPDATE_METHOD" in
-  hermes-update|installer-script|installer-script+desktop) ;;
-  *) echo "error: --update-method must be hermes-update, installer-script or installer-script+desktop, got '$UPDATE_METHOD'" >&2; exit 1 ;;
+  hermes-update|installer-script|installer-script+desktop|hermes-desktop-app-update) ;;
+  *) echo "error: --update-method must be hermes-update, installer-script, installer-script+desktop or hermes-desktop-app-update, got '$UPDATE_METHOD'" >&2; exit 1 ;;
 esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -289,6 +292,51 @@ case "$UPDATE_METHOD" in
   installer-script+desktop)
     run_installer "$HEAD_SHA" head desktop
     assert_desktop_artifact HEAD
+    ;;
+  hermes-desktop-app-update)
+    # The real user surface: `hermes desktop` launches the app, the user
+    # clicks Settings -> About -> Update now. Playwright must OWN the spawn
+    # (it needs the inspection pipe), so the driver intercepts the product's
+    # own launch call - argv/cwd/env captured at the spawn site by
+    # e2e-assets/launch-capture/sitecustomize.py - and re-executes it under
+    # _electron.launch. Everything before the spawn (build, stamps, sandbox
+    # fixup) runs for real in the installed code.
+    HERMES="$INSTALL_DIR/venv/bin/hermes"
+    ASSETS="$REPO_ROOT/tests/install/e2e-assets"
+    SPEC="$WORK_ROOT/launch-spec.json"
+
+    step "capturing the hermes desktop launch spec (build runs for real)"
+    rc=0
+    (cd "$INSTALL_DIR" && \
+      PYTHONPATH="$ASSETS/launch-capture${PYTHONPATH:+:$PYTHONPATH}" \
+      HERMES_E2E_CAPTURE_LAUNCH="$SPEC" \
+      "$HERMES" desktop < /dev/null > "$LOG_DIR/desktop-launch-capture.log" 2>&1) || rc=$?
+    log_group "hermes desktop (launch capture) transcript" "$LOG_DIR/desktop-launch-capture.log"
+    [ "$rc" -eq 0 ] || fail "hermes desktop exited $rc during launch capture; transcript above"
+    # Exit 0 without a capture means a version that never reached its
+    # launch - that must fail loudly, not pass as a no-op.
+    [ -f "$SPEC.captured" ] || fail "hermes desktop exited 0 but no launch was captured at $SPEC"
+    ok "captured $(cat "$SPEC.captured") launch spec"
+
+    step "driving the app under Playwright: Settings -> About -> Update now"
+    # Driver tooling comes from the driver: a scratch dir with our own
+    # pinned @playwright/test, never resolved from the installed tree
+    # (older OLD refs predate the dependency; hoisting moves it around).
+    PW_DIR="$WORK_ROOT/playwright"
+    mkdir -p "$PW_DIR"
+    (cd "$PW_DIR" && npm install --no-save --no-audit --no-fund \
+      "@playwright/test@1.58.2" > "$LOG_DIR/playwright-install.log" 2>&1) \
+      || { log_group "playwright install transcript" "$LOG_DIR/playwright-install.log"; fail "playwright install failed"; }
+    cp "$ASSETS/launch-from-spec.mjs" "$PW_DIR/"
+    rc=0
+    (cd "$PW_DIR" && node launch-from-spec.mjs \
+      --spec "$SPEC" \
+      --result "$HERMES_HOME/.hermes-update-result.json" \
+      --expect-sha "$HEAD_SHA" \
+      --repo-dir "$INSTALL_DIR" \
+      > "$LOG_DIR/app-update.log" 2>&1) || rc=$?
+    log_group "app update (Playwright) transcript" "$LOG_DIR/app-update.log"
+    [ "$rc" -eq 0 ] || fail "app-driven update exited $rc; transcript above"
     ;;
 esac
 assert_checkout "$HEAD_SHA" HEAD

@@ -42,7 +42,7 @@ on:
         required: true
         type: string
       update-method:
-        description: 'How the install updates to HEAD. Supported: hermes-update (the updater), installer-script (re-run the one-liner), installer-script+desktop (re-run with --include-desktop). Declared-but-TODO methods (open-app-update, hermes-desktop-app-update) skip.'
+        description: 'How the install updates to HEAD. Supported: hermes-update (the updater), installer-script (re-run the one-liner), installer-script+desktop (re-run with --include-desktop), hermes-desktop-app-update (launch via hermes desktop under Playwright, click Update now). Declared-but-TODO methods (open-app-update) skip.'
         required: true
         type: string
       install-ref:
@@ -61,10 +61,10 @@ on:
         type: string
         default: ubuntu-latest
       timeout-minutes:
-        description: 'Job timeout. A cold run installs real toolchains twice.'
+        description: 'Job timeout. A cold run installs real toolchains twice, and app-update legs add a full Electron build + launch.'
         required: false
         type: number
-        default: 45
+        default: 75
 
 permissions:
   contents: read
@@ -73,13 +73,14 @@ jobs:
   e2e:
     name: install & update
     # The pairs the driver can run today; anything else is a declared TODO
-    # and natively skips. The +desktop variants also need the starting tag
-    # to ship apps/desktop (the --include-desktop flag shipped with it).
+    # and natively skips. Desktop-surface methods (+desktop installs,
+    # hermes-desktop-app-update) also need the starting tag to ship
+    # apps/desktop (their flags shipped with it).
     if: >-
       (inputs.install-method == 'installer-script'
         || (inputs.install-method == 'installer-script+desktop' && inputs.tag-has-desktop))
       && (contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
-        || (inputs.update-method == 'installer-script+desktop' && inputs.tag-has-desktop))
+        || (contains(fromJSON('["installer-script+desktop", "hermes-desktop-app-update"]'), inputs.update-method) && inputs.tag-has-desktop))
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 

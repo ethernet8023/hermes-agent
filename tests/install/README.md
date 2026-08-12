@@ -1,0 +1,69 @@
+# Install and Update E2E Tests
+
+These tests answer one question: can a user on a released version get to this commit?
+
+Each test leg installs an old released version, then updates it to HEAD. The install and the update run the real user surfaces. The legs do not use mocks and do not use headless proxies of GUI flows.
+
+## The layers
+
+The test family has four layers. Each layer has one job.
+
+1. `scripts/sandbox/generate-e2e-matrix.mjs` declares the support matrix. It lists every {os, install-method, update-method} pair. It expands the pairs against the sampled release tags. It knows nothing about which pairs CI can run.
+2. `.github/workflows/install-e2e.yml` is the primary workflow. It picks the release tags, runs the generator, and fans out one matrix job per OS. It also writes the plan chart and the result chart on the run summary.
+3. The run workflows own the capability knowledge. `install-e2e-run.yml` serves linux and macos with one OS-agnostic driver. `install-e2e-windows-run.yml` serves windows. A job-level `if:` gate in each run workflow lists the pairs its driver can run. All other pairs skip natively and show as grey.
+4. The drivers do the work. `tests/install/installer-script-e2e.sh` is the POSIX driver. `tests/install/windows-installer-script-e2e.ps1` is the windows script driver. `tests/install/windows-desktop-gui-e2e.ps1` is the windows GUI driver.
+
+To declare a new method, edit the generator. To implement a method, flip the gate in the run workflow and extend a driver.
+
+## The isolation trick
+
+The drivers do not touch the network for git operations. Each driver makes a bare clone of the checkout at `serve.git`. Then it points every git process at this clone. The mechanism is a driver-owned `GIT_CONFIG_GLOBAL` file with `url.<file://serve.git>.insteadOf` rewrites for both canonical repository URLs.
+
+The driver parks the `main` branch of `serve.git` at the old release. The installer runs and lands on the old release. Then the driver moves `main` to HEAD. An update becomes available in the same way that it does for a real user.
+
+The installer script is not downloaded. The install leg runs the copy from the old git ref. This is the copy that a user of that version executed. The update leg runs the copy from HEAD.
+
+## What one leg does
+
+Each leg with the script drivers has these phases:
+
+1. Stage: make the bare clone, park `main` at the old release.
+2. Install: run the old release's own installer script. Make sure that the checkout is at the old commit and that `hermes --version` works.
+3. Desktop smoke: run `hermes desktop --build-only` from the installed CLI. This proves that the installed version can build the desktop app. If the installed version does not have this flag, the phase reports a skip and continues.
+4. Update: move `main` to HEAD. Apply one update method. Make sure that the checkout is at HEAD and that `hermes --version` works.
+5. Desktop smoke again, at HEAD.
+
+The windows GUI driver replaces phases 2 and 4. It downloads the published `Hermes-Setup.exe`, clicks through the installer window with AutoHotkey, and clicks "Update now" in the running app with Playwright.
+
+## Old versions
+
+A leg can install a release from months back. The driver must not assume that the old version has today's CLI surface. The rule: probe, do not assume.
+
+- For the installer, read the flag from the old ref's own script text.
+- For the installed CLI, ask the binary with `--help`.
+- If a flag is not found, omit the flag. This is not an error.
+
+## Skips
+
+A grey leg is normal. There are two causes:
+
+- The method pair has no driver yet. The pair is a declared TODO. The gate in the run workflow lists the pairs that run.
+- The starting release predates the surface under test. Example: a release without `apps/desktop` has no window to launch. The tag annotation `tag_has_desktop` from the primary workflow marks these releases.
+
+The result chart on the run summary shows each leg as passed, failed, or skipped.
+
+## Triggers
+
+The matrix does not run on pull requests. One leg installs real toolchains and takes more than 10 minutes. The triggers are:
+
+- A schedule, every 12 hours. This finds upstream drift.
+- A release tag push. This is the moment the set of start versions changes.
+- Manual dispatch. You can select the route and the tag count:
+
+```
+gh workflow run install-e2e.yml --ref <branch> -f route=both -f tag-count=2
+```
+
+## Artifacts
+
+Each leg uploads its logs as an artifact. The windows GUI leg also uploads screenshots, a screen recording, and the update result file. Get them with `gh run download <run-id>`.

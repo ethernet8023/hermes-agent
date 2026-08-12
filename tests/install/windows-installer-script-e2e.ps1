@@ -167,11 +167,52 @@ function Assert-Checkout {
     Ok "hermes --version works: $((Get-Content -LiteralPath $verLog -First 1))"
 }
 
+function Test-DesktopSmoke {
+    param([string]$Label)
+    # Prove the installed CLI can produce the desktop app: `hermes desktop
+    # --build-only` runs the full desktop pipeline (workspace install,
+    # renderer build, stamp write) and stops before the launch -- the same
+    # call `hermes update` itself makes. Probe the INSTALLED hermes for the
+    # flag rather than assuming this checkout's surface: sampled OLD
+    # releases may predate `hermes desktop` or --build-only entirely, and
+    # for them the phase skips, loudly.
+    $hermes = Join-Path $InstallDir "venv\Scripts\hermes.exe"
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    $helpText = & $hermes desktop --help 2>&1 | Out-String
+    $ErrorActionPreference = $prevEap
+    if ($helpText -notmatch '--build-only') {
+        Ok "hermes desktop --build-only not supported at $Label; skipping desktop smoke"
+        return
+    }
+    $log = Join-Path $LogDir "desktop-smoke-$Label.log"
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    Push-Location $InstallDir
+    try {
+        & $hermes desktop --build-only *> $log
+        $smokeExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $prevEap
+    }
+    Write-LogGroup "hermes desktop --build-only ($Label) transcript" $log
+    if ($smokeExit -ne 0) {
+        Fail "hermes desktop --build-only ($Label) exited $smokeExit; transcript above"
+    }
+    Ok "hermes desktop --build-only works at $Label"
+    # TODO(launch): LAUNCH the built app and auto-close it. Mechanism when
+    # the pieces land: driver-side spawn interception (a sitecustomize.py
+    # on PYTHONPATH wraps subprocess.run under an env-var opt-in and
+    # captures the real argv/cwd/env at the spawn site) + Playwright
+    # _electron.launch on the captured spec; electronApp.close() is the
+    # auto-close.
+}
+
 # --- install OLD ------------------------------------------------------------------
 
 Step "installing OLD ($InstallRef) via its own scripts/install.ps1"
 Invoke-Installer $OldSha "old"
 Assert-Checkout $OldSha "OLD"
+Test-DesktopSmoke "old"
 
 # --- update OLD -> HEAD --------------------------------------------------------------
 
@@ -209,5 +250,6 @@ switch ($UpdateMethod) {
     }
 }
 Assert-Checkout $HeadSha "HEAD"
+Test-DesktopSmoke "head"
 
 Step "PASS: $InstallRef -> HEAD via $UpdateMethod"

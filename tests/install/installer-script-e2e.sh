@@ -176,11 +176,39 @@ assert_checkout() {
   ok "hermes --version works: $(head -c 120 "$LOG_DIR/version-$2.log" | tr -d '\n')"
 }
 
+smoke_desktop() {
+  # $1: label (old|head). Prove the installed CLI can produce the desktop
+  # app: `hermes desktop --build-only` runs the full desktop pipeline
+  # (workspace install, renderer build, stamp write) and stops before the
+  # launch -- the same call `hermes update` itself makes. Probe the
+  # INSTALLED hermes for the flag rather than assuming this checkout's
+  # surface: sampled OLD releases may predate `hermes desktop` or
+  # --build-only entirely, and for them the phase skips, loudly.
+  local hermes="$INSTALL_DIR/venv/bin/hermes"
+  if ! "$hermes" desktop --help 2>/dev/null | grep -qF -- --build-only; then
+    ok "hermes desktop --build-only not supported at $1; skipping desktop smoke"
+    return 0
+  fi
+  local rc=0
+  (cd "$INSTALL_DIR" && "$hermes" desktop --build-only < /dev/null \
+    > "$LOG_DIR/desktop-smoke-$1.log" 2>&1) || rc=$?
+  log_group "hermes desktop --build-only ($1) transcript" "$LOG_DIR/desktop-smoke-$1.log"
+  [ "$rc" -eq 0 ] || fail "hermes desktop --build-only ($1) exited $rc; transcript above"
+  ok "hermes desktop --build-only works at $1"
+  # TODO(launch): LAUNCH the built app and auto-close it. Mechanism when
+  # the pieces land: driver-side spawn interception (a sitecustomize.py on
+  # PYTHONPATH wraps subprocess.run under an env-var opt-in and captures
+  # the real argv/cwd/env at the spawn site) + Playwright _electron.launch
+  # on the captured spec; electronApp.close() is the auto-close. Blocked
+  # on that asset and, for linux runners, on a virtual display (Xvfb).
+}
+
 # --- install OLD ---------------------------------------------------------------
 
 step "installing OLD ($INSTALL_REF) via its own scripts/install.sh"
 run_installer "$OLD_SHA" old
 assert_checkout "$OLD_SHA" OLD
+smoke_desktop old
 
 # --- update OLD -> HEAD ----------------------------------------------------------
 
@@ -211,5 +239,6 @@ case "$UPDATE_METHOD" in
     ;;
 esac
 assert_checkout "$HEAD_SHA" HEAD
+smoke_desktop head
 
 step "PASS: $INSTALL_REF -> HEAD via $UPDATE_METHOD"

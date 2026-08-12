@@ -69,6 +69,14 @@ SERVE_REPO="$WORK_ROOT/serve.git"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK %s\n' "$*"; }
 fail() { printf 'E2E ASSERTION FAILED: %s\n' "$*" >&2; exit 1; }
+# Full transcript in the job log, collapsed (GitHub renders ::group:: as a
+# fold; plain text anywhere else). Win or lose -- a green install's log is
+# how you diagnose the leg that fails next.
+log_group() {
+  printf '::group::%s\n' "$1"
+  cat "$2"
+  printf '::endgroup::\n'
+}
 
 rm -rf "$WORK_ROOT"
 mkdir -p "$WORK_ROOT" "$LOG_DIR"
@@ -149,10 +157,10 @@ run_installer() {
   fi
   # </dev/null: the script reads prompts from stdin when a tty is absent;
   # EOF makes every remaining prompt take its default.
-  if ! bash "$script" "${flags[@]}" < /dev/null > "$LOG_DIR/install-$2.log" 2>&1; then
-    tail -50 "$LOG_DIR/install-$2.log" >&2
-    fail "install.sh ($2) exited non-zero; full log in $LOG_DIR/install-$2.log"
-  fi
+  local rc=0
+  bash "$script" "${flags[@]}" < /dev/null > "$LOG_DIR/install-$2.log" 2>&1 || rc=$?
+  log_group "install.sh ($2) transcript" "$LOG_DIR/install-$2.log"
+  [ "$rc" -eq 0 ] || fail "install.sh ($2) exited $rc; transcript above, log at $LOG_DIR/install-$2.log"
 }
 
 assert_checkout() {
@@ -192,10 +200,10 @@ case "$UPDATE_METHOD" in
     else
       update_cmd=("$HERMES" update)
     fi
-    if ! (cd "$INSTALL_DIR" && "${update_cmd[@]}" < /dev/null > "$LOG_DIR/update.log" 2>&1); then
-      tail -50 "$LOG_DIR/update.log" >&2
-      fail "hermes update exited non-zero; full log in $LOG_DIR/update.log"
-    fi
+    rc=0
+    (cd "$INSTALL_DIR" && "${update_cmd[@]}" < /dev/null > "$LOG_DIR/update.log" 2>&1) || rc=$?
+    log_group "hermes update transcript" "$LOG_DIR/update.log"
+    [ "$rc" -eq 0 ] || fail "hermes update exited $rc; transcript above, log at $LOG_DIR/update.log"
     ;;
   installer-script)
     # A user re-running the one-liner today gets the CURRENT script.

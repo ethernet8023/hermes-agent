@@ -460,11 +460,12 @@ function Invoke-PhaseInstallGui {
     finally {
         Stop-ScreenRecording $recording
         Stop-DesktopRecorder $recorder (Join-Path $proof "desktop-frames")
-        # Surface the installer's own log win or lose.
+        # Surface the installer's own log win or lose, full and folded.
         $bootLog = Join-Path $HermesHome "logs\bootstrap-installer.log"
         if (Test-Path -LiteralPath $bootLog) {
-            Write-Host "  --- bootstrap-installer.log (tail) ---"
-            Get-Content -LiteralPath $bootLog -Tail 40 | ForEach-Object { Write-Host "  | $_" }
+            Write-Host "::group::bootstrap-installer.log"
+            Get-Content -LiteralPath $bootLog | Write-Host
+            Write-Host "::endgroup::"
             Copy-Item $bootLog $proof -Force -ErrorAction SilentlyContinue
         }
     }
@@ -661,8 +662,9 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
         Stop-DesktopRecorder $recorder (Join-Path $proof "desktop-frames")
         $handoffLog = Join-Path $HermesHome "logs\desktop-update-handoff.log"
         if (Test-Path -LiteralPath $handoffLog) {
-            Write-Host "  --- desktop-update-handoff.log (tail) ---"
-            Get-Content -LiteralPath $handoffLog -Tail 60 | ForEach-Object { Write-Host "  | $_" }
+            Write-Host "::group::desktop-update-handoff.log"
+            Get-Content -LiteralPath $handoffLog | Write-Host
+            Write-Host "::endgroup::"
             Copy-Item $handoffLog (Join-Path $proof "desktop-update-handoff.log") -Force -ErrorAction SilentlyContinue
         }
         # Quit the relaunched app so job teardown is clean.

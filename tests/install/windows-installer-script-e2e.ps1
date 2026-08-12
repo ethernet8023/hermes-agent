@@ -54,6 +54,14 @@ function Fail([string]$Message) {
     Write-Host "E2E ASSERTION FAILED: $Message" -ForegroundColor Red
     exit 1
 }
+# Full transcript in the job log, collapsed (GitHub renders ::group:: as a
+# fold). Win or lose -- a green install's log is how you diagnose the leg
+# that fails next.
+function Write-LogGroup([string]$Title, [string]$LogPath) {
+    Write-Host "::group::$Title"
+    if (Test-Path -LiteralPath $LogPath) { Get-Content -LiteralPath $LogPath | Write-Host }
+    Write-Host "::endgroup::"
+}
 
 function Invoke-Git {
     param([string[]]$GitArgs)
@@ -134,9 +142,9 @@ function Invoke-Installer {
     & powershell -NoProfile -ExecutionPolicy Bypass -File $script @flags *> $log
     $installExit = $LASTEXITCODE
     $ErrorActionPreference = $prevEap
+    Write-LogGroup "install.ps1 ($Label) transcript" $log
     if ($installExit -ne 0) {
-        Get-Content -LiteralPath $log -Tail 50 | Write-Host
-        Fail "install.ps1 ($Label) exited $installExit; full log in $log"
+        Fail "install.ps1 ($Label) exited $installExit; transcript above, log at $log"
     }
 }
 
@@ -190,9 +198,9 @@ switch ($UpdateMethod) {
             Pop-Location
             $ErrorActionPreference = $prevEap
         }
+        Write-LogGroup "hermes update transcript" $log
         if ($updateExit -ne 0) {
-            Get-Content -LiteralPath $log -Tail 50 | Write-Host
-            Fail "hermes update exited $updateExit; full log in $log"
+            Fail "hermes update exited $updateExit; transcript above, log at $log"
         }
     }
     "installer-script" {

@@ -357,6 +357,15 @@ case "$UPDATE_METHOD" in
     ASSETS="$REPO_ROOT/tests/install/e2e-assets"
     SPEC="$WORK_ROOT/launch-spec.json"
 
+    # A REAL configured provider: the mock inference server (the desktop E2E
+    # suite's own) is configured into HERMES_HOME exactly like the dev:mock
+    # flow does. The app then boots genuinely configured - no onboarding
+    # overlay (a fullscreen div that intercepts every click) - and the chat
+    # surface is real too.
+    source "$ASSETS/mock-provider.sh"
+    mock_start "$WORK_ROOT"
+    trap mock_stop EXIT
+
     step "capturing the hermes desktop launch spec (build runs for real)"
     rc=0
     (cd "$INSTALL_DIR" && \

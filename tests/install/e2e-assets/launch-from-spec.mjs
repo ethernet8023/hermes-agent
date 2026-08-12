@@ -120,15 +120,24 @@ async function main() {
   }
   const deadline = Date.now() + Number(values['timeout-ms']);
 
-  // Dismiss the onboarding overlay when present (fresh HERMES_HOME).
-  const skip = window.getByRole('button', { name: /skip|get started|continue/i }).first();
-  if (await skip.isVisible({ timeout: 5_000 }).catch(() => false)) {
-    await skip.click().catch(() => {});
+  // Dismiss the onboarding overlay when present. Two layers of defense:
+  // the drivers seed a provider key so the app's runtime check reports
+  // configured=true and the overlay never mounts; if it shows anyway
+  // (fresh HERMES_HOME, slow readiness check), click the real escape
+  // hatch - "I'll choose a provider later" (i18n en: chooseLater). The
+  // overlay is a fullscreen div that intercepts ALL clicks, so this must
+  // resolve before any Settings navigation.
+  const later = window
+    .getByRole('button', { name: /choose a provider later|skip/i })
+    .first();
+  if (await later.isVisible({ timeout: 10_000 }).catch(() => false)) {
+    await later.click().catch(() => {});
+    await later.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {});
   }
 
-  // Settings -> About -> Update now. Selectors favor accessible names over
-  // DOM structure so renderer refactors don't break the leg.
-  await window.getByRole('button', { name: /settings/i }).first().click();
+  // Settings -> About -> Update now. The settings trigger is an icon
+  // button whose accessible name is "Open settings".
+  await window.getByRole('button', { name: /open settings|settings/i }).first().click();
   await window.getByRole('tab', { name: /about/i }).or(
     window.getByRole('button', { name: /about/i })).first().click();
   const updateNow = window.getByRole('button', { name: /update now/i }).first();

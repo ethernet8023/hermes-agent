@@ -270,6 +270,13 @@ phase_update() {
   ok "serve.git main = $HEAD_SHA"
 
   step "updating via $UPDATE_METHOD"
+  # The app must boot configured or the onboarding overlay (a fullscreen
+  # div) eats every click: configure the mock inference server exactly like
+  # the dev:mock flow does, so the app is genuinely configured.
+  # shellcheck source=../install/e2e-assets/mock-provider.sh
+  source "$ASSETS/mock-provider.sh"
+  mock_start "$WORK_ROOT"
+  trap mock_stop EXIT
   case "$UPDATE_METHOD" in
     open-app-update)
       # The installed app IS the user surface here (double-click the .app);

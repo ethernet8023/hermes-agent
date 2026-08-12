@@ -396,6 +396,28 @@ _GATEWAY_SECRET_PATTERNS = (
 )
 
 
+def _windows_venv_candidates(
+    project_root: Path, virtual_env: str | None = None
+) -> list[Path]:
+    """Venv roots to search for the Windows gateway's site-packages, in order.
+
+    Pure so it is testable on any host: the caller supplies the root and the
+    VIRTUAL_ENV value rather than this reading the environment.
+
+    Both on-disk layouts are probed. install.ps1 creates ``<root>/venv``, but
+    ``uv venv`` — and every dev checkout following uv's default — creates
+    ``<root>/.venv``. Probing only ``venv`` made the import patch a silent
+    no-op on a .venv install, and the gateway then came up without the MCP
+    SDK, quietly losing every MCP server.
+    """
+    candidates: list[Path] = []
+    if virtual_env:
+        candidates.append(Path(virtual_env))
+    candidates.append(project_root / "venv")
+    candidates.append(project_root / ".venv")
+    return candidates
+
+
 def _ensure_windows_gateway_venv_imports() -> None:
     """Make detached Windows gateway runs see the Hermes venv packages.
 
@@ -410,10 +432,7 @@ def _ensure_windows_gateway_venv_imports() -> None:
         return
 
     project_root = Path(__file__).resolve().parent.parent
-    candidates: list[Path] = []
-    if os.environ.get("VIRTUAL_ENV"):
-        candidates.append(Path(os.environ["VIRTUAL_ENV"]))
-    candidates.append(project_root / "venv")
+    candidates = _windows_venv_candidates(project_root, os.environ.get("VIRTUAL_ENV"))
 
     seen: set[str] = set()
     for venv_dir in candidates:

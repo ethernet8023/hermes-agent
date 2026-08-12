@@ -986,6 +986,19 @@ class TestHermesHomeForTargetUser:
 
 
 
+def _interior_blank_lines(text: str, start_marker: str, end_marker: str) -> list[int]:
+    """Blank lines *inside* a section, excluding its own delimiters.
+
+    Dropping a conditional directive must not leave a gap behind. Naive
+    ``"\\n\\n" not in text`` cannot express this: splitting on the section
+    markers always yields a leading and trailing newline, so that check
+    reports a hole in a perfectly contiguous section.
+    """
+    body = text.split(start_marker)[1].split(end_marker)[0]
+    lines = body.splitlines()
+    return [i for i, line in enumerate(lines) if not line.strip() and 0 < i < len(lines) - 1]
+
+
 class TestGeneratedUnitUsesDetectedVenv:
     def test_systemd_unit_uses_dot_venv_when_detected(self, tmp_path, monkeypatch):
         dot_venv = tmp_path / ".venv"
@@ -1001,6 +1014,116 @@ class TestGeneratedUnitUsesDetectedVenv:
         assert f"{dot_venv}/bin" in unit
         # Must NOT contain a hardcoded /venv/ path
         assert "/venv/" not in unit or "/.venv/" in unit
+
+    def test_no_venv_omits_virtual_env_entirely(self, monkeypatch):
+        """A guessed VIRTUAL_ENV is worse than none.
+
+        Units used to fall back to ``<PROJECT_ROOT>/venv`` when no venv was
+        detected. On a packaged install (desktop bundle, Nix, Docker) that
+        directory does not exist, so the service ran with VIRTUAL_ENV naming
+        a phantom prefix. The interpreter comes from get_python_path(), which
+        resolves correctly without it.
+        """
+        monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: None)
+        monkeypatch.setattr(gateway_cli, "get_python_path", lambda: "/opt/payload/bin/python3")
+
+        unit = gateway_cli.generate_systemd_unit(system=False)
+
+        assert "VIRTUAL_ENV" not in unit
+        # The omission must not leave a blank line or a dangling key.
+        assert 'VIRTUAL_ENV=""' not in unit
+        assert not _interior_blank_lines(unit, "[Service]", "[Install]")
+        assert "/opt/payload/bin/python3" in unit
+
+    def test_launchd_plist_omits_virtual_env_and_stays_valid_xml(self, monkeypatch):
+        # The plist twin of the above: a dropped <key> must not orphan a
+        # <string>, which would make the whole plist unparseable and take
+        # the service down rather than just misconfigure it.
+        import plistlib
+
+        monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: None)
+        monkeypatch.setattr(gateway_cli, "get_python_path", lambda: "/opt/payload/bin/python3")
+
+        plist = gateway_cli.generate_launchd_plist()
+        parsed = plistlib.loads(plist.encode())
+
+        assert "VIRTUAL_ENV" not in parsed["EnvironmentVariables"]
+        assert "PATH" in parsed["EnvironmentVariables"]
+        assert "HERMES_HOME" in parsed["EnvironmentVariables"]
+
+    def test_launchd_plist_keeps_virtual_env_when_detected(self, tmp_path, monkeypatch):
+        import plistlib
+
+        venv = tmp_path / ".venv"
+        (venv / "bin").mkdir(parents=True)
+        monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: venv)
+
+        parsed = plistlib.loads(gateway_cli.generate_launchd_plist().encode())
+        assert parsed["EnvironmentVariables"]["VIRTUAL_ENV"] == str(venv)
+
+    def test_system_unit_omits_virtual_env_without_a_venv(self, monkeypatch):
+        # The system unit takes a different branch (it remaps paths into the
+        # target user's home), so it needs its own coverage.
+        import getpass
+
+        monkeypatch.setattr(gateway_cli, "_detect_venv_dir", lambda: None)
+        unit = gateway_cli.generate_systemd_unit(
+            system=True, run_as_user=getpass.getuser()
+        )
+
+        assert "VIRTUAL_ENV" not in unit
+        assert not _interior_blank_lines(unit, "[Service]", "[Install]")
+
+    def test_system_unit_remaps_a_detected_venv_into_the_target_home(
+        self, monkeypatch
+    ):
+        # Whatever the calling user's venv path is, the unit must name the
+        # path as the SERVICE user will see it.
+        import getpass
+
+        monkeypatch.setattr(
+            gateway_cli, "_detect_venv_dir", lambda: Path.home() / "proj" / ".venv"
+        )
+        unit = gateway_cli.generate_systemd_unit(
+            system=True, run_as_user=getpass.getuser()
+        )
+
+        assert 'Environment="VIRTUAL_ENV=' in unit
+        assert "proj/.venv" in unit
+
+
+class TestServicePathProbesBothVenvLayouts:
+    """``_build_service_path_dirs`` must know both venv names.
+
+    It probed only ``<root>/venv``, so a uv-created ``.venv`` install fell
+    through to the sys.prefix branch and the unit's PATH missed the venv's
+    bin directory entirely.
+    """
+
+    def test_dot_venv_bin_lands_in_path(self, tmp_path):
+        (tmp_path / ".venv" / "bin").mkdir(parents=True)
+        dirs = gateway_cli._build_service_path_dirs(tmp_path)
+        assert str(tmp_path / ".venv" / "bin") in dirs
+
+    def test_plain_venv_bin_still_lands_in_path(self, tmp_path):
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        dirs = gateway_cli._build_service_path_dirs(tmp_path)
+        assert str(tmp_path / "venv" / "bin") in dirs
+
+    def test_venv_wins_over_dot_venv_when_both_exist(self, tmp_path):
+        # Deterministic precedence, and only one of them: two venv bins on a
+        # service PATH is how you get a mystery interpreter.
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        (tmp_path / ".venv" / "bin").mkdir(parents=True)
+        dirs = gateway_cli._build_service_path_dirs(tmp_path)
+        assert str(tmp_path / "venv" / "bin") in dirs
+        assert str(tmp_path / ".venv" / "bin") not in dirs
+
+    def test_no_venv_falls_back_to_sys_prefix(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(gateway_cli.sys, "prefix", "/nix/store/env")
+        monkeypatch.setattr(gateway_cli.sys, "base_prefix", "/usr")
+        dirs = gateway_cli._build_service_path_dirs(tmp_path)
+        assert "/nix/store/env/bin" in dirs
 
 
 class TestGeneratedUnitIncludesLocalBin:

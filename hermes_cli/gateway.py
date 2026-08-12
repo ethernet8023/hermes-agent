@@ -2715,11 +2715,16 @@ def _build_service_path_dirs(project_root: Path | None = None) -> list[str]:
 
     candidates = []
 
-    venv_bin = project_root / "venv" / "bin"
-    if _is_dir(venv_bin):
-        candidates.append(str(venv_bin))
-    elif sys.prefix != sys.base_prefix:
-        candidates.append(str(Path(sys.prefix) / "bin"))
+    # Both layouts, matching _detect_venv_dir(): install.ps1/install.sh create
+    # <root>/venv, uv's default is <root>/.venv.
+    for _venv_name in ("venv", ".venv"):
+        venv_bin = project_root / _venv_name / "bin"
+        if _is_dir(venv_bin):
+            candidates.append(str(venv_bin))
+            break
+    else:
+        if sys.prefix != sys.base_prefix:
+            candidates.append(str(Path(sys.prefix) / "bin"))
 
     node_bin = project_root / "node_modules" / ".bin"
     if _is_dir(node_bin):
@@ -2856,7 +2861,15 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
     python_path = get_python_path()
     working_dir = _stable_service_working_dir()
     detected_venv = _detect_venv_dir()
-    venv_dir = str(detected_venv) if detected_venv else str(PROJECT_ROOT / "venv")
+    # No venv → no VIRTUAL_ENV line. Baking a guessed <root>/venv into a unit
+    # file points the service at a directory that does not exist (the desktop
+    # bundle ships its own interpreter; a packaged install has no checkout
+    # venv), and anything downstream that trusts VIRTUAL_ENV then resolves
+    # against a phantom prefix. The interpreter itself comes from
+    # get_python_path(), which already falls back correctly.
+    venv_env_line = (
+        f'Environment="VIRTUAL_ENV={detected_venv}"\n' if detected_venv else ""
+    )
 
     path_entries = _build_service_path_dirs()
     if not system:
@@ -2895,7 +2908,11 @@ def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) 
         # rather than a remapped source-checkout path that can rot. See
         # _stable_service_working_dir() for the full rationale.
         working_dir = str(hermes_home) if hermes_home else _remap_path_for_user(working_dir, home_dir)
-        venv_dir = _remap_path_for_user(venv_dir, home_dir)
+        venv_env_line = (
+            f'Environment="VIRTUAL_ENV={_remap_path_for_user(str(detected_venv), home_dir)}"\n'
+            if detected_venv
+            else ""
+        )
         path_entries = [_remap_path_for_user(p, home_dir) for p in path_entries]
         # Managed Node for the TARGET user's tree (see the skip above): probe
         # the remapped hermes_home, not the calling user's. Prepend — the
@@ -2928,8 +2945,7 @@ Environment="HOME={home_dir}"
 Environment="USER={username}"
 Environment="LOGNAME={username}"
 Environment="PATH={sane_path}"
-Environment="VIRTUAL_ENV={venv_dir}"
-Environment="HERMES_HOME={hermes_home}"
+{venv_env_line}Environment="HERMES_HOME={hermes_home}"
 Restart=always
 RestartSec=5
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
@@ -2966,8 +2982,7 @@ Type={systemd_type}
 {systemd_watchdog_directives}ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else ""} gateway run
 WorkingDirectory={working_dir}
 Environment="PATH={sane_path}"
-Environment="VIRTUAL_ENV={venv_dir}"
-Environment="HERMES_HOME={hermes_home}"
+{venv_env_line}Environment="HERMES_HOME={hermes_home}"
 Restart=always
 RestartSec=5
 RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}
@@ -4102,7 +4117,13 @@ def generate_launchd_plist() -> str:
     # the systemd unit), then capture the user's full shell PATH so every
     # user-installed tool (node, ffmpeg, …) is reachable.
     detected_venv = _detect_venv_dir()
-    venv_dir = str(detected_venv) if detected_venv else str(PROJECT_ROOT / "venv")
+    # Same rule as the systemd units: omit VIRTUAL_ENV rather than baking a
+    # guessed <root>/venv that does not exist on a packaged install.
+    venv_plist_entry = (
+        f"        <key>VIRTUAL_ENV</key>\n        <string>{detected_venv}</string>\n"
+        if detected_venv
+        else ""
+    )
     # Resolve the directory containing the node binary (e.g. Homebrew, nvm)
     # so it's explicitly in PATH even if the user's shell PATH changes later.
     priority_dirs = _build_service_path_dirs()
@@ -4150,9 +4171,7 @@ def generate_launchd_plist() -> str:
     <dict>
         <key>PATH</key>
         <string>{sane_path}</string>
-        <key>VIRTUAL_ENV</key>
-        <string>{venv_dir}</string>
-        <key>HERMES_HOME</key>
+{venv_plist_entry}        <key>HERMES_HOME</key>
         <string>{hermes_home}</string>
     </dict>
 

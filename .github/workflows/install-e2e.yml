@@ -153,7 +153,6 @@ jobs:
       # One leg breaking is worth knowing about even if another already
       # failed, so let every leg report.
       fail-fast: false
-      max-parallel: 4
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.linux) }}
     uses: ./.github/workflows/install-e2e-run.yml
     with:
@@ -168,9 +167,6 @@ jobs:
     needs: generate-matrix
     strategy:
       fail-fast: false
-      # 2x-cost runners at ~14 min a leg: two at a time is throughput
-      # enough without hogging the Windows pool.
-      max-parallel: 2
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.windows) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
@@ -185,8 +181,6 @@ jobs:
     needs: generate-matrix
     strategy:
       fail-fast: false
-      # 10x-cost runners: keep concurrency low.
-      max-parallel: 2
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.macos) }}
     # Two driver arms: the OS-agnostic script driver (shared with linux)
     # and the published-dmg GUI driver; the run workflow routes.

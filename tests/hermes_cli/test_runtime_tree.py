@@ -50,7 +50,11 @@ class TestRuntimeTree:
 
 class TestStewardMessages:
     def test_every_known_steward_names_its_mechanism(self):
-        assert "--eject" in steward_update_message("desktop-app")
+        # The desktop bundle deliberately stopped advertising
+        # `hermes update --eject` here (c375b9c28): an embedded install has
+        # no checkout to eject into from this code path, so the message
+        # points at the app's own update UI instead.
+        assert "desktop app" in steward_update_message("desktop-app")
         assert "docker pull" in steward_update_message("docker")
         assert "flake" in steward_update_message("nix")
 

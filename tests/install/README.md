@@ -43,6 +43,13 @@ A leg can install a release from months back. The driver must not assume that th
 - For the installed CLI, ask the binary with `--help`.
 - If a flag is not found, omit the flag. This is not an error.
 
+## The two app-update variants
+
+The desktop app has two launch paths, so the matrix has two app-update methods. Both click "Update now" in the running app. They differ in how the app starts:
+
+- `open-app-update`: the app starts from the OS entry point that the install created. On windows these are the Start Menu and Desktop shortcuts to the installed `Hermes.exe`; the desktop installer always creates them. The installer scripts do not create entry points: their opt-in desktop stage (`--include-desktop` / `-IncludeDesktop`) builds the app inside the checkout but does not register it with the OS. So `open-app-update` legs pair with a `desktop-installer` install.
+- `hermes-desktop-app-update`: the app starts with the `hermes desktop` command. Every install method provides this command, on each OS that ships the desktop app. On linux this is the only app surface: no desktop installer and no packaged desktop artifact exist for linux.
+
 ## Skips
 
 A grey leg is normal. There are two causes:

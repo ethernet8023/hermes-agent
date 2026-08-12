@@ -73,11 +73,11 @@ param(
 
     # Update method to exercise in the update-gui phase, named by the same
     # ids the combination generator (scripts/sandbox/generate-e2e-matrix
-    # .mjs) declares. Only "app-update" (the app's own Update button) is
-    # implemented; the others are declared arms so the surface is stable
-    # when they land.
-    [ValidateSet("app-update", "hermes-update", "desktop-installer@latest", "installer-script")]
-    [string]$Route = "app-update",
+    # .mjs) declares. Only "open-app-update" (the app's own Update button,
+    # app launched from the installed exe) is implemented; the others are
+    # declared arms so the surface is stable when they land.
+    [ValidateSet("open-app-update", "hermes-desktop-app-update", "hermes-update", "desktop-installer@latest", "installer-script")]
+    [string]$Route = "open-app-update",
 
     # The OLD version: the ref served as `main` while the installer runs,
     # i.e. what the user starts on. The published Hermes-Setup.exe carries
@@ -675,8 +675,14 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
 function Invoke-PhaseUpdateGui {
     $state = Read-State
     switch ($Route) {
-        "app-update" {
+        "open-app-update" {
             Invoke-GuiUpdateDesktopRoute $state.current
+        }
+        "hermes-desktop-app-update" {
+            # TODO: launch the app via `hermes desktop` (spawn interception
+            # captures the real argv/cwd/env; Playwright launches from the
+            # captured spec), then the same Update-now click.
+            throw "update method 'hermes-desktop-app-update' is not implemented yet"
         }
         "hermes-update" {
             # TODO: run `hermes update` from the installed venv -- the CLI

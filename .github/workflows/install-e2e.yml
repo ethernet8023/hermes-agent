@@ -14,7 +14,7 @@ name: Install & Update E2E
 #                     clicked by AutoHotkey, update via the app, Playwright
 #                     clicking "Update now" (install-e2e-windows-run.yml)
 #   Matrix: macos     the same OS-agnostic driver as linux, on macos-latest
-#                     (install-e2e-run.yml; app-update pairs are TODO)
+#                     (install-e2e-run.yml; app-update variants are TODO)
 #
 # Every combination is dispatched to its OS's run workflow; the run
 # workflow natively skips (grey) what its driver cannot run yet -- an
@@ -158,6 +158,7 @@ jobs:
       install-method: ${{ matrix.install_method }}
       update-method: ${{ matrix.update_method }}
       install-ref: ${{ matrix.install_ref }}
+      tag-has-desktop: ${{ matrix.tag_has_desktop }}
 
   windows:
     name: ${{ matrix.name }}
@@ -191,6 +192,7 @@ jobs:
       install-method: ${{ matrix.install_method }}
       update-method: ${{ matrix.update_method }}
       install-ref: ${{ matrix.install_ref }}
+      tag-has-desktop: ${{ matrix.tag_has_desktop }}
       runner: macos-latest
 
   # The outcome, human-readable: the plan chart again, with each cell

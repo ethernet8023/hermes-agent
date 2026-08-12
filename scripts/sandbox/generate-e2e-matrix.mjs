@@ -21,9 +21,9 @@
  *
  * Prints JSON: { linux: {include:[...]}, windows: {include:[...]},
  * macos: {include:[...]} } -- every entry is {name, install_method,
- * update_method, install_ref}, and windows entries add tag_has_desktop
- * (from the tag annotation) so the run workflow can natively skip
- * desktop-surface legs from releases that predate the desktop app.
+ * update_method, install_ref, tag_has_desktop} (the tag annotation lets
+ * a run workflow natively skip desktop-surface legs from releases that
+ * predate the desktop app).
  */
 
 import path from 'node:path';
@@ -41,10 +41,18 @@ import { fileURLToPath } from 'node:url';
  *   installer-script is the platform's one-liner (curl | bash on
  *   linux/macos, irm | iex on windows); packaged-app is declared but not
  *   used by any OS spec yet.
- * @typedef {InstallMethod | 'hermes-update' | 'app-update'} UpdateMethod
+ * @typedef {InstallMethod | 'hermes-update' | 'open-app-update' | 'hermes-desktop-app-update'} UpdateMethod
  *   Every install method doubles as an update method (re-run it over the
- *   existing install), plus the updater CLI and the running app's own
- *   Update button.
+ *   existing install), plus the updater CLI and the two app-update
+ *   variants. The variants differ by launch surface: open-app-update
+ *   starts the app from the OS entry point the install registered
+ *   (Start Menu / Desktop shortcuts) -- today only the windows desktop
+ *   installer's stage registers one (install.sh --include-desktop
+ *   builds the app but registers nothing), so these legs pair with a
+ *   desktop-installer install; hermes-desktop-app-update starts the app
+ *   via `hermes desktop`, which every install method provides on every
+ *   OS that ships the desktop app. Both then update through the app's
+ *   own Update button.
  * @typedef {'linux' | 'windows' | 'macos'} Os
  *
  * @typedef {{method: InstallMethod, versions?: InstallerVersion[]}} InstallEntry
@@ -78,8 +86,11 @@ export const SPEC = {
       // Run the bootstrap exe again over an existing install (--update flow).
       { method: 'desktop-installer', versions: ['latest'] },
       { method: 'hermes-update' },
-      // Settings -> About -> "Update now" inside the running desktop app.
-      { method: 'app-update' },
+      // Settings -> About -> "Update now", app launched from the installed
+      // exe (the entry point the desktop installer created).
+      { method: 'open-app-update' },
+      // Same button, app launched via `hermes desktop`.
+      { method: 'hermes-desktop-app-update' },
     ],
   },
   macos: {
@@ -89,7 +100,11 @@ export const SPEC = {
     update: [
       { method: 'installer-script' },
       { method: 'hermes-update' },
-      { method: 'app-update' },
+      // install.sh --include-desktop builds the .app inside the checkout
+      // but registers no OS entry point, so open-app-update legs pair
+      // with a desktop-installer install (the published dmg).
+      { method: 'open-app-update' },
+      { method: 'hermes-desktop-app-update' },
     ],
   },
   linux: {
@@ -99,6 +114,11 @@ export const SPEC = {
     update: [
       { method: 'installer-script' },
       { method: 'hermes-update' },
+      // No desktop installer and no packaged desktop artifact exist for
+      // linux, so there is no open-app-update; `hermes desktop` is always
+      // the source-mode path (build apps/desktop from the checkout, launch
+      // electron) and is the one app surface a linux install has.
+      { method: 'hermes-desktop-app-update' },
     ],
   },
 };
@@ -157,8 +177,11 @@ export function buildMatrices(envs, tags) {
         install_method: env.install,
         update_method: env.update,
         install_ref: tag.ref,
+        // Every OS declares desktop-surface methods (both app-update
+        // variants at minimum), so every leg carries the annotation and
+        // its run workflow can natively skip pre-desktop tags.
+        tag_has_desktop: tag.desktop,
       };
-      if (env.os === 'windows') entry.tag_has_desktop = tag.desktop;
       byOs[env.os].include.push(entry);
     }
   }
@@ -170,7 +193,7 @@ export function buildMatrices(envs, tags) {
  * one row per {os, install -> update} combination, one column per
  * starting tag. Every cell is dispatched; whether it RUNS or greys out
  * is the run workflow's call (capability lives there, not here), so the
- * chart only distinguishes the one thing the plan itself knows: windows
+ * chart only distinguishes the one thing the plan itself knows:
  * desktop-surface legs from tags that predate the desktop app.
  *
  * @param {{os: Os, install: string, update: string}[]} envs
@@ -179,7 +202,7 @@ export function buildMatrices(envs, tags) {
  */
 export function renderMarkdownPlan(envs, tags) {
   const needsDesktop = (/** @type {string} */ m) =>
-    m.startsWith('desktop-installer') || m === 'app-update';
+    m.startsWith('desktop-installer') || m === 'open-app-update' || m === 'hermes-desktop-app-update';
   const lines = [
     '### Install & Update E2E plan',
     '',
@@ -191,7 +214,7 @@ export function renderMarkdownPlan(envs, tags) {
   for (const env of envs) {
     const cells = tags.map((tag) => {
       if (
-        env.os === 'windows' && !tag.desktop &&
+        !tag.desktop &&
         (needsDesktop(env.install) || needsDesktop(env.update))
       ) {
         return 'pre-desktop';

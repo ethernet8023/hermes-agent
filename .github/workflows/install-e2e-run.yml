@@ -42,7 +42,7 @@ on:
         required: true
         type: string
       update-method:
-        description: 'How the install updates to HEAD. Supported: hermes-update (the updater) or installer-script (re-run the one-liner). Declared-but-TODO methods skip.'
+        description: 'How the install updates to HEAD. Supported: hermes-update (the updater) or installer-script (re-run the one-liner). Declared-but-TODO methods (open-app-update, hermes-desktop-app-update) skip.'
         required: true
         type: string
       install-ref:
@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: refs/heads/main
+      tag-has-desktop:
+        description: "Whether install-ref ships the desktop app (apps/desktop). The caller annotates this from the tag's own tree; desktop-method legs from pre-desktop releases natively skip."
+        required: false
+        type: boolean
+        default: true
       runner:
         description: 'Runner label.'
         required: false

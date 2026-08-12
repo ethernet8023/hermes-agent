@@ -19,22 +19,26 @@ name: Install & Update E2E — Windows desktop (reusable)
 #                             headed, AutoHotkey clicks Install -> Launch,
 #                             the real Electron window must appear. Update
 #                             methods:
-#                               app-update  the app's own Update button:
-#                                           the installed Hermes.exe runs
+#                               open-app-update  the app's own Update
+#                                           button, app launched from the
+#                                           installed Hermes.exe: it runs
 #                                           under Playwright's Electron
 #                                           driver, which clicks Settings
 #                                           -> About -> "Update now"; the
 #                                           production hand-off chain runs
 #                                           untouched.
 #                               (hermes-update, desktop-installer@latest,
-#                               installer-script re-run: declared TODOs.)
+#                               installer-script re-run,
+#                               hermes-desktop-app-update: declared TODOs.)
 #   installer-script          the irm | iex one-liner
 #                             (tests/install/windows-installer-script-e2e
 #                             .ps1): runs the install.ps1 shipped AT the
 #                             OLD ref, headless. Update methods:
 #                               hermes-update     venv hermes.exe update
 #                               installer-script  re-run HEAD's install.ps1
-#                               (app-update from a script install: TODO.)
+#                               (open-app-update and
+#                               hermes-desktop-app-update from a script
+#                               install: TODO.)
 #
 # Method pairs without a driver yet NATIVELY SKIP (grey check, no runner):
 # the capability knowledge lives here, next to the drivers, so the caller
@@ -47,7 +51,7 @@ name: Install & Update E2E — Windows desktop (reusable)
 #       uses: ./.github/workflows/install-e2e-windows-run.yml
 #       with:
 #         install-method: desktop-installer@latest
-#         update-method: app-update
+#         update-method: open-app-update
 #         install-ref: v2026.8.3
 
 on:
@@ -58,7 +62,7 @@ on:
         required: true
         type: string
       update-method:
-        description: 'How the install updates to HEAD. Supported: app-update (Update button under Playwright, from a desktop install) and hermes-update / installer-script (from a script install). Declared-but-TODO pairs skip.'
+        description: 'How the install updates to HEAD. Supported: open-app-update (Update button under Playwright, app launched from the installed exe, from a desktop install) and hermes-update / installer-script (from a script install). Declared-but-TODO pairs (incl. hermes-desktop-app-update) skip.'
         required: true
         type: string
       install-ref:
@@ -94,7 +98,7 @@ jobs:
     # tag-has-desktop from the tag's own tree; releases before #20059 have
     # no window to launch and no Update button to click). Anything else is
     # a native skip: a declared-TODO method pair, or a pre-desktop tag.
-    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'app-update' && inputs.tag-has-desktop
+    if: inputs.install-method == 'desktop-installer@latest' && inputs.update-method == 'open-app-update' && inputs.tag-has-desktop
     runs-on: windows-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -183,8 +187,9 @@ jobs:
   script-e2e:
     # Same static-name reasoning as e2e above.
     name: install.ps1
-    # The pairs the script driver can run today. app-update from a script
-    # install is a declared TODO (the desktop app also has to be BUILT by
+    # The pairs the script driver can run today. open-app-update and
+    # hermes-desktop-app-update from a script install are declared TODOs
+    # (the desktop app also has to be BUILT by
     # that path first).
     if: inputs.install-method == 'installer-script' && contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
     runs-on: windows-latest

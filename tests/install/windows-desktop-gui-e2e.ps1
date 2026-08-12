@@ -225,41 +225,6 @@ function Save-DesktopScreenshot([string]$OutFile) {
     }
 }
 
-function Start-ScreenRecording([string]$OutFile) {
-    # Continuous ffmpeg screen capture (gdigrab, 15fps). ffmpeg ships on the
-    # windows-latest runner image; skip gracefully elsewhere. mkv on purpose:
-    # it stays playable even if the process dies without finalizing.
-    #
-    # ffmpeg must be started, fed, and stopped from THIS process: the
-    # graceful stop is the character 'q' on its LIVE stdin pipe, which only
-    # System.Diagnostics.Process exposes (Start-Process
-    # -RedirectStandardInput hands it a file handle already at EOF).
-    if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-        Write-Host "  (ffmpeg not on PATH; skipping screen recording)"
-        return $null
-    }
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "ffmpeg"
-    $psi.Arguments = "-y -f gdigrab -framerate 15 -i desktop " +
-        "-hide_banner -loglevel error " +
-        "-c:v libx264 -preset ultrafast -pix_fmt yuv420p `"$OutFile`""
-    $psi.RedirectStandardInput = $true
-    $psi.UseShellExecute = $false
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    Write-Host "  screen recording started (pid $($proc.Id)) -> $OutFile"
-    return $proc
-}
-
-function Stop-ScreenRecording($proc) {
-    if ($proc -and -not $proc.HasExited) {
-        try {
-            $proc.StandardInput.Write("q")
-            $proc.StandardInput.Close()
-        } catch {}
-        if (-not $proc.WaitForExit(15000)) { try { $proc.Kill() } catch {} }
-    }
-}
-
 function Start-DesktopRecorder([string]$OutDir) {
     # Rolling desktop capture: one PNG every 3s from a detached PowerShell,
     # capped at 800 frames (~40 min). Proof that survives any step failure.
@@ -419,7 +384,6 @@ function Invoke-PhaseInstallGui {
     New-Item -ItemType Directory -Path $HermesHome -Force | Out-Null
 
     $recorder = Start-DesktopRecorder (Join-Path $proof "desktop-frames")
-    $recording = Start-ScreenRecording (Join-Path $proof "recording.mkv")
     $ahkLog = Join-Path $proof "ahk.log"
     try {
         Save-DesktopScreenshot (Join-Path $proof "00-before-installer.png")
@@ -458,7 +422,6 @@ function Invoke-PhaseInstallGui {
         Assert-True $installer.HasExited "Hermes-Setup.exe exited after Launch"
     }
     finally {
-        Stop-ScreenRecording $recording
         Stop-DesktopRecorder $recorder (Join-Path $proof "desktop-frames")
         # Surface the installer's own log win or lose, full and folded.
         $bootLog = Join-Path $HermesHome "logs\bootstrap-installer.log"
@@ -549,7 +512,6 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
     Assert-True ($npmExit -eq 0) "npm install @playwright/test@$PlaywrightVersion into the driver dir"
 
     $recorder = Start-DesktopRecorder (Join-Path $proof "desktop-frames")
-    $recording = Start-ScreenRecording (Join-Path $proof "recording.mkv")
     try {
         # Launch the installed app and click through Settings -> About ->
         # Update now. Exit 0 = the app quit for the updater hand-off.
@@ -658,7 +620,6 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
         Save-DesktopScreenshot (Join-Path $proof "99-relaunched-desktop.png")
     }
     finally {
-        Stop-ScreenRecording $recording
         Stop-DesktopRecorder $recorder (Join-Path $proof "desktop-frames")
         $handoffLog = Join-Path $HermesHome "logs\desktop-update-handoff.log"
         if (Test-Path -LiteralPath $handoffLog) {

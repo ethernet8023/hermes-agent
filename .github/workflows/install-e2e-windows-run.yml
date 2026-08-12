@@ -119,31 +119,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ffmpeg records the screen for the whole run so a failed click is
-      # diagnosable from the artifact instead of by guesswork. NOT
-      # preinstalled on windows-latest; the driver skips recording
-      # gracefully when it's absent, so this step is what makes the
-      # recording actually happen. Cached — winget's ffmpeg download is
-      # the slow part.
-      - name: Restore cached ffmpeg
-        id: ffmpeg-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      # One recording mechanism on every OS: the composite action installs
+      # ffmpeg (cached - winget's download is the slow part), starts the
+      # capture, and record-stop fails on a zero-frame file so a silently
+      # missing recording cannot go green.
+      - name: Start screen recording
+        uses: ./.github/actions/e2e-screen-record
         with:
-          path: ${{ runner.temp }}\test-bins\ffmpeg
-          key: e2e-ffmpeg-${{ runner.os }}-v1
-
-      - name: Install ffmpeg
-        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $bins = "$env:RUNNER_TEMP\test-bins\ffmpeg"
-          New-Item -ItemType Directory -Path $bins -Force | Out-Null
-          winget install -e --id Gyan.FFmpeg --silent --accept-source-agreements --accept-package-agreements --disable-interactivity --location "$env:RUNNER_TEMP\ffmpeg_dir"
-          Copy-Item -Path "$env:RUNNER_TEMP\ffmpeg_dir\*\*" -Destination $bins -Recurse -Force
-
-      - name: Add ffmpeg to PATH
-        shell: pwsh
-        run: Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\test-bins\ffmpeg\bin"
+          mode: start
+          output: ${{ github.workspace }}\gui-e2e-proof\recording.mkv
 
       - name: Stage serve repo (main -> ${{ inputs.install-ref }})
         shell: powershell
@@ -156,6 +140,13 @@ jobs:
       - name: Update ${{ inputs.install-ref }} -> HEAD (${{ inputs.update-method }})
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
+
+      - name: Stop screen recording
+        if: always()
+        uses: ./.github/actions/e2e-screen-record
+        with:
+          mode: stop
+          output: ${{ github.workspace }}\gui-e2e-proof\recording.mkv
 
       - name: Collect proof + logs
         if: always()
@@ -208,11 +199,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Start screen recording
+        uses: ./.github/actions/e2e-screen-record
+        with:
+          mode: start
+          output: ${{ runner.temp }}\e2e-logs\recording.mkv
+
       - name: Run install + update E2E
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-installer-script-e2e.ps1 -InstallMethod "${{ inputs.install-method }}" -UpdateMethod "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}"
         env:
           HERMES_E2E_LOG_DIR: ${{ runner.temp }}\e2e-logs
+
+      - name: Stop screen recording
+        if: always()
+        uses: ./.github/actions/e2e-screen-record
+        with:
+          mode: stop
+          output: ${{ runner.temp }}\e2e-logs\recording.mkv
 
       - name: Upload installer logs
         if: always()

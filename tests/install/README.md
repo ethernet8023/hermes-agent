@@ -79,4 +79,4 @@ gh workflow run install-e2e.yml --ref <branch> -f route=both -f tag-count=2
 
 ## Artifacts
 
-Each leg uploads its logs as an artifact. The windows GUI leg also uploads screenshots, a screen recording, and the update result file. Get them with `gh run download <run-id>`.
+Each leg uploads its logs as an artifact. Every leg also records the screen for its whole run: the composite action `.github/actions/e2e-screen-record` installs ffmpeg, records with the OS's capture backend (x11grab on linux, gdigrab on windows, avfoundation on macos), and fails the leg if the recording is missing or has zero frames. Linux runners have no display, so the action starts `Xvfb :99` first and exports `DISPLAY` for every later step — the app under test and the recorder share that display. The windows GUI leg also uploads screenshots and the update result file. Get them with `gh run download <run-id>`.

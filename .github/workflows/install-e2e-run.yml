@@ -91,6 +91,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # One recording mechanism on every OS (Xvfb gives headless linux a
+      # display; the same display serves any app the driver launches).
+      - name: Start screen recording
+        uses: ./.github/actions/e2e-screen-record
+        with:
+          mode: start
+          output: ${{ runner.temp }}/e2e-logs/recording.mkv
+
       - name: Run install + update E2E
         run: |
           set -euo pipefail
@@ -102,6 +110,13 @@ jobs:
           # Outside the workspace on purpose: logs written into the repo
           # would trip the driver's own dirty-tree guard.
           HERMES_E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
+
+      - name: Stop screen recording
+        if: always()
+        uses: ./.github/actions/e2e-screen-record
+        with:
+          mode: stop
+          output: ${{ runner.temp }}/e2e-logs/recording.mkv
 
       # Artifact names cannot contain '/', and install-ref may be a full ref
       # like refs/heads/main. GitHub Actions expressions have no string-replace

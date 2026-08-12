@@ -186,6 +186,8 @@ function Set-GitRedirect {
     @"
 [url "$fileUrl"]
 	insteadOf = $actualGitUrl
+    insteadOf = $RepoUrlHttps
+    insteadOf = $RepoUrlSsh
 "@ | Set-Content -LiteralPath $gitCfg -Encoding ASCII
     $env:GIT_CONFIG_GLOBAL = $gitCfg
 

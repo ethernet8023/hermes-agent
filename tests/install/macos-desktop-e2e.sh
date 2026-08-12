@@ -94,6 +94,8 @@ arm_redirect() {
   cat > "$GIT_CFG" <<EOF
 [url "file://$SERVE_REPO"]
   insteadOf = $actual_git_url
+  insteadOf = $REPO_URL_HTTPS
+  insteadOf = $REPO_URL_SSH
 EOF
   export GIT_CONFIG_GLOBAL="$GIT_CFG"
 

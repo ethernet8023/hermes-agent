@@ -152,11 +152,35 @@ class TestStewardRemediation:
         assert set(ld._SEALED_STORE_REMEDIATION) <= known
 
     def test_every_remediation_renders_its_placeholder(self):
+        """Templates must format cleanly and leave no placeholder behind.
+
+        Literal braces are legitimate here — the Nix text quotes a
+        ``pkgs.hermes-agent.override { ... }`` snippet — so this asserts the
+        named field is gone rather than banning ``{``, which would forbid
+        showing the user real Nix syntax.
+        """
         templates = [*ld._SEALED_STORE_REMEDIATION.values(), ld._SEALED_STORE_FALLBACK]
         for template in templates:
             rendered = template.format(what="the dependencies for 'x'")
-            assert "{" not in rendered
+            assert "{what}" not in rendered
             assert "pip" not in rendered
+        # At least the templates that reference {what} must interpolate it.
+        with_field = [t for t in templates if "{what}" in t]
+        assert with_field, "no template names the missing dependencies"
+        for template in with_field:
+            assert "the dependencies for 'x'" in template.format(
+                what="the dependencies for 'x'"
+            )
+
+    def test_nix_covers_both_flake_and_nixos_users(self):
+        """Not everyone on Nix uses the NixOS module.
+
+        A flake/home-manager user has no ``services.hermes-agent.*`` options,
+        so naming only those leaves them with no next step.
+        """
+        rendered = ld._SEALED_STORE_REMEDIATION["nix"].format(what="these deps")
+        assert "services.hermes-agent.extraDependencyGroups" in rendered
+        assert "pkgs.hermes-agent.override" in rendered
 
 
 class TestStewardDetection:

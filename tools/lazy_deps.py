@@ -510,12 +510,13 @@ class InstallRoute:
 _SEALED_STORE_REMEDIATION = {
     "nix": (
         "this Hermes runs from the read-only Nix store, so packages cannot "
-        "be added at runtime. Declare them in your Nix config instead: add "
-        "the extra to `services.hermes-agent.extraDependencyGroups` "
-        '(pyproject extras, e.g. "matrix", "messaging", "tts-premium"), or '
-        "pass prebuilt packages via "
-        "`services.hermes-agent.extraPythonPackages`, then rebuild. Without "
-        "that, {what} are not present in the built environment."
+        "be added at runtime. Declare them in your Nix config instead: on "
+        "NixOS set `services.hermes-agent.extraDependencyGroups` (pyproject "
+        'extras, e.g. "matrix", "messaging", "tts-premium") or '
+        "`services.hermes-agent.extraPythonPackages`; elsewhere override the "
+        "package directly, e.g. `pkgs.hermes-agent.override {{ "
+        'extraDependencyGroups = [ "matrix" ]; }}`. Rebuild afterwards. '
+        "Without that, {what} are not present in the built environment."
     ),
     "docker": (
         "the image's Python environment is read-only and no writable install "

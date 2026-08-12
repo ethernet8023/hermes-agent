@@ -75,6 +75,8 @@ export HOME_SANDBOX="$WORK_ROOT/home"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK %s\n' "$*"; }
 fail() { printf 'E2E ASSERTION FAILED: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=../e2e-assets/ts-prefix.sh
+source "$(dirname "$0")/e2e-assets/ts-prefix.sh" 2>/dev/null || ts_prefix() { cat; }
 log_group() {
   printf '::group::%s\n' "$1"
   cat "$2"
@@ -140,7 +142,7 @@ EOF
   # check it worked
   observed_git_url="$(git -C "$REPO_DIR" remote get-url origin)"
   if [[ "$observed_git_url" != "$REPO_URL_HTTPS" ]]; then
-    fail "failed git remote get-url shim: origin resolves to '$actual', expected '$REPO_URL_HTTPS'"
+    fail "failed git remote get-url shim: origin resolves to '$observed_git_url', expected '$REPO_URL_HTTPS'"
   fi
   ok "git remote get-url shim: $SHIM_DIR/git -> $REAL_GIT (origin reports $REPO_URL_HTTPS)"
 
@@ -224,7 +226,7 @@ phase_install() {
   # isolation would silently evaporate. Direct exec is the same binary and
   # the same first-launch flow.
   local rc=0
-  "$app_bin" > "$LOG_DIR/bootstrap-install.log" 2>&1 || rc=$?
+  "$app_bin" 2>&1 | ts_prefix > "$LOG_DIR/bootstrap-install.log" || rc=$?
   log_group "Hermes-Setup (dmg bootstrap) transcript" "$LOG_DIR/bootstrap-install.log"
   hdiutil detach "$mount" >/dev/null 2>&1 || true
   [ "$rc" -eq 0 ] || fail "dmg bootstrap exited $rc; transcript above"
@@ -236,7 +238,7 @@ phase_install() {
   ok "checkout is OLD ($OLD_SHA)"
   local hermes="$INSTALL_DIR/venv/bin/hermes"
   [ -x "$hermes" ] || fail "no hermes console script at $hermes"
-  "$hermes" --version > "$LOG_DIR/version-old.log" 2>&1 || fail "hermes --version failed after install"
+  "$hermes" --version 2>&1 | ts_prefix > "$LOG_DIR/version-old.log" || fail "hermes --version failed after install"
   ok "hermes --version works: $(head -c 120 "$LOG_DIR/version-old.log" | tr -d '\n')"
   find_installed_app >/dev/null || fail "no installed Hermes.app after the dmg bootstrap"
   ok "installed app: $(find_installed_app)"
@@ -249,7 +251,7 @@ run_playwright_update() {
   local pw_dir="$WORK_ROOT/playwright"
   mkdir -p "$pw_dir"
   (cd "$pw_dir" && npm install --no-save --no-audit --no-fund \
-    "@playwright/test@$PLAYWRIGHT_VERSION" > "$LOG_DIR/playwright-install.log" 2>&1) \
+    "@playwright/test@$PLAYWRIGHT_VERSION" 2>&1 | ts_prefix > "$LOG_DIR/playwright-install.log") \
     || { log_group "playwright install transcript" "$LOG_DIR/playwright-install.log"; fail "playwright install failed"; }
   cp "$ASSETS/launch-from-spec.mjs" "$pw_dir/"
   local rc=0
@@ -257,8 +259,8 @@ run_playwright_update() {
     --spec "$spec" \
     --result "$HERMES_HOME/.hermes-update-result.json" \
     --expect-sha "$HEAD_SHA" \
-    --repo-dir "$INSTALL_DIR" \
-    > "$LOG_DIR/app-update.log" 2>&1) || rc=$?
+    --repo-dir "$INSTALL_DIR" 2>&1 \
+    | ts_prefix > "$LOG_DIR/app-update.log") || rc=$?
   log_group "app update (Playwright) transcript" "$LOG_DIR/app-update.log"
   [ "$rc" -eq 0 ] || fail "app-driven update exited $rc; transcript above"
 }
@@ -308,7 +310,7 @@ PYEOF
       (cd "$INSTALL_DIR" && \
         PYTHONPATH="$ASSETS/launch-capture${PYTHONPATH:+:$PYTHONPATH}" \
         HERMES_E2E_CAPTURE_LAUNCH="$spec" \
-        "$hermes" desktop < /dev/null > "$LOG_DIR/desktop-launch-capture.log" 2>&1) || rc=$?
+        "$hermes" desktop < /dev/null 2>&1 | ts_prefix > "$LOG_DIR/desktop-launch-capture.log") || rc=$?
       log_group "hermes desktop (launch capture) transcript" "$LOG_DIR/desktop-launch-capture.log"
       [ "$rc" -eq 0 ] || fail "hermes desktop exited $rc during launch capture"
       [ -f "$spec.captured" ] || fail "hermes desktop exited 0 but no launch was captured"
@@ -321,7 +323,7 @@ PYEOF
   got="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
   [ "$got" = "$HEAD_SHA" ] || fail "checkout is $got, expected HEAD ($HEAD_SHA)"
   ok "checkout landed on HEAD ($HEAD_SHA)"
-  "$INSTALL_DIR/venv/bin/hermes" --version > "$LOG_DIR/version-head.log" 2>&1 \
+  "$INSTALL_DIR/venv/bin/hermes" --version 2>&1 | ts_prefix > "$LOG_DIR/version-head.log" \
     || fail "hermes --version failed after update"
   ok "hermes --version works post-update"
   step "PASS: $OLD_REF -> HEAD via $UPDATE_METHOD"

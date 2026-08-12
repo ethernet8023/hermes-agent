@@ -291,6 +291,9 @@ function Test-HermesRuns([string]$Label) {
 # shipped AT the ref under test, run with flags probed from that ref's own
 # script text - older releases reject parameters added later).
 # ----------------------------------------------------------------------------
+# shellcheck source=../e2e-assets/ts-prefix.ps1
+. (Join-Path $PSScriptRoot "e2e-assets\ts-prefix.ps1")
+
 function Write-LogGroup([string]$Title, [string]$LogPath) {
     Write-Host "::group::$Title"
     if (Test-Path -LiteralPath $LogPath) { Get-Content -LiteralPath $LogPath | Write-Host }
@@ -316,7 +319,7 @@ function Invoke-RefInstaller {
     New-Item -ItemType Directory -Path (Join-Path $WorkRoot "logs") -Force | Out-Null
     $log = Join-Path $WorkRoot "logs\install-$Label.log"
     $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $script @flags *> $log
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $script @flags 2>&1 | Add-TsPrefix | Out-File -Encoding UTF8 $log
     $installExit = $LASTEXITCODE
     $ErrorActionPreference = $prevEap
     Write-LogGroup "install.ps1 ($Label) transcript" $log
@@ -339,7 +342,7 @@ function Invoke-HermesUpdate {
     $log = Join-Path $WorkRoot "logs\update.log"
     Push-Location $InstallDir
     try {
-        & $hermesExe @updateArgs *> $log
+        & $hermesExe @updateArgs 2>&1 | Add-TsPrefix | Out-File -Encoding UTF8 $log
         $updateExit = $LASTEXITCODE
     } finally {
         Pop-Location
@@ -367,7 +370,7 @@ function Invoke-HermesDesktopAppUpdate([string]$TargetSha) {
     $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     Push-Location $InstallDir
     try {
-        & $hermesExe desktop *> $log
+        & $hermesExe desktop 2>&1 | Add-TsPrefix | Out-File -Encoding UTF8 $log
         $capExit = $LASTEXITCODE
     } finally {
         Pop-Location

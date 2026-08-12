@@ -119,6 +119,17 @@ jobs:
           mode: stop
           output: ${{ runner.temp }}/e2e-logs/recording.mkv
 
+      # Browsers cannot play Matroska: remux (copy codec, no re-encode) so
+      # the artifact zip feeds the static playback.html leg player directly.
+      - name: Remux recording for browser playback
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "${{ runner.temp }}/e2e-logs/recording.mkv" ]; then
+            ffmpeg -y -hide_banner -loglevel error -i "${{ runner.temp }}/e2e-logs/recording.mkv" \
+              -c copy "${{ runner.temp }}/e2e-logs/recording.mp4"
+          fi
+
       # Artifact names cannot contain '/', and install-ref may be a full ref
       # like refs/heads/main. GitHub Actions expressions have no string-replace
       # function, so build the safe name here. Runs even on failure -- that is

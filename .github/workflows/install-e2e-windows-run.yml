@@ -144,6 +144,15 @@ jobs:
           mode: stop
           output: ${{ github.workspace }}\gui-e2e-proof\recording.mkv
 
+      - name: Remux recording for browser playback
+        if: always()
+        shell: pwsh
+        run: |
+          $mkv = "$env:GITHUB_WORKSPACE\gui-e2e-proof\recording.mkv"
+          if (Test-Path -LiteralPath $mkv) {
+            & ffmpeg -y -hide_banner -loglevel error -i $mkv -c copy "$env:GITHUB_WORKSPACE\gui-e2e-proof\recording.mp4"
+          }
+
       - name: Collect proof + logs
         if: always()
         shell: powershell

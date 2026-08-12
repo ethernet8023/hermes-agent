@@ -85,6 +85,8 @@ SERVE_REPO="$WORK_ROOT/serve.git"
 step() { printf '\n=== %s ===\n' "$*"; }
 ok()   { printf '  OK %s\n' "$*"; }
 fail() { printf 'E2E ASSERTION FAILED: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=../e2e-assets/ts-prefix.sh
+source "$(dirname "$0")/e2e-assets/ts-prefix.sh" 2>/dev/null || ts_prefix() { cat; }
 # Full transcript in the job log, collapsed (GitHub renders ::group:: as a
 # fold; plain text anywhere else). Win or lose -- a green install's log is
 # how you diagnose the leg that fails next.
@@ -178,7 +180,7 @@ EOF
   # check it worked
   observed_git_url="$(git -C "$REPO_ROOT" remote get-url origin)"
   if [[ "$observed_git_url" != "$REPO_URL_HTTPS" ]]; then
-    fail "failed git remote get-url shim: origin resolves to '$actual', expected '$REPO_URL_HTTPS'"
+    fail "failed git remote get-url shim: origin resolves to '$observed_git_url', expected '$REPO_URL_HTTPS'"
   fi
   ok "git remote get-url shim: $SHIM_DIR/git -> $REAL_GIT (origin reports $REPO_URL_HTTPS)"
 }
@@ -238,7 +240,7 @@ run_installer() {
   # </dev/null: the script reads prompts from stdin when a tty is absent;
   # EOF makes every remaining prompt take its default.
   local rc=0
-  bash "$script" "${flags[@]}" < /dev/null > "$LOG_DIR/install-$2.log" 2>&1 || rc=$?
+  bash "$script" "${flags[@]}" < /dev/null 2>&1 | ts_prefix > "$LOG_DIR/install-$2.log" || rc=$?
   log_group "install.sh ($2) transcript" "$LOG_DIR/install-$2.log"
   [ "$rc" -eq 0 ] || fail "install.sh ($2) exited $rc; transcript above, log at $LOG_DIR/install-$2.log"
 }
@@ -271,7 +273,7 @@ assert_checkout() {
   ok "checkout is $2 ($1)"
   local hermes="$INSTALL_DIR/venv/bin/hermes"
   [ -x "$hermes" ] || fail "no hermes console script at $hermes"
-  "$hermes" --version > "$LOG_DIR/version-$2.log" 2>&1 \
+  "$hermes" --version 2>&1 | ts_prefix > "$LOG_DIR/version-$2.log" \
     || fail "hermes --version failed after $2; log in $LOG_DIR/version-$2.log"
   ok "hermes --version works: $(head -c 120 "$LOG_DIR/version-$2.log" | tr -d '\n')"
 }
@@ -290,8 +292,8 @@ smoke_desktop() {
     return 0
   fi
   local rc=0
-  (cd "$INSTALL_DIR" && "$hermes" desktop --build-only < /dev/null \
-    > "$LOG_DIR/desktop-smoke-$1.log" 2>&1) || rc=$?
+  (cd "$INSTALL_DIR" && "$hermes" desktop --build-only < /dev/null 2>&1 \
+    | ts_prefix > "$LOG_DIR/desktop-smoke-$1.log") || rc=$?
   log_group "hermes desktop --build-only ($1) transcript" "$LOG_DIR/desktop-smoke-$1.log"
   [ "$rc" -eq 0 ] || fail "hermes desktop --build-only ($1) exited $rc; transcript above"
   ok "hermes desktop --build-only works at $1"
@@ -335,7 +337,7 @@ case "$UPDATE_METHOD" in
       update_cmd=("$HERMES" update)
     fi
     rc=0
-    (cd "$INSTALL_DIR" && "${update_cmd[@]}" < /dev/null > "$LOG_DIR/update.log" 2>&1) || rc=$?
+    (cd "$INSTALL_DIR" && "${update_cmd[@]}" < /dev/null 2>&1 | ts_prefix > "$LOG_DIR/update.log") || rc=$?
     log_group "hermes update transcript" "$LOG_DIR/update.log"
     [ "$rc" -eq 0 ] || fail "hermes update exited $rc; transcript above, log at $LOG_DIR/update.log"
     ;;
@@ -373,7 +375,7 @@ case "$UPDATE_METHOD" in
     (cd "$INSTALL_DIR" && \
       PYTHONPATH="$ASSETS/launch-capture${PYTHONPATH:+:$PYTHONPATH}" \
       HERMES_E2E_CAPTURE_LAUNCH="$SPEC" \
-      "$HERMES" desktop < /dev/null > "$LOG_DIR/desktop-launch-capture.log" 2>&1) || rc=$?
+      "$HERMES" desktop < /dev/null 2>&1 | ts_prefix > "$LOG_DIR/desktop-launch-capture.log") || rc=$?
     log_group "hermes desktop (launch capture) transcript" "$LOG_DIR/desktop-launch-capture.log"
     [ "$rc" -eq 0 ] || fail "hermes desktop exited $rc during launch capture; transcript above"
     # Exit 0 without a capture means a version that never reached its
@@ -388,7 +390,7 @@ case "$UPDATE_METHOD" in
     PW_DIR="$WORK_ROOT/playwright"
     mkdir -p "$PW_DIR"
     (cd "$PW_DIR" && npm install --no-save --no-audit --no-fund \
-      "@playwright/test@1.58.2" > "$LOG_DIR/playwright-install.log" 2>&1) \
+      "@playwright/test@1.58.2" 2>&1 | ts_prefix > "$LOG_DIR/playwright-install.log") \
       || { log_group "playwright install transcript" "$LOG_DIR/playwright-install.log"; fail "playwright install failed"; }
     cp "$ASSETS/launch-from-spec.mjs" "$PW_DIR/"
     rc=0
@@ -396,8 +398,8 @@ case "$UPDATE_METHOD" in
       --spec "$SPEC" \
       --result "$HERMES_HOME/.hermes-update-result.json" \
       --expect-sha "$HEAD_SHA" \
-      --repo-dir "$INSTALL_DIR" \
-      > "$LOG_DIR/app-update.log" 2>&1) || rc=$?
+      --repo-dir "$INSTALL_DIR" 2>&1 \
+      | ts_prefix > "$LOG_DIR/app-update.log") || rc=$?
     log_group "app update (Playwright) transcript" "$LOG_DIR/app-update.log"
     [ "$rc" -eq 0 ] || fail "app-driven update exited $rc; transcript above"
     ;;

@@ -131,6 +131,15 @@ jobs:
           mode: stop
           output: ${{ runner.temp }}/e2e-logs/recording.mkv
 
+      - name: Remux recording for browser playback
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "${{ runner.temp }}/e2e-logs/recording.mkv" ]; then
+            ffmpeg -y -hide_banner -loglevel error -i "${{ runner.temp }}/e2e-logs/recording.mkv" \
+              -c copy "${{ runner.temp }}/e2e-logs/recording.mp4"
+          fi
+
       # Artifact names cannot contain '/'; install-ref may be a full ref.
       - name: Build artifact name
         id: artifact

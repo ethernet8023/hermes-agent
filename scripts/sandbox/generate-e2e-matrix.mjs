@@ -106,6 +106,8 @@ export const SPEC = {
     install: [
       { method: 'installer-script' },
       { method: 'installer-script+desktop' },
+      // The published Hermes-Setup.dmg from the website, mounted and run.
+      { method: 'desktop-installer', versions: ['latest'] },
     ],
     update: [
       { method: 'installer-script' },

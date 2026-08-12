@@ -13,8 +13,10 @@ name: Install & Update E2E
 #   Matrix: windows   the real desktop user flow: website Hermes-Setup.exe
 #                     clicked by AutoHotkey, update via the app, Playwright
 #                     clicking "Update now" (install-e2e-windows-run.yml)
-#   Matrix: macos     the same OS-agnostic driver as linux, on macos-latest
-#                     (install-e2e-run.yml; app-update variants are TODO)
+#   Matrix: macos     script installs on the shared OS-agnostic driver,
+#                     plus the real desktop user flow: website
+#                     Hermes-Setup.dmg mounted and run, updates via the
+#                     app under Playwright (install-e2e-macos-run.yml)
 #
 # Every combination is dispatched to its OS's run workflow; the run
 # workflow natively skips (grey) what its driver cannot run yet -- an
@@ -186,14 +188,14 @@ jobs:
       # 10x-cost runners: keep concurrency low.
       max-parallel: 2
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.macos) }}
-    # The same OS-agnostic driver as linux -- only the runner differs.
-    uses: ./.github/workflows/install-e2e-run.yml
+    # Two driver arms: the OS-agnostic script driver (shared with linux)
+    # and the published-dmg GUI driver; the run workflow routes.
+    uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
       install-method: ${{ matrix.install_method }}
       update-method: ${{ matrix.update_method }}
       install-ref: ${{ matrix.install_ref }}
       tag-has-desktop: ${{ matrix.tag_has_desktop }}
-      runner: macos-latest
 
   # The outcome, human-readable: the plan chart again, with each cell
   # replaced by how that leg actually concluded. Per-leg conclusions are

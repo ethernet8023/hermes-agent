@@ -990,7 +990,7 @@ class TestRepairRetriesAfterUvRefresh:
         assert sentinel.read_text(encoding="utf-8") == "live"
 
 class TestDefaultLiveVenv:
-    """_default_live_venv() must cover BOTH install layouts (venv/ and .venv/).
+    """resolve_live_venv() must cover BOTH install layouts (venv/ and .venv/).
 
     Historically repair hardcoded venv/, so uv-default/.venv checkouts got
     'not-applicable' on every hermes update and stayed on journal_mode=DELETE
@@ -1008,28 +1008,45 @@ class TestDefaultLiveVenv:
         return root
 
     def test_dot_venv_only_is_targeted(self, tmp_path):
-        from hermes_cli.managed_uv import _default_live_venv
+        from hermes_cli.managed_uv import resolve_live_venv
 
         root = self._checkout(tmp_path, ".venv")
-        assert _default_live_venv(root) == root / ".venv"
+        assert resolve_live_venv(root) == root / ".venv"
 
     def test_managed_venv_takes_precedence(self, tmp_path):
-        from hermes_cli.managed_uv import _default_live_venv
+        from hermes_cli.managed_uv import resolve_live_venv
 
         root = self._checkout(tmp_path, "venv", ".venv")
-        assert _default_live_venv(root) == root / "venv"
+        assert resolve_live_venv(root) == root / "venv"
 
     def test_neither_layout_keeps_not_applicable(self, tmp_path):
         from hermes_cli.managed_uv import (
-            _default_live_venv,
             repair_vulnerable_runtime,
+            resolve_live_venv,
         )
 
         root = self._checkout(tmp_path)
         # Neither venv nor .venv has an interpreter -> repair is not applicable.
-        assert _default_live_venv(root) == root / "venv"
+        assert resolve_live_venv(root) == root / "venv"
         result = repair_vulnerable_runtime("uv", project_root=root)
         assert result.status == "not-applicable"
+
+    def test_private_alias_still_resolves(self, tmp_path):
+        # The function was private; keep the old name working for anything
+        # that still reaches for it.
+        from hermes_cli.managed_uv import _default_live_venv, resolve_live_venv
+
+        assert _default_live_venv is resolve_live_venv
+
+    def test_a_directory_without_an_interpreter_does_not_win(self, tmp_path):
+        # An empty .venv/ left behind by a failed `uv venv` must not be
+        # chosen over a working venv/ — the probe is for an interpreter,
+        # not for a directory.
+        from hermes_cli.managed_uv import resolve_live_venv
+
+        root = self._checkout(tmp_path, "venv")
+        (root / ".venv").mkdir()
+        assert resolve_live_venv(root) == root / "venv"
 
 
 class TestVenvPythonUpdateBoundary:

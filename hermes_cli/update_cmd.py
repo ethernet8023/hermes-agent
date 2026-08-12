@@ -3057,7 +3057,9 @@ def _venv_core_imports_healthy() -> tuple[bool, str]:
     Returns ``(healthy, detail)``. Never raises; unknown states report
     healthy so a probe failure can't force needless reinstalls.
     """
-    venv_dir = _m().PROJECT_ROOT / "venv"
+    from hermes_cli.managed_uv import resolve_live_venv
+
+    venv_dir = resolve_live_venv(_m().PROJECT_ROOT)
     venv_python = venv_python_path(venv_dir, windows=_m()._is_windows())
     if not venv_python.exists():
         # No venv interpreter at all. In a dev checkout that's normal (the
@@ -3135,7 +3137,9 @@ def _detect_venv_python_processes(
     except Exception:
         return []
 
-    venv_dir = _m().PROJECT_ROOT / "venv"
+    from hermes_cli.managed_uv import resolve_live_venv
+
+    venv_dir = resolve_live_venv(_m().PROJECT_ROOT)
     try:
         venv_prefix = str(venv_dir.resolve()).lower().rstrip(os.sep) + os.sep
     except OSError:
@@ -3260,7 +3264,9 @@ def _venv_launcher_ancestors(pids: list[int]) -> list[int]:
     except Exception:
         return []
 
-    venv_dir = _m().PROJECT_ROOT / "venv"
+    from hermes_cli.managed_uv import resolve_live_venv
+
+    venv_dir = resolve_live_venv(_m().PROJECT_ROOT)
     try:
         venv_prefix = str(venv_dir.resolve()).lower().rstrip(os.sep) + os.sep
     except OSError:

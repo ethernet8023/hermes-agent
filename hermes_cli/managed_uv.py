@@ -1016,7 +1016,7 @@ def _refresh_managed_uv_catalog(uv_bin: str) -> bool:
     return after != before
 
 
-def _default_live_venv(root: Path) -> Path:
+def resolve_live_venv(root: Path) -> Path:
     """Return the venv that runtime repair should target for *root*.
 
     Managed installs create ``<checkout>/venv``, but uv-default and dev
@@ -1031,6 +1031,11 @@ def _default_live_venv(root: Path) -> Path:
     precedence); otherwise fall back to ``.venv`` when that one does.
     When neither has an interpreter, return the ``venv`` path so the
     caller's existing ``not-applicable`` handling fires unchanged.
+
+    Public because it is the one answer to "which venv does this checkout
+    actually use": ``update_cmd`` asks it before probing venv health and
+    before scanning for processes holding the venv open, and both were
+    previously hardcoded to ``venv`` and blind to ``.venv`` installs.
     """
     primary = root / _VENV_NAME
     if _venv_python(primary).is_file():
@@ -1039,6 +1044,10 @@ def _default_live_venv(root: Path) -> Path:
     if _venv_python(fallback).is_file():
         return fallback
     return primary
+
+
+# Back-compat alias for the original private name.
+_default_live_venv = resolve_live_venv
 
 
 def _sweep_stale_runtime_backups(

@@ -34,9 +34,24 @@ if [ "${#INPUT[@]}" -eq 0 ]; then
       # avfoundation lists devices on stderr; the first "Capture screen"
       # index is the whole display. Parse it rather than hardcoding: the
       # index shifts with attached cameras.
-      screen_idx="$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 \
+      #
+      # `-list_devices true -i ""` always exits non-zero.
+      # Capture output/status explicitly (with `|| true`) instead of letting a bare assignment
+      # trip `set -e`, which would abort before we ever get to report
+      # anything useful.
+      probe_out="$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 || true)"
+      screen_idx="$(printf '%s\n' "$probe_out" \
         | sed -n 's/^\[AVFoundation[^]]*\] \[\([0-9]*\)\] Capture screen.*/\1/p' | head -1)"
-      [ -n "$screen_idx" ] || { echo "record-start: no capture screen device found" >&2; exit 1; }
+
+      if [ -z "$screen_idx" ]; then
+        if printf '%s\n' "$probe_out" | grep -qiE 'Input/output error|Unknown input format|errno 5'; then
+          echo "record-start: avfoundation could not enumerate devices (I/O error)" >&2
+        else
+          echo "record-start: no capture screen device found in avfoundation device list:" >&2
+        fi
+        printf '%s\n' "$probe_out" >&2
+        exit 1
+      fi
       INPUT=(-f avfoundation -framerate 15 -capture_cursor 1 -i "${screen_idx}:none")
       ;;
     *)

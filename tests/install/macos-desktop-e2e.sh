@@ -84,8 +84,65 @@ log_group() {
 # Every phase runs in its own process (separate CI steps), so the redirect
 # env is re-established here, not inherited.
 arm_redirect() {
+  # --- the git URL redirect -----------------------------------------------------
+
+  # we redirect to our own repo so we can play around with what commit hermes thinks we're on.
+  # A driver-owned global gitconfig, NOT GIT_CONFIG_COUNT/KEY_n/VALUE_n env
+  # config: install.sh sets those itself and would clobber ours.
+  actual_git_url="$(git -C "$REPO_ROOT" remote get-url origin)"
   GIT_CFG="$WORK_ROOT/gitconfig"
+  cat > "$GIT_CFG" <<EOF
+[url "file://$SERVE_REPO"]
+  insteadOf = $actual_git_url
+EOF
   export GIT_CONFIG_GLOBAL="$GIT_CFG"
+
+  # check it worked
+  expected_git_url="file://$SERVE_REPO"
+  actual_git_url="$(git -C "$REPO_ROOT" remote get-url origin)"
+  if [[ "$actual_git_url" != "$expected_git_url" ]]; then
+    fail "failed git remote get-url shim: origin resolves to '$actual_git_url', expected '$expected_git_url'"
+  fi
+  ok "git URL redirect via GIT_CONFIG_GLOBAL=$GIT_CFG"
+
+
+  # shim git and make 'git remote get-url origin' report the actual HA upstream
+
+  # insteadOf is transparent for transport but `git remote get-url origin` gives you the
+  # replacement, so _get_origin_url() sees file://$SERVE_REPO and _is_fork() would return true.
+  # we check for the arguments "remote get-url origin" in order in any position
+  # to allow for e.g. -c with some config being passed.
+  # if we didn't do this, we'd need the  .skip_upstream_prompt file to prevent a hang in headless,"add the
+  # official repo as upstream?" prompt would hang a headless run. But we don't anymore :D
+  REAL_GIT="$(command -v git)"
+  REAL_GIT_QUOTED="$(printf '%q' "$REAL_GIT")"
+  SHIM_DIR="$WORK_ROOT/shim"
+  mkdir -p "$SHIM_DIR"
+  cat > "$SHIM_DIR/git" <<EOF
+#!/usr/bin/env bash
+prev2=""
+prev1=""
+for arg in "\$@"; do
+    if [ "\$prev2" = "remote" ] && [ "\$prev1" = "get-url" ] && [ "\$arg" = "origin" ]; then
+        echo "$REPO_URL_HTTPS"
+        exit 0
+    fi
+    prev2="\$prev1"
+    prev1="\$arg"
+done
+exec "$REAL_GIT_QUOTED" "\$@"
+EOF
+  chmod +x "$SHIM_DIR/git"
+  export PATH="$SHIM_DIR:$PATH"
+
+  # check it worked
+  observed_git_url="$(git -C "$REPO_DIR" remote get-url origin)"
+  if [[ "$observed_git_url" != "$REPO_URL_HTTPS" ]]; then
+    fail "failed git remote get-url shim: origin resolves to '$actual', expected '$REPO_URL_HTTPS'"
+  fi
+  ok "git remote get-url shim: $SHIM_DIR/git -> $REAL_GIT (origin reports $REPO_URL_HTTPS)"
+
+  # -------
   export HOME="$HOME_SANDBOX"
   export PATH="$HOME/.local/bin:$PATH"
   export HERMES_HOME="$HOME/.hermes"
@@ -115,11 +172,6 @@ phase_stage() {
   git -C "$SERVE_REPO" symbolic-ref HEAD refs/heads/main
   git -C "$SERVE_REPO" config uploadpack.allowAnySHA1InWant true
 
-  cat > "$WORK_ROOT/gitconfig" <<EOF
-[url "file://$SERVE_REPO"]
-	insteadOf = $REPO_URL_HTTPS
-	insteadOf = $REPO_URL_SSH
-EOF
   arm_redirect
   mkdir -p "$HERMES_HOME"
   touch "$HERMES_HOME/.skip_upstream_prompt"

@@ -48,17 +48,15 @@
 # both phases, ahk.log, and the hand-off log. All uploaded as CI artifacts.
 #
 # DEVIATIONS FROM PRODUCTION (each one deliberate and small):
-#   * the git URL redirect itself -- the staging requirement.
+#   * the git URL redirect itself
 #   * serve.git gets uploadpack.allowAnySHA1InWant=true so the installer's
 #     baked -Commit pin can be fetched from the redirected clone the same
 #     way GitHub's upload-pack allows it.
 #   * A dummy provider key is seeded after install so the update leg sees
 #     the ready app shell instead of the onboarding overlay (a real
 #     updating user has a configured provider).
-#   * .skip_upstream_prompt is set: serve.git's file:// origin looks like a
-#     fork to `hermes update`, whose fork-only upstream prompt is a bare
-#     input() that hangs forever under the desktop's detached console.
-#     Real GUI users are on the official origin and never see it.
+#   * we don't set .skip_upstream_prompt, but we shim `git` so it returns
+#     the real upstream url for 'git remote get-url origin' 
 #
 # USAGE (local Windows box or CI):
 #   powershell -File tests\install\windows-e2e.ps1 -Phase all
@@ -165,8 +163,7 @@ function Invoke-Git([string[]]$GitArgs) {
 }
 
 function Set-GitRedirect {
-    # Route the canonical repo URLs to the local bare repo for THIS process
-    # and every child (the installer's git, hermes update's git).
+    # we redirect to our own repo so we can play around with what commit hermes thinks we're on.
     #
     # MECHANISM: a driver-owned global gitconfig selected via
     # GIT_CONFIG_GLOBAL. Do NOT use GIT_CONFIG_COUNT/KEY_n/VALUE_n env
@@ -180,14 +177,62 @@ function Set-GitRedirect {
     if (-not (Test-Path -LiteralPath $WorkRoot)) {
         New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
     }
+    # first, get the set origin url
+    $actualGitUrl = Invoke-Git @("-C", $RepoRoot, "remote", "get-url", "origin")
+    # then override it 
     @"
 [url "$fileUrl"]
-	insteadOf = $RepoUrlHttps
-	insteadOf = $RepoUrlSsh
+	insteadOf = $actualGitUrl
 "@ | Set-Content -LiteralPath $gitCfg -Encoding ASCII
     $env:GIT_CONFIG_GLOBAL = $gitCfg
+
+    # check it worked
+    $actualGitUrl = Invoke-Git @("-C", $RepoRoot, "remote", "get-url", "origin")
+    Assert-True ($actualGitUrl -eq $fileUrl) "git URL redirect: origin resolves to '$actualGitUrl', expected '$fileUrl'."
     Write-Host "  git URL redirect via GIT_CONFIG_GLOBAL=$gitCfg"
     Write-Host "    $RepoUrlHttps -> $fileUrl"
+
+
+    # shim git and make 'git remote get-url origin' report the actual HA upstream
+
+    # insteadOf is transparent for transport but `git remote get-url origin` gives you the
+    # replacement, so _get_origin_url() sees file://$SERVE_REPO and _is_fork() would return true.
+    # we check for the arguments "remote get-url origin" in order in any position
+    # to allow for e.g. -c with some config being passed.
+    # if we didn't do this, we'd need the  .skip_upstream_prompt file to prevent a hang in headless,"add the
+    # official repo as upstream?" prompt would hang a headless run. But we don't anymore :D
+
+    $realGit = (Get-Command git.exe -ErrorAction Stop).Source
+    $shimDir = Join-Path $WorkRoot "shim"
+    New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+    $shimPath = Join-Path $shimDir "git.bat"
+    @"
+@echo off
+setlocal enabledelayedexpansion
+set prev2=
+set prev1=
+:loop
+if "%~1"=="" goto passthrough
+if /I "!prev2!"=="remote" if /I "!prev1!"=="get-url" if /I "%~1"=="origin" (
+    echo $RepoUrlHttps
+    exit /b 0
+)
+set prev2=!prev1!
+set prev1=%~1
+shift
+goto loop
+:passthrough
+`"$realGit`" %*
+exit /b %ERRORLEVEL%
+"@ | Set-Content -LiteralPath $shimPath -Encoding ASCII
+
+    $env:PATH = "$shimDir;$env:PATH"
+
+    # check it worked
+    $observedGitUrl = Invoke-Git @("-C", $RepoRoot, "remote", "get-url", "origin")
+    Assert-True ($observedGitUrl -eq $RepoUrlHttps) "git remote get-url shim: origin resolves to '$observedGitUrl', expected '$RepoUrlHttps'"
+    Write-Host "  git remote get-url shim: $shimPath -> $realGit"
+    Write-Host "    'remote get-url origin' now reports $RepoUrlHttps"
 }
 
 function Read-State {
@@ -586,19 +631,6 @@ function Invoke-PhaseInstallGui {
         Add-Content -LiteralPath $envFile -Value "OPENROUTER_API_KEY=sk-or-...-key"
     }
     Write-Host "  seeded placeholder provider key for the update leg"
-
-    # Suppress the interactive "add upstream remote?" prompt during the GUI
-    # update leg. Our serve.git origin (file://) looks like a fork to
-    # `hermes update`, so `_sync_with_upstream_if_needed` would call bare
-    # input() -- which HANGS FOREVER when the Desktop spawns the hand-off via
-    # `cmd start /min` (a real but empty console; input() blocks waiting for a
-    # keystroke that never comes). Real GUI users on the official github
-    # origin never hit this path (_is_fork is false). The skip marker
-    # (.skip_upstream_prompt in HERMES_HOME) is the product's own mechanism
-    # for "don't ask about upstream", so setting it keeps the update flow
-    # faithful while avoiding the fork-only prompt.
-    New-Item -ItemType File -Path (Join-Path $HermesHome ".skip_upstream_prompt") -Force | Out-Null
-    Write-Host "  set .skip_upstream_prompt (serve.git origin looks like a fork; avoids the fork-only input() hang)"
 }
 
 # ----------------------------------------------------------------------------
@@ -777,7 +809,6 @@ function Invoke-PhaseInstall {
     # product's own suppression mechanism.
     $env:HERMES_HOME = $HermesHome
     New-Item -ItemType Directory -Path $HermesHome -Force | Out-Null
-    New-Item -ItemType File -Path (Join-Path $HermesHome ".skip_upstream_prompt") -Force | Out-Null
     switch ($InstallMethod) {
         "desktop-installer@latest" {
             Invoke-PhaseInstallGui

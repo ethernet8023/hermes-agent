@@ -127,10 +127,16 @@ function Invoke-Installer {
     $text = Get-Content -LiteralPath $script -Raw
     if ($text -match '\$NonInteractive') { $flags += "-NonInteractive" }
     $log = Join-Path $LogDir "install-$Label.log"
+    # Native stderr (git clone progress, pip notices) must not become
+    # terminating NativeCommandErrors under EAP=Stop; the exit code is the
+    # verdict here, not stderr chatter.
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $script @flags *> $log
-    if ($LASTEXITCODE -ne 0) {
+    $installExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($installExit -ne 0) {
         Get-Content -LiteralPath $log -Tail 50 | Write-Host
-        Fail "install.ps1 ($Label) exited $LASTEXITCODE; full log in $log"
+        Fail "install.ps1 ($Label) exited $installExit; full log in $log"
     }
 }
 
@@ -142,8 +148,11 @@ function Assert-Checkout {
     $hermes = Join-Path $InstallDir "venv\Scripts\hermes.exe"
     if (-not (Test-Path -LiteralPath $hermes)) { Fail "no hermes console script at $hermes" }
     $verLog = Join-Path $LogDir "version-$Label.log"
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     & $hermes --version *> $verLog
-    if ($LASTEXITCODE -ne 0) {
+    $verExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($verExit -ne 0) {
         Get-Content -LiteralPath $verLog | Write-Host
         Fail "hermes --version failed after $Label; log in $verLog"
     }
@@ -169,6 +178,7 @@ switch ($UpdateMethod) {
         # `--yes` reaches the update subcommand only in later releases, and
         # argparse rejects the whole invocation when it does not exist.
         $updateArgs = @("update")
+        $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
         $helpText = & $hermes update --help 2>&1 | Out-String
         if ($helpText -match '--yes') { $updateArgs += "--yes" }
         $log = Join-Path $LogDir "update.log"
@@ -178,6 +188,7 @@ switch ($UpdateMethod) {
             $updateExit = $LASTEXITCODE
         } finally {
             Pop-Location
+            $ErrorActionPreference = $prevEap
         }
         if ($updateExit -ne 0) {
             Get-Content -LiteralPath $log -Tail 50 | Write-Host

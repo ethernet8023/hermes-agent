@@ -336,10 +336,10 @@ from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
 # =============================================================================
 
 _MANAGED_TRUE_VALUES = ("true", "1", "yes")
-_MANAGED_SYSTEM_NAMES = {
-    "nix": "NixOS",
-    "nixos": "NixOS",
-}
+_NIX_MANAGED_SYSTEMS = {"nixos", "home-manager"}
+# Only the NixOS module ever wrote a bare "true" or an empty marker, so both
+# legacy signals name that system.
+_LEGACY_MANAGED_SYSTEM = "nixos"
 # The Nix store root. Used by detect_install_method to identify installs
 # from `nix run` / `nix profile install` (which don't set HERMES_MANAGED).
 # A module-level constant so tests can patch it without creating files
@@ -355,18 +355,30 @@ _IGNORED_MANAGED_VALUES = frozenset({"brew", "homebrew"})
 def get_managed_system() -> Optional[str]:
     """Return the package manager owning this install, if any."""
     raw = os.getenv("HERMES_MANAGED", "").strip()
+    marker = None
     if raw:
-        normalized = raw.lower()
-        if normalized in _IGNORED_MANAGED_VALUES:
-            return None
-        if normalized in _MANAGED_TRUE_VALUES:
-            return "NixOS"
-        return _MANAGED_SYSTEM_NAMES.get(normalized, raw)
+        marker = raw.lower()
+    else:
+        managed_marker = get_hermes_home() / ".managed"
+        # An interactive shell reads the marker, because it does not see the
+        # HERMES_MANAGED variable of the service. A marker with content
+        # names the system that manages the install.
+        if managed_marker.exists():
+            try:
+                marker = managed_marker.read_text(encoding="utf-8", errors="replace").strip().lower()
+            except OSError:
+                marker = ""
 
-    managed_marker = get_hermes_home() / ".managed"
-    if managed_marker.exists():
-        return "NixOS"
-    return None
+    if marker is None:
+        return None
+
+    if marker in _IGNORED_MANAGED_VALUES:
+        return None
+
+    if marker == "" or marker in _MANAGED_TRUE_VALUES:
+        return _LEGACY_MANAGED_SYSTEM
+
+    return marker
 
 
 def is_managed() -> bool:
@@ -379,6 +391,9 @@ def is_managed() -> bool:
     return get_managed_system() is not None
 
 
+# Nix installs arrive by several routes (nix run, nix profile, a system flake,
+# home-manager), and the running process cannot tell which one. Thus this text
+# names the routes instead of one command.
 _NIX_UPDATE_MSG = (
     "Update Hermes through the Nix source that installed it "
     "(e.g. nix profile upgrade, or update your flake input and rebuild with nixos-rebuild or home-manager switch)"
@@ -388,7 +403,7 @@ _NIX_UPDATE_MSG = (
 def get_managed_update_command() -> Optional[str]:
     """Return the preferred upgrade command for a managed install."""
     managed_system = get_managed_system()
-    if managed_system == "NixOS":
+    if managed_system in _NIX_MANAGED_SYSTEMS:
         return _NIX_UPDATE_MSG
     return None
 
@@ -542,7 +557,7 @@ def stamp_install_method(method: str, project_root: Optional[Path] = None) -> No
 
 def recommended_update_command_for_method(method: str) -> str:
     """Return the update command or guidance for a given install method."""
-    if method in {"nix", "nixos"}:
+    if method in _NIX_MANAGED_SYSTEMS or method in {"nix", ""}:
         return _NIX_UPDATE_MSG
     if method == "docker":
         return "docker pull nousresearch/hermes-agent:latest"
@@ -551,9 +566,6 @@ def recommended_update_command_for_method(method: str) -> str:
 
 def recommended_update_command() -> str:
     """Return the best update command for the current installation."""
-    managed_cmd = get_managed_update_command()
-    if managed_cmd:
-        return managed_cmd
     method = detect_install_method(get_project_root())
     return recommended_update_command_for_method(method)
 
@@ -613,17 +625,6 @@ def format_docker_update_message() -> str:
 def format_managed_message(action: str = "modify this Hermes installation") -> str:
     """Build a user-facing error for managed installs."""
     managed_system = get_managed_system() or "a package manager"
-    raw = os.getenv("HERMES_MANAGED", "").strip().lower()
-
-    if managed_system == "NixOS":
-        env_hint = "true" if raw in _MANAGED_TRUE_VALUES else raw or "true"
-        return (
-            f"Cannot {action}: this Hermes installation is managed by NixOS "
-            f"(HERMES_MANAGED={env_hint}).\n"
-            "Edit services.hermes-agent.settings in your configuration.nix and run:\n"
-            "  sudo nixos-rebuild switch"
-        )
-
     return (
         f"Cannot {action}: this Hermes installation is managed by {managed_system}.\n"
         "Use your package manager to upgrade or reinstall Hermes."
@@ -918,16 +919,12 @@ def _ensure_hermes_home_managed(home: Path):
     """Managed-mode variant: verify dirs exist (activation creates them), seed SOUL.md."""
     if not home.is_dir():
         raise RuntimeError(
-            f"HERMES_HOME {home} does not exist. "
-            "Run 'sudo nixos-rebuild switch' first."
+            f"HERMES_HOME {home} does not exist."
         )
     for subdir in ("cron", "sessions", "logs", "memories"):
         d = home / subdir
         if not d.is_dir():
-            raise RuntimeError(
-                f"{d} does not exist. "
-                "Run 'sudo nixos-rebuild switch' first."
-            )
+            raise RuntimeError(f"{d} does not exist.")
     # Curator reports dir is a sub-path of logs/; create it if missing.
     # In managed mode the activation script may not know about this subdir,
     # so we mkdir it ourselves (it's inside an already-secured logs/ dir).

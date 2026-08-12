@@ -200,7 +200,6 @@ export function renderMarkdownPlan(envs, tags) {
     });
     lines.push(`| \`${env.os}: ${env.install} -> ${env.update}\` | ${cells.join(' | ')} |`);
   }
-  );
   return lines.join('\n');
 }
 

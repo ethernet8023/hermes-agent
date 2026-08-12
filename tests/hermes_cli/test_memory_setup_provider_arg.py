@@ -62,7 +62,15 @@ class TestInstallDependenciesRunner:
         # install ladder itself (against a fully mocked subprocess.run), so
         # they opt back in — the same both-directions override
         # tests/tools/test_lazy_deps.py uses.
+        #
+        # The ladder also asks where it may write before running anything, and
+        # on a sealed host (the Nix devshell, CI) that answer is "nowhere" —
+        # correctly, but it short-circuits before the argv these tests assert
+        # on. Force the writable-dep-store shape they mean to exercise.
+        from tools import lazy_deps as _ld
+
         with _patch.dict(os.environ, {"HERMES_DISABLE_LAZY_INSTALLS": "0"}), \
+             _patch.object(_ld, "_site_packages_writable", lambda: True), \
              patch("plugins.memory.find_provider_dir", return_value=tmp_path), \
              patch("hermes_cli.tools_config.shutil.which", side_effect=which_side_effect), \
              patch("hermes_cli.tools_config.subprocess.run", fake_run):

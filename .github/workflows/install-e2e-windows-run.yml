@@ -58,7 +58,7 @@ on:
         type: string
         default: auto
       tag-has-desktop:
-        description: 'Whether install-ref ships the desktop app (apps/desktop). The caller annotates this from the tag''s own tree; desktop-method legs from pre-desktop releases natively skip.'
+        description: "Whether install-ref ships the desktop app (apps/desktop). The caller annotates this from the tag's own tree; desktop-method legs from pre-desktop releases natively skip."
         required: false
         type: boolean
         default: true
@@ -134,15 +134,15 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\test-bins\ffmpeg\bin"
 
-      - name: Stage serve repo (main -> OLD)
+      - name: Stage serve repo (main -> ${{ inputs.install-ref }})
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase stage -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
-      - name: Install OLD via website Hermes-Setup.exe (headed, AHK-clicked)
+      - name: Install ${{ inputs.install-ref }} via website Hermes-Setup.exe (headed, AHK-clicked)
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase install-gui -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 
-      - name: Update OLD -> HEAD (${{ inputs.update-method }})
+      - name: Update ${{ inputs.install-ref }} -> HEAD (${{ inputs.update-method }})
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-desktop-gui-e2e.ps1 -Phase update-gui -Route "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}" -SetupExeUrl ${{ inputs.setup-exe-url }}
 

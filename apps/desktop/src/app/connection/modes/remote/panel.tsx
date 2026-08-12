@@ -15,22 +15,25 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { DesktopAuthProvider } from '@/global'
-import { AlertCircle, Check, Loader2, LogIn } from '@/lib/icons'
 import { deriveRemoteAuthProviderShape } from '@/lib/desktop-remote-auth'
+import { AlertCircle, Check, Loader2, LogIn } from '@/lib/icons'
 import { useRemoteConnectionSetup } from '@/lib/use-remote-connection-setup'
 import { cn } from '@/lib/utils'
 
 import { CONTROL_TEXT } from '../../../settings/constants'
 import { ListRow } from '../../../settings/primitives'
+import { ConnectionActions } from '../../connection-actions'
 import type { ConnectionPanelProps } from '../../types'
+
 import type { RemoteDraft } from './index'
 
 export function RemotePanel({ draft, onDraftChange, surface }: ConnectionPanelProps<RemoteDraft>) {
-  const { copy, envOverride, savedConfig, scope } = surface
+  const { commit, copy, envOverride, kind, savedConfig, scope } = surface
   const savedRemote = savedConfig && savedConfig.mode === 'remote' ? savedConfig : null
   const hasSavedCredentials = Boolean(savedRemote?.remoteTokenSet || savedRemote?.remoteOauthConnected)
 
   const setup = useRemoteConnectionSetup({
+    beforeOAuthLogin: surface.beforeOAuthLogin,
     copy: {
       enterUrlFirst: copy.enterUrlFirst,
       probeError: copy.probeError,
@@ -46,6 +49,20 @@ export function RemotePanel({ draft, onDraftChange, surface }: ConnectionPanelPr
 
   const providers: DesktopAuthProvider[] = setup.probe?.providers ?? []
   const { isPassword, providerLabel } = deriveRemoteAuthProviderShape(providers, copy.identityProvider)
+
+  // First-run has nothing saved to fall back to, so it demands a passing test
+  // before Apply — landing on a dead gateway there leaves the user with no
+  // working connection at all. Settings keeps its looser rule: credentials
+  // present is enough, because the previous connection still exists.
+  const canApply = kind === 'first-run' ? setup.canApply : Boolean(setup.trimmedUrl && setup.canTest)
+
+  const runTest = async (): Promise<void> => {
+    const tested = await setup.testRemote()
+
+    if (tested) {
+      surface.onSuccess?.(copy.connectedTo(tested.baseUrl, tested.version ?? undefined))
+    }
+  }
 
   return (
     <div className="mt-5 grid gap-1">
@@ -136,6 +153,20 @@ export function RemotePanel({ draft, onDraftChange, surface }: ConnectionPanelPr
           title={copy.tokenTitle}
         />
       ) : null}
+
+      <ConnectionActions
+        applyLabel={kind === 'first-run' ? copy.remoteApplyAction : undefined}
+        canApply={canApply}
+        commit={commit}
+        copy={copy}
+        disabled={envOverride}
+        test={{
+          busy: setup.testing,
+          canRun: setup.canTest,
+          label: copy.testRemote,
+          run: () => void runTest()
+        }}
+      />
     </div>
   )
 }

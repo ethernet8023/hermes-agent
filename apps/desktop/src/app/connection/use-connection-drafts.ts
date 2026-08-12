@@ -16,8 +16,9 @@ import { useCallback, useRef, useState } from 'react'
 
 import type { DesktopConnectionConfig } from '@/global'
 
-import { CONNECTION_MODE_MODULES } from './index'
 import type { ConnectionDraft, ConnectionMode } from './types'
+
+import { CONNECTION_MODE_MODULES } from './index'
 
 type DraftsByMode = Record<ConnectionMode, ConnectionDraft>
 

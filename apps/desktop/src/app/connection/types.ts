@@ -21,7 +21,7 @@
 // switching cards keeps a half-typed URL without letting the ssh panel reach
 // the cloud org.
 
-import type { ReactNode } from 'react'
+import { createElement, type ReactNode } from 'react'
 
 import type { DesktopBackendAvailability, DesktopConnectionConfig, DesktopConnectionConfigInput } from '@/global'
 import type { Translations } from '@/i18n'
@@ -43,6 +43,14 @@ export type ConnectionCopy = Translations['settings']['gateway'] & {
   signInIncomplete: string
   /** Fallback name for an unidentified identity provider. */
   identityProvider: string
+  /** First-run's label for committing local mode: it installs, not connects. */
+  localInstallAction: string
+  /** First-run's description of what installing locally does. */
+  localInstallDesc: string
+  /** First-run's label for committing a remote-like mode. */
+  remoteApplyAction: string
+  /** Leave a drilled-into mode and return to the card grid. */
+  back: string
 }
 
 /** Assemble ConnectionCopy from a translations bundle. One place, both hosts. */
@@ -50,7 +58,11 @@ export function connectionCopy(t: Translations): ConnectionCopy {
   return {
     ...t.settings.gateway,
     signInIncomplete: t.boot.failure.signInIncompleteMessage,
-    identityProvider: t.boot.failure.identityProvider
+    identityProvider: t.boot.failure.identityProvider,
+    localInstallAction: t.install.installLocalTitle,
+    localInstallDesc: t.install.installLocalDesc,
+    remoteApplyAction: t.install.applyRemote,
+    back: t.install.backToSetup
   }
 }
 
@@ -96,6 +108,13 @@ export interface ConnectionSurface {
   onError: (message: string) => void
   /** Presentation of successes. Surfaces that show nothing omit it. */
   onSuccess?: (message: string) => void
+  /**
+   * Runs before an oauth login window opens. Settings persists the URL and
+   * mode here because the login window reads the saved config; first-run
+   * deliberately persists nothing until Apply, so backing out of setup
+   * leaves no trace. Omitted means "nothing to do first".
+   */
+  beforeOAuthLogin?: (trimmedUrl: string) => Promise<void>
 }
 
 /** What a mode looks like in the card grid. */
@@ -184,11 +203,19 @@ export function defineConnectionMode<M extends ConnectionMode, Draft>(
         return null
       }
 
-      return Panel({
+      // createElement, NOT Panel({...}): calling a component as a function
+      // runs its hooks inside the CALLER's hook list, so switching to a mode
+      // whose panel has a different number of hooks throws "rendered more
+      // hooks than during the previous render". An element makes each panel
+      // its own component with its own hook list and its own mount/unmount.
+      return createElement(Panel as (props: ConnectionPanelProps<unknown>) => ReactNode, {
         draft: asTyped(draft),
         onDraftChange: patch => onDraftChange(patch as Partial<ConnectionDraft>),
-        surface
-      })
+        surface,
+        // Remounting on a mode switch is the point: a panel must not inherit
+        // the previous mode's local state.
+        key: module.mode
+      } as ConnectionPanelProps<unknown> & { key: string })
     }
   }
 }

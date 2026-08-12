@@ -10,6 +10,7 @@ import { Globe } from '@/lib/icons'
 import { coerceRemoteUrlScheme } from '@/lib/remote-url'
 
 import type { ConnectionCardContext, ConnectionModeCard, ConnectionModeModule } from '../../types'
+
 import { RemotePanel } from './panel'
 
 export interface RemoteDraft {

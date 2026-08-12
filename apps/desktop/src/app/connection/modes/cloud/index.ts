@@ -11,6 +11,7 @@ import type { DesktopConnectionConfig, DesktopConnectionConfigInput } from '@/gl
 import { Cloud } from '@/lib/icons'
 
 import type { ConnectionCardContext, ConnectionModeCard, ConnectionModeModule } from '../../types'
+
 import { CloudPanel } from './panel'
 
 export interface CloudDraft {
@@ -18,6 +19,16 @@ export interface CloudDraft {
   org: string
   /** The chosen agent's dashboardUrl; empty until an agent is picked. */
   agentUrl: string
+}
+
+/**
+ * The URL of the connected cloud instance, normalized for comparison against
+ * a discovered agent's dashboardUrl. Empty unless the saved connection is a
+ * cloud one: a stale URL left on a local or remote config must not read as a
+ * connected agent.
+ */
+export function savedCloudConnectionUrl(config: Pick<DesktopConnectionConfig, 'mode' | 'remoteUrl'>): string {
+  return config.mode === 'cloud' ? config.remoteUrl.trim().replace(/\/+$/, '').toLowerCase() : ''
 }
 
 export const cloudMode: ConnectionModeModule<'cloud', CloudDraft> = {

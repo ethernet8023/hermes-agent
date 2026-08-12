@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { savedCloudConnectionUrl } from './gateway-settings'
+import { savedCloudConnectionUrl } from './index'
 
 describe('savedCloudConnectionUrl', () => {
   it('normalizes the URL of a persisted cloud connection', () => {

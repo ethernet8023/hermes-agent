@@ -9,6 +9,7 @@ import type { DesktopConnectionConfig, DesktopConnectionConfigInput } from '@/gl
 import { Terminal } from '@/lib/icons'
 
 import type { ConnectionCardContext, ConnectionModeCard, ConnectionModeModule } from '../../types'
+
 import { SshPanel } from './panel'
 
 export interface SshDraft {

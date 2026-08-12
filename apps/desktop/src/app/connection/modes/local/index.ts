@@ -15,6 +15,8 @@ import { Monitor } from '@/lib/icons'
 
 import type { ConnectionCardContext, ConnectionModeCard, ConnectionModeModule } from '../../types'
 
+import { LocalPanel } from './panel'
+
 /** Local has no fields. The empty object keeps the module shape uniform. */
 export type LocalDraft = Record<string, never>
 
@@ -37,5 +39,7 @@ export const localMode: ConnectionModeModule<'local', LocalDraft> = {
     // different copy.
     title: scope === null ? copy.localTitle : copy.inheritTitle,
     description: scope === null ? copy.localDesc : copy.inheritDesc
-  })
+  }),
+
+  Panel: LocalPanel
 }

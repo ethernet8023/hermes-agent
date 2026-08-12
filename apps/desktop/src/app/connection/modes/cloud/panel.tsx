@@ -17,16 +17,13 @@ import { cn } from '@/lib/utils'
 
 import { ListRow, Pill } from '../../../settings/primitives'
 import type { ConnectionPanelProps } from '../../types'
-import type { CloudDraft } from './index'
+
+import { type CloudDraft, savedCloudConnectionUrl } from './index'
 
 type DiscoverStatus = 'idle' | 'loading' | 'done' | 'error'
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err || 'Unknown error')
-}
-
-function normalizeCloudUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '').toLowerCase()
 }
 
 export function CloudPanel({ draft, onDraftChange, surface }: ConnectionPanelProps<CloudDraft>) {
@@ -39,7 +36,7 @@ export function CloudPanel({ draft, onDraftChange, surface }: ConnectionPanelPro
   const [connectingId, setConnectingId] = useState<null | string>(null)
   // Discovery resolves the org asynchronously and a click can land in the
   // same tick, so connect reads the ref rather than a captured render value.
-  // eslint-disable-next-line no-restricted-syntax -- read-during-async guard, not an atom mirror
+   
   const orgRef = useRef<string>(draft.org)
   const seq = useRef(0)
 
@@ -51,10 +48,14 @@ export function CloudPanel({ draft, onDraftChange, surface }: ConnectionPanelPro
   // The saved cloud instance, normalized so a host-casing difference cannot
   // break the connected highlight (the saved URL went through electron's
   // normalizeRemoteBaseUrl; a discovered dashboardUrl arrives raw).
-  const connectedUrl = savedConfig?.mode === 'cloud' ? normalizeCloudUrl(savedConfig.remoteUrl) : ''
+  const connectedUrl = savedConfig ? savedCloudConnectionUrl(savedConfig) : ''
 
   const isConnected = (agent: DesktopCloudAgent): boolean =>
-    Boolean(connectedUrl && agent.dashboardUrl && normalizeCloudUrl(agent.dashboardUrl) === connectedUrl)
+    Boolean(
+      connectedUrl &&
+        agent.dashboardUrl &&
+        savedCloudConnectionUrl({ mode: 'cloud', remoteUrl: agent.dashboardUrl }) === connectedUrl
+    )
 
   const runDiscover = async (org?: string): Promise<void> => {
     const cloud = window.hermesDesktop?.cloud

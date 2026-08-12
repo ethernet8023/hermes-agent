@@ -12,17 +12,70 @@ import { cn } from '@/lib/utils'
 
 import { CONTROL_TEXT } from '../../../settings/constants'
 import { ListRow } from '../../../settings/primitives'
+import { ConnectionActions } from '../../connection-actions'
 import type { ConnectionPanelProps } from '../../types'
+
 import { enrichSelectedSshHost, selectSshHost } from './host-selection'
-import type { SshDraft } from './index'
+
+import { type SshDraft, sshMode } from './index'
 
 const SSH_HOST_CUSTOM = '__custom__'
 
 export function SshPanel({ draft, onDraftChange, surface }: ConnectionPanelProps<SshDraft>) {
-  const { copy, scope } = surface
+  const { commit, copy, envOverride, kind, scope } = surface
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [customHost, setCustomHost] = useState(false)
+  const [testing, setTesting] = useState(false)
   const resolveSeq = useRef(0)
+  const testSeq = useRef(0)
+
+  const hasHost = Boolean(draft.host.trim())
+
+  // An ssh failure is reported as a tagged reason rather than a message, so
+  // the panel maps it to copy. `unknown` covers a reachable host that failed
+  // for a reason the bridge could not classify.
+  const sshErrorMessage = (reason: null | string | undefined): string => {
+    const errors: Record<string, string> = {
+      'auth-failed': copy.sshErrAuth,
+      'hermes-not-found': copy.sshErrNotInstalled,
+      'host-key-changed': copy.sshErrHostKey,
+      timeout: copy.sshErrTimeout,
+      unreachable: copy.sshErrUnreachable,
+      'unsupported-platform': copy.sshErrPlatform,
+      'update-required': copy.sshErrUpdateRequired
+    }
+
+    return (reason && errors[reason]) || copy.sshErrUnknown
+  }
+
+  const runTest = async (): Promise<void> => {
+    const seq = ++testSeq.current
+    setTesting(true)
+
+    try {
+      const result = await window.hermesDesktop.testConnectionConfig(sshMode.toPayload(draft, scope))
+
+      if (seq !== testSeq.current) {
+        return
+      }
+
+      if (!result.reachable) {
+        surface.onError(sshErrorMessage(result.sshError) || result.error || copy.sshErrUnknown)
+
+        return
+      }
+
+      surface.onSuccess?.(copy.sshReachable(result.host || draft.host, result.remotePlatform || '?'))
+    } catch (err) {
+      if (seq === testSeq.current) {
+        surface.onError(err instanceof Error ? err.message : String(err || copy.sshErrUnknown))
+      }
+    } finally {
+      if (seq === testSeq.current) {
+        setTesting(false)
+      }
+    }
+  }
 
   useEffect(() => {
     if (!window.hermesDesktop?.sshConfigHosts) {
@@ -204,6 +257,15 @@ export function SshPanel({ draft, onDraftChange, surface }: ConnectionPanelProps
           title={copy.sshRemoteProfileTitle}
         />
       ) : null}
+
+      <ConnectionActions
+        applyLabel={kind === 'first-run' ? copy.remoteApplyAction : undefined}
+        canApply={hasHost}
+        commit={commit}
+        copy={copy}
+        disabled={envOverride}
+        test={{ busy: testing, canRun: hasHost, label: copy.sshTestConnection, run: () => void runTest() }}
+      />
     </div>
   )
 }

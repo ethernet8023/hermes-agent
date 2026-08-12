@@ -34,9 +34,9 @@ export function moduleFor(mode: ConnectionMode): ErasedConnectionModule {
   return found
 }
 
+export { ConnectionActions } from './connection-actions'
 export { ConnectionModeCards } from './mode-card'
-export { useConnectionDrafts } from './use-connection-drafts'
-
+export { savedCloudConnectionUrl } from './modes/cloud'
 export type {
   ConnectionCardContext,
   ConnectionCommit,
@@ -50,4 +50,6 @@ export type {
   ConnectionSurfaceKind,
   ErasedConnectionModule
 } from './types'
-export { CONNECTION_MODES, defineConnectionMode } from './types'
+
+export { CONNECTION_MODES, connectionCopy, defineConnectionMode } from './types'
+export { useConnectionDrafts } from './use-connection-drafts'

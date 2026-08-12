@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { enrichSelectedSshHost, selectSshHost } from './host-selection'
+
 import type { SshDraft } from './index'
 
 const draft: SshDraft = {

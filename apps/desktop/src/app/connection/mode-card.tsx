@@ -13,8 +13,9 @@ import { Check, HelpCircle } from '@/lib/icons'
 import { selectableCardClass } from '@/lib/selectable-card'
 import { cn } from '@/lib/utils'
 
-import { CONNECTION_MODE_MODULES } from './index'
 import type { ConnectionCardContext, ConnectionMode, ConnectionModeCard } from './types'
+
+import { CONNECTION_MODE_MODULES } from './index'
 
 interface ModeCardProps {
   active: boolean

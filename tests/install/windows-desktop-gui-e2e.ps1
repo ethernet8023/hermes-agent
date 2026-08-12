@@ -95,7 +95,13 @@ param(
 
     [string]$WorkRoot = $(if ($env:HERMES_E2E_WORKROOT) { $env:HERMES_E2E_WORKROOT } else { Join-Path $env:TEMP "hermes-desktop-gui-e2e" }),
 
-    [string]$SetupExeUrl = "https://hermes-assets.nousresearch.com/Hermes-Setup.exe"
+    [string]$SetupExeUrl = "https://hermes-assets.nousresearch.com/Hermes-Setup.exe",
+
+    # Pinned @playwright/test for the update-gui driver. Installed fresh
+    # into a scratch dir every run -- never resolved from the installed
+    # tree -- so the driver behaves identically for every OLD ref. Bump
+    # deliberately; keep roughly in step with the repo's own lockfile.
+    [string]$PlaywrightVersion = "1.58.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -521,29 +527,38 @@ function Invoke-GuiUpdateDesktopRoute([string]$TargetSha) {
     Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
 
     $node = Get-ManagedNode
-    $appsDesktop = Join-Path $InstallDir "apps\desktop"
-    # @playwright/test is a workspace devDependency; the root `npm ci`
-    # HOISTS it to the repo-root node_modules, not apps/desktop's. Resolve
-    # it the way Node will (walk up from apps/desktop) instead of asserting
-    # a hardcoded path that hoisting makes wrong.
-    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    & $node -e "require.resolve('@playwright/test', { paths: [process.argv[1]] })" $appsDesktop 2>&1 | Out-Null
-    $pwResolved = ($LASTEXITCODE -eq 0)
-    $ErrorActionPreference = $prevEap
-    Assert-True $pwResolved "@playwright/test resolvable from installed apps/desktop"
+    # The Playwright driver gets its OWN pinned @playwright/test in a
+    # scratch dir -- NEVER the installed tree's copy. The driver talks to
+    # the app over Playwright's inspection pipe, so its Playwright version
+    # is independent of the app under test; installing it ourselves makes
+    # the leg identical for every OLD ref (older releases predate the
+    # dependency entirely, and hoisting moves it around in newer ones).
+    $driverDir = Join-Path $WorkRoot "pw-driver"
+    New-Item -ItemType Directory -Path $driverDir -Force | Out-Null
+    $npmCli = Join-Path (Split-Path -Parent $node) "node_modules\npm\bin\npm-cli.js"
+    Assert-True (Test-Path -LiteralPath $npmCli) "managed npm exists beside the managed node"
+    Push-Location $driverDir
+    try {
+        & $node $npmCli install --no-save --no-audit --no-fund "@playwright/test@$PlaywrightVersion" 2>&1 |
+            Select-Object -Last 5 | ForEach-Object { Write-Host "  npm| $_" }
+        $npmExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    Assert-True ($npmExit -eq 0) "npm install @playwright/test@$PlaywrightVersion into the driver dir"
 
     $recorder = Start-DesktopRecorder (Join-Path $proof "desktop-frames")
     $recording = Start-ScreenRecording (Join-Path $proof "recording.mkv")
     try {
         # Launch the installed app and click through Settings -> About ->
         # Update now. Exit 0 = the app quit for the updater hand-off.
-        # Copy the driver INTO the installed apps/desktop first: Node resolves
+        # Copy the driver INTO $driverDir first: Node resolves
         # require('@playwright/test') from the SCRIPT's own directory upward,
         # so running it from the CI checkout would resolve the wrong (or no)
         # node_modules.
-        $driver = Join-Path $appsDesktop "e2e-drive-update.cjs"
+        $driver = Join-Path $driverDir "e2e-drive-update.cjs"
         Copy-Item (Join-Path $AssetsDir "drive-update.cjs") $driver -Force
-        Push-Location $appsDesktop
+        Push-Location $driverDir
         try {
             & $node $driver $desktopExe $proof 2>&1 |
                 ForEach-Object { Write-Host "  $_" }

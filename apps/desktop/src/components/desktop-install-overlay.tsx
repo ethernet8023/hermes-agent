@@ -16,11 +16,11 @@ import type {
   DesktopBootstrapState
 } from '@/global'
 import { useI18n } from '@/i18n'
-import { AlertCircle, ChevronDown, ChevronRight, Globe, iconSize, Loader2, Monitor } from '@/lib/icons'
+import { ChevronDown, ChevronRight, Globe, iconSize } from '@/lib/icons'
 import { capitalize } from '@/lib/text'
 import { cn } from '@/lib/utils'
 
-import { FirstRunRemoteForm } from './first-run-remote-form'
+import { FirstRunSetup } from './first-run-setup'
 
 /**
  * DesktopInstallOverlay
@@ -277,19 +277,17 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
   const [logOpen, setLogOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [cancelling, setCancelling] = useState(false)
-  const [remoteOpen, setRemoteOpen] = useState(false)
+  // Set when a recovery path (the unsupported-platform screen) opens setup
+  // without the bootstrap gate having armed one.
+  const [setupOpen, setSetupOpen] = useState(false)
   // Which connection modes this artifact + machine offer (electron backend
-  // registry). null while loading; loading failure or an older Electron
-  // build defaults to null → treated as all-available so the classic
-  // two-card choice keeps working.
+  // registry). null while loading; a loading failure or an older Electron
+  // build leaves it null, which offers every mode and lets an unavailable
+  // one fail at connect time rather than pre-disabling it.
   const [backends, setBackends] = useState<DesktopBackendAvailability[] | null>(null)
   const [backendsLoaded, setBackendsLoaded] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const logEndRef = useRef<HTMLDivElement | null>(null)
-
-  const localModeOffered: boolean = backends
-    ? (backends.find(entry => entry.mode === 'local')?.available ?? true)
-    : true
 
   // Resolve mode availability once: it is a constant of the artifact +
   // machine (the electron side caches it the same way).
@@ -310,8 +308,8 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
     const availabilityCall = window.hermesDesktop?.getBackendAvailability?.()
 
     if (!availabilityCall) {
-      // Older Electron main without the IPC: no availability facts, offer
-      // the classic two-card choice.
+      // Older Electron main without the IPC: no availability facts, so every
+      // mode is offered.
       finish(null)
 
       return () => {
@@ -391,24 +389,6 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
     }
   }, [state.error])
 
-  // The choice remains mounted while main hands off to local bootstrap. Once
-  // a manifest/failure takes ownership (or a later repair presents a fresh
-  // choice), this transient button state must not leak across phases — so it
-  // records the root it was produced under and is read back only under that
-  // same root. Deriving it beats clearing it in an effect: the choice paints
-  // as soon as the first snapshot commits, and a click landing before such an
-  // effect flushed would have its error wiped before it ever rendered.
-  const [localStart, setLocalStart] = useState<{
-    root: string | null
-    starting: boolean
-    error: string | null
-  }>({ root: null, starting: false, error: null })
-
-  const activeRoot = state.setupChoice?.activeRoot ?? null
-  const forActiveRoot = localStart.root === activeRoot
-  const localStarting = forActiveRoot && localStart.starting
-  const localStartError = forActiveRoot ? localStart.error : null
-
   // Mount logic: show whenever a bootstrap is in flight, completed-with-error,
   // or actively running with a manifest. Hide entirely after a successful
   // completion so the rest of the UI can take over.
@@ -440,91 +420,18 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
     return null
   }
 
-  if (remoteOpen) {
-    return <FirstRunRemoteForm backends={backends ?? undefined} onBack={() => setRemoteOpen(false)} />
-  }
-
-  if (state.setupChoice) {
-    // A light artifact has no local backend, so there is no choice to make:
-    // the remote form IS first-run setup, with no back behind it. Wait for
-    // the availability answer so the two-card chooser cannot flash first.
+  if (state.setupChoice || setupOpen) {
+    // Wait for the availability answer before painting, so a card cannot
+    // flash as available and then turn disabled.
     if (!backendsLoaded) {
       return null
     }
 
-    if (!localModeOffered) {
-      return <FirstRunRemoteForm backends={backends ?? undefined} />
-    }
-
     return (
-      <div className="fixed inset-0 z-(--z-setup) flex items-center justify-center bg-background/90 p-4 backdrop-blur-md">
-        <div className="w-full max-w-2xl rounded-xl border border-(--stroke-nous) bg-card p-8 shadow-nous">
-          <div className="flex items-start gap-4">
-            <BrandMark className="size-11 shrink-0" />
-            <div className="min-w-0">
-              <h2 className="text-xl font-semibold tracking-tight">{copy.setupChoiceTitle}</h2>
-              <p className="mt-1.5 text-sm text-muted-foreground">{copy.setupChoiceDesc}</p>
-            </div>
-          </div>
-
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            <button
-              className="rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) p-4 text-left transition hover:bg-(--chrome-action-hover)"
-              onClick={() => setRemoteOpen(true)}
-              type="button"
-            >
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Globe className="size-4 text-muted-foreground" />
-                <span>{copy.connectExistingTitle}</span>
-              </div>
-              <p className="mt-2 text-sm leading-5 text-muted-foreground">{copy.connectExistingDesc}</p>
-            </button>
-
-            <button
-              className="rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) p-4 text-left transition hover:bg-(--chrome-action-hover) disabled:cursor-wait disabled:opacity-60"
-              disabled={localStarting}
-              onClick={async () => {
-                setLocalStart({ root: activeRoot, starting: true, error: null })
-
-                try {
-                  const desktop = window.hermesDesktop
-
-                  if (!desktop || typeof desktop.continueBootstrapLocal !== 'function') {
-                    throw new Error(copy.localStartUnavailable)
-                  }
-
-                  await desktop.continueBootstrapLocal()
-                } catch (err) {
-                  setLocalStart({ root: activeRoot, starting: false, error: errorMessage(err) })
-                }
-              }}
-              type="button"
-            >
-              <div className="flex items-center gap-2 text-sm font-medium">
-                {localStarting ? (
-                  <Loader2 className="size-4 animate-spin text-muted-foreground" />
-                ) : (
-                  <Monitor className="size-4 text-muted-foreground" />
-                )}
-                <span>{copy.installLocalTitle}</span>
-              </div>
-              <p className="mt-2 text-sm leading-5 text-muted-foreground">{copy.installLocalDesc}</p>
-            </button>
-          </div>
-
-          {localStartError ? (
-            <div className="mt-4 flex items-start gap-2 text-sm text-destructive">
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-              <span>{localStartError}</span>
-            </div>
-          ) : null}
-
-          <div className="mt-6 text-xs text-muted-foreground">
-            {copy.installTo}{' '}
-            <code className="font-mono text-(--ui-text-secondary)">{state.setupChoice.activeRoot}</code>
-          </div>
-        </div>
-      </div>
+      <FirstRunSetup
+        activeRoot={state.setupChoice?.activeRoot ?? state.unsupportedPlatform?.activeRoot ?? ''}
+        backends={backends}
+      />
     )
   }
 
@@ -574,7 +481,7 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
               {copy.installTo} <code className="font-mono text-(--ui-text-secondary)">{ups.activeRoot}</code>
             </span>
             <div className="flex items-center gap-2">
-              <Button onClick={() => setRemoteOpen(true)} size="sm" variant="secondary">
+              <Button onClick={() => setSetupOpen(true)} size="sm" variant="secondary">
                 <Globe className="size-4" />
                 {copy.connectExistingShort}
               </Button>

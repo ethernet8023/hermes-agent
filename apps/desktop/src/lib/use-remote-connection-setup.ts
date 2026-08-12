@@ -1,10 +1,11 @@
 // useRemoteConnectionSetup — THE logic for configuring a remote gateway
-// connection, shared by first-run setup (FirstRunRemoteForm) and Settings
-// (GatewaySettings). One narrow job: take a URL + token the surface owns,
-// probe the gateway's auth mode, gate Test/Apply on a tested payload, and
-// run the oauth sign-in — with every seq guard in one place.
+// connection, used by the remote mode's config panel (app/connection/modes/
+// remote) on both hosts that render it: first-run setup and Settings.
+// One narrow job: take a URL + token the surface owns, probe the gateway's
+// auth mode, gate Test/Apply on a tested payload, and run the oauth sign-in
+// — with every seq guard in one place.
 //
-// The surfaces stay thin skins and keep their real differences:
+// The panel stays a thin skin and the hosts keep their real differences:
 //  - error/success PRESENTATION (inline rows vs notify toasts) via the
 //    onError/onSuccess callbacks;
 //  - oauth PRE-SAVE: Settings persists url+mode before the login window

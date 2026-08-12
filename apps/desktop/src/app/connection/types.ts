@@ -133,7 +133,7 @@ export interface ConnectionCardContext {
   copy: ConnectionCopy
 }
 
-export interface ConnectionPanelProps<Draft> {
+export interface ConnectionConfigPanelProps<Draft> {
   draft: Draft
   onDraftChange: (patch: Partial<Draft>) => void
   surface: ConnectionSurface
@@ -142,8 +142,9 @@ export interface ConnectionPanelProps<Draft> {
 /**
  * A connection mode: identity, its own draft shape, and how it presents.
  * `Draft` is the mode's private state — declared in the mode's folder and
- * named nowhere else. Modes whose whole configuration is "pick me" (local)
- * declare an empty draft and no panel.
+ * named nowhere else. Every mode has a config panel: even local, whose only
+ * content is the commit action, because a drilled-into card must have a body
+ * and the action's meaning is the surface's to decide.
  */
 export interface ConnectionModeModule<M extends ConnectionMode, Draft> {
   mode: M
@@ -154,7 +155,7 @@ export interface ConnectionModeModule<M extends ConnectionMode, Draft> {
   /** Serialize to the IPC payload. The wire shape stops here. */
   toPayload: (draft: Draft, scope: null | string) => DesktopConnectionConfigInput
   card: (context: ConnectionCardContext) => ConnectionModeCard
-  Panel?: (props: ConnectionPanelProps<Draft>) => ReactNode
+  ConfigPanel: (props: ConnectionConfigPanelProps<Draft>) => ReactNode
 }
 
 /**
@@ -172,8 +173,7 @@ export interface ErasedConnectionModule {
   fromSaved: (config: DesktopConnectionConfig | null) => ConnectionDraft
   toPayload: (draft: ConnectionDraft, scope: null | string) => DesktopConnectionConfigInput
   card: (context: ConnectionCardContext) => ConnectionModeCard
-  hasPanel: boolean
-  renderPanel: (props: ConnectionPanelProps<ConnectionDraft>) => ReactNode
+  renderPanel: (props: ConnectionConfigPanelProps<ConnectionDraft>) => ReactNode
 }
 
 /**
@@ -195,27 +195,20 @@ export function defineConnectionMode<M extends ConnectionMode, Draft>(
     fromSaved: config => asDraft(module.fromSaved(config)),
     toPayload: (draft, scope) => module.toPayload(asTyped(draft), scope),
     card: module.card,
-    hasPanel: Boolean(module.Panel),
     renderPanel: ({ draft, onDraftChange, surface }) => {
-      const Panel = module.Panel
-
-      if (!Panel) {
-        return null
-      }
-
       // createElement, NOT Panel({...}): calling a component as a function
       // runs its hooks inside the CALLER's hook list, so switching to a mode
       // whose panel has a different number of hooks throws "rendered more
       // hooks than during the previous render". An element makes each panel
       // its own component with its own hook list and its own mount/unmount.
-      return createElement(Panel as (props: ConnectionPanelProps<unknown>) => ReactNode, {
+      return createElement(module.ConfigPanel as (props: ConnectionConfigPanelProps<unknown>) => ReactNode, {
         draft: asTyped(draft),
         onDraftChange: patch => onDraftChange(patch as Partial<ConnectionDraft>),
         surface,
         // Remounting on a mode switch is the point: a panel must not inherit
         // the previous mode's local state.
         key: module.mode
-      } as ConnectionPanelProps<unknown> & { key: string })
+      } as ConnectionConfigPanelProps<unknown> & { key: string })
     }
   }
 }

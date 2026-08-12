@@ -63,5 +63,5 @@ export const sshMode: ConnectionModeModule<'ssh', SshDraft> = {
     hint: copy.sshTrustHint
   }),
 
-  Panel: SshPanel
+  ConfigPanel: SshPanel
 }

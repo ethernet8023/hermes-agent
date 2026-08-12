@@ -16,7 +16,7 @@ import { AlertCircle, Check, Loader2, LogIn, RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
 import { ListRow, Pill } from '../../../settings/primitives'
-import type { ConnectionPanelProps } from '../../types'
+import type { ConnectionConfigPanelProps } from '../../types'
 
 import { type CloudDraft, savedCloudConnectionUrl } from './index'
 
@@ -26,7 +26,7 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err || 'Unknown error')
 }
 
-export function CloudPanel({ draft, onDraftChange, surface }: ConnectionPanelProps<CloudDraft>) {
+export function CloudPanel({ draft, onDraftChange, surface }: ConnectionConfigPanelProps<CloudDraft>) {
   const { commit, copy, onError, savedConfig } = surface
   const [signedIn, setSignedIn] = useState(false)
   const [signingIn, setSigningIn] = useState(false)

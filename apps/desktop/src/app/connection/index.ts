@@ -45,7 +45,7 @@ export type {
   ConnectionMode,
   ConnectionModeCard,
   ConnectionModeModule,
-  ConnectionPanelProps,
+  ConnectionConfigPanelProps as ConnectionPanelProps,
   ConnectionSurface,
   ConnectionSurfaceKind,
   ErasedConnectionModule

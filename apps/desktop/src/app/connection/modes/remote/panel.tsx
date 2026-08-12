@@ -12,6 +12,8 @@
 //     persisted URL) and first-run must persist nothing until Apply, so it
 //     comes in as beforeOAuthLogin.
 
+import { useEffect } from 'react'
+
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { DesktopAuthProvider } from '@/global'
@@ -23,11 +25,11 @@ import { cn } from '@/lib/utils'
 import { CONTROL_TEXT } from '../../../settings/constants'
 import { ListRow } from '../../../settings/primitives'
 import { ConnectionActions } from '../../connection-actions'
-import type { ConnectionPanelProps } from '../../types'
+import type { ConnectionConfigPanelProps } from '../../types'
 
 import type { RemoteDraft } from './index'
 
-export function RemotePanel({ draft, onDraftChange, surface }: ConnectionPanelProps<RemoteDraft>) {
+export function RemotePanel({ draft, onDraftChange, surface }: ConnectionConfigPanelProps<RemoteDraft>) {
   const { commit, copy, envOverride, kind, savedConfig, scope } = surface
   const savedRemote = savedConfig && savedConfig.mode === 'remote' ? savedConfig : null
   const hasSavedCredentials = Boolean(savedRemote?.remoteTokenSet || savedRemote?.remoteOauthConnected)
@@ -49,6 +51,16 @@ export function RemotePanel({ draft, onDraftChange, surface }: ConnectionPanelPr
 
   const providers: DesktopAuthProvider[] = setup.probe?.providers ?? []
   const { isPassword, providerLabel } = deriveRemoteAuthProviderShape(providers, copy.identityProvider)
+
+  // The probe resolves the gateway's auth scheme in the hook's own state, but
+  // toPayload serializes from the DRAFT — so the resolved mode has to land
+  // there or an oauth gateway would be persisted as remoteAuthMode 'token'
+  // with an empty token, and the saved connection could never authenticate.
+  useEffect(() => {
+    if (setup.authResolved && setup.authMode !== draft.authMode) {
+      onDraftChange({ authMode: setup.authMode })
+    }
+  }, [draft.authMode, onDraftChange, setup.authMode, setup.authResolved])
 
   // First-run has nothing saved to fall back to, so it demands a passing test
   // before Apply — landing on a dead gateway there leaves the user with no

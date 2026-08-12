@@ -9,11 +9,11 @@
 // connection and soft-rehomes, at first run it starts the installer.
 
 import { ConnectionActions } from '../../connection-actions'
-import type { ConnectionPanelProps } from '../../types'
+import type { ConnectionConfigPanelProps } from '../../types'
 
 import type { LocalDraft } from './index'
 
-export function LocalPanel({ surface }: ConnectionPanelProps<LocalDraft>) {
+export function LocalPanel({ surface }: ConnectionConfigPanelProps<LocalDraft>) {
   const { commit, copy, envOverride, kind } = surface
 
   return (

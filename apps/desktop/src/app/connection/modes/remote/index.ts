@@ -51,5 +51,5 @@ export const remoteMode: ConnectionModeModule<'remote', RemoteDraft> = {
     hint: copy.remoteAuthHint
   }),
 
-  Panel: RemotePanel
+  ConfigPanel: RemotePanel
 }

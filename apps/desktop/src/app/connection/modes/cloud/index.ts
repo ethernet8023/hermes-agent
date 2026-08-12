@@ -53,5 +53,5 @@ export const cloudMode: ConnectionModeModule<'cloud', CloudDraft> = {
     description: copy.cloudDesc
   }),
 
-  Panel: CloudPanel
+  ConfigPanel: CloudPanel
 }

@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { CONTROL_TEXT } from '../../../settings/constants'
 import { ListRow } from '../../../settings/primitives'
 import { ConnectionActions } from '../../connection-actions'
-import type { ConnectionPanelProps } from '../../types'
+import type { ConnectionConfigPanelProps } from '../../types'
 
 import { enrichSelectedSshHost, selectSshHost } from './host-selection'
 
@@ -21,7 +21,7 @@ import { type SshDraft, sshMode } from './index'
 
 const SSH_HOST_CUSTOM = '__custom__'
 
-export function SshPanel({ draft, onDraftChange, surface }: ConnectionPanelProps<SshDraft>) {
+export function SshPanel({ draft, onDraftChange, surface }: ConnectionConfigPanelProps<SshDraft>) {
   const { commit, copy, envOverride, kind, scope } = surface
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [customHost, setCustomHost] = useState(false)
@@ -169,6 +169,7 @@ export function SshPanel({ draft, onDraftChange, surface }: ConnectionPanelProps
         <ListRow
           action={
             <Input
+              aria-label={copy.sshHostTitle}
               autoFocus={customHost}
               className={cn('h-8', CONTROL_TEXT)}
               onBlur={() => {

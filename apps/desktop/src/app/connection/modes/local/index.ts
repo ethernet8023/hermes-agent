@@ -41,5 +41,5 @@ export const localMode: ConnectionModeModule<'local', LocalDraft> = {
     description: scope === null ? copy.localDesc : copy.inheritDesc
   }),
 
-  Panel: LocalPanel
+  ConfigPanel: LocalPanel
 }

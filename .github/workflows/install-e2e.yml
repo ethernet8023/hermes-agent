@@ -206,7 +206,7 @@ jobs:
   report:
     name: Result chart
     if: always()
-    needs: [linux, windows, macos]
+    needs: [pick-releases, linux, windows, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -221,7 +221,10 @@ jobs:
           {
             echo "OS jobs: linux ${{ needs.linux.result }}, windows ${{ needs.windows.result }}, macos ${{ needs.macos.result }}"
             echo
+            # The tag annotations let the chart say WHY a cell skipped
+            # (pre-desktop vs declared TODO) instead of a flat "skip".
             gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
               --paginate --jq '.jobs[] | {name, conclusion}' |
-              node scripts/sandbox/generate-e2e-matrix.mjs --format results
+              node scripts/sandbox/generate-e2e-matrix.mjs --format results \
+                --tags '${{ needs.pick-releases.outputs.tags }}'
           } >> "$GITHUB_STEP_SUMMARY"

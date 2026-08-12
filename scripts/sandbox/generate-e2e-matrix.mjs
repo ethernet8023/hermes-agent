@@ -204,6 +204,18 @@ export function buildMatrices(envs, tags) {
 }
 
 /**
+ * Does this method id need the starting tag to ship the desktop app?
+ * Shared by the plan chart (pre-desktop cells) and the results chart
+ * (labeling WHY a skipped leg skipped).
+ * @param {string} m
+ * @returns {boolean}
+ */
+export function methodNeedsDesktop(m) {
+  return m.startsWith('desktop-installer') || m === 'installer-script+desktop' ||
+    m === 'open-app-update' || m === 'hermes-desktop-app-update';
+}
+
+/**
  * Render the plan as a markdown cross-table for $GITHUB_STEP_SUMMARY:
  * one row per {os, install -> update} combination, one column per
  * starting tag. Every cell is dispatched; whether it RUNS or greys out
@@ -216,9 +228,6 @@ export function buildMatrices(envs, tags) {
  * @returns {string}
  */
 export function renderMarkdownPlan(envs, tags) {
-  const needsDesktop = (/** @type {string} */ m) =>
-    m.startsWith('desktop-installer') || m === 'installer-script+desktop' ||
-    m === 'open-app-update' || m === 'hermes-desktop-app-update';
   const lines = [
     '### Install & Update E2E plan',
     '',
@@ -231,7 +240,7 @@ export function renderMarkdownPlan(envs, tags) {
     const cells = tags.map((tag) => {
       if (
         !tag.desktop &&
-        (needsDesktop(env.install) || needsDesktop(env.update))
+        (methodNeedsDesktop(env.install) || methodNeedsDesktop(env.update))
       ) {
         return 'pre-desktop';
       }
@@ -252,15 +261,36 @@ export function renderMarkdownPlan(envs, tags) {
  * (pick-releases, the report job itself) fall out naturally.
  *
  * @param {{name: string, conclusion: string | null}[]} jobs
+ * @param {TagAnnotation[]} [tagAnnotations] When given (the same --tags the
+ *   plan got), skipped cells carry their REASON: `pre-desktop` when a
+ *   desktop-surface method meets a tag that predates apps/desktop, `TODO`
+ *   when the pair is declared but no driver arm runs it yet.
  * @returns {string}
  */
-export function renderMarkdownResults(jobs) {
+export function renderMarkdownResults(jobs, tagAnnotations = []) {
   const LEG = /^(linux|windows|macos): (\S+) -> (\S+) \((\S+) -> HEAD\) \//;
+  /** @type {Map<string, boolean>} */
+  const desktopByTag = new Map(tagAnnotations.map((t) => [t.ref, t.desktop]));
+  /**
+   * @param {string} install @param {string} update @param {string} tag
+   * @returns {string}
+   */
+  const skipLabel = (install, update, tag) => {
+    if (desktopByTag.size === 0) return 'skip';
+    if (
+      desktopByTag.get(tag) === false &&
+      (methodNeedsDesktop(install) || methodNeedsDesktop(update))
+    ) {
+      return 'pre-desktop';
+    }
+    return 'TODO';
+  };
   // A combination can surface as SEVERAL jobs with the same leg name (a
   // run workflow may have one inner job per driver arm; exactly one runs
   // and the others natively skip), so cells merge by significance: a real
   // outcome always beats a skip, and a bad outcome beats a good one.
-  const RANK = ['skip', '&#x2705;', 'running', 'cancelled', '&#x274C;'];
+  const RANK = ['skip', 'TODO', 'pre-desktop', '&#x2705;', 'running', 'cancelled', '&#x274C;'];
+  const SKIPS = ['skip', 'TODO', 'pre-desktop'];
   /** @type {Map<string, Map<string, string>>} */
   const rows = new Map();
   /** @type {string[]} */
@@ -276,7 +306,7 @@ export function renderMarkdownResults(jobs) {
       switch (job.conclusion) {
         case 'success': return '&#x2705;';
         case 'failure': return '&#x274C;';
-        case 'skipped': return 'skip';
+        case 'skipped': return skipLabel(m[2], m[3], tag);
         case 'cancelled': return 'cancelled';
         default: return 'running';
       }
@@ -291,11 +321,11 @@ export function renderMarkdownResults(jobs) {
   const cells = [...rows.values()].flatMap((r) => [...r.values()]);
   const passed = cells.filter((c) => c === '&#x2705;').length;
   const failed = cells.filter((c) => c === '&#x274C;').length;
-  const skipped = cells.filter((c) => c === 'skip').length;
+  const skipped = cells.filter((c) => SKIPS.includes(c)).length;
   const lines = [
     '### Install & Update E2E results',
     '',
-    `${passed} passed, ${failed} failed, ${skipped} skipped (declared TODO / pre-desktop), ${cells.length} legs total`,
+    `${passed} passed, ${failed} failed, ${skipped} skipped (TODO = declared, no driver arm yet; pre-desktop = the starting release predates apps/desktop), ${cells.length} legs total`,
     '',
     `| combination | ${tags.join(' | ')} |`,
     `|---|${tags.map(() => '---').join('|')}|`,
@@ -325,7 +355,8 @@ async function main() {
   });
   if (values.format === 'results') {
     const jobs = (await readStdin()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
-    process.stdout.write(renderMarkdownResults(jobs));
+    const annotations = /** @type {TagAnnotation[]} */ (JSON.parse(values.tags));
+    process.stdout.write(renderMarkdownResults(jobs, annotations));
     return;
   }
   const tags = /** @type {TagAnnotation[]} */ (JSON.parse(values.tags));

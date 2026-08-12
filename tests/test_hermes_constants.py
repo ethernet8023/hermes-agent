@@ -747,3 +747,117 @@ class TestInstallRootAndRuntimeDir:
         # ...and changing HERMES_HOME alone must not move it.
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "other-home"))
         assert hermes_constants.get_runtime_dir() == runtime
+
+
+class TestCodeRootAndProvisionability:
+    """The install root is not always a writable checkout.
+
+    Nix and Docker both ship an installed *package* layout and neither sets
+    HERMES_INSTALL_ROOT, so the fallback derivation lands inside a read-only
+    tree — on Nix, literally inside site-packages. Code that writes there
+    must ask first.
+    """
+
+    def _sealed(self, monkeypatch, steward):
+        from hermes_cli import runtime_tree as rt
+
+        monkeypatch.setattr(
+            rt, "runtime_tree",
+            lambda root: rt.Sealed(root=Path(root), steward=steward),
+        )
+
+    def _checkout(self, monkeypatch):
+        from hermes_cli import runtime_tree as rt
+
+        monkeypatch.setattr(
+            rt, "runtime_tree", lambda root: rt.GitCheckout(root=Path(root))
+        )
+
+    def test_code_root_is_where_the_modules_live(self):
+        # hermes_constants.py sits at the top level of the package tree, so
+        # its own directory is the code root by construction.
+        assert (
+            hermes_constants.get_code_root()
+            == Path(hermes_constants.__file__).resolve().parent
+        )
+
+    def test_install_root_falls_back_to_code_root(self, monkeypatch):
+        monkeypatch.delenv("HERMES_INSTALL_ROOT", raising=False)
+        assert hermes_constants.get_install_root() == hermes_constants.get_code_root()
+
+    def test_checkout_is_provisionable(self, monkeypatch):
+        monkeypatch.delenv("HERMES_INSTALL_ROOT", raising=False)
+        self._checkout(monkeypatch)
+        assert hermes_constants.install_is_provisionable() is True
+
+    @pytest.mark.parametrize("steward", ["nix", "docker", "desktop-app"])
+    def test_sealed_install_is_not_provisionable(self, monkeypatch, steward):
+        # The steward already supplies node/uv/git/ripgrep (Nix via
+        # makeWrapper, Docker baked into the image), and the root is
+        # read-only, so provisioning would both fail and duplicate.
+        monkeypatch.delenv("HERMES_INSTALL_ROOT", raising=False)
+        self._sealed(monkeypatch, steward)
+        assert hermes_constants.install_is_provisionable() is False
+
+    def test_explicit_root_wins_over_sealed_classification(
+        self, monkeypatch, tmp_path
+    ):
+        # The desktop app points at a writable location it owns; the code
+        # itself is still sealed, but provisioning targets the override.
+        self._sealed(monkeypatch, "desktop-app")
+        monkeypatch.setenv("HERMES_INSTALL_ROOT", str(tmp_path / "payload"))
+        assert hermes_constants.get_install_root() == tmp_path / "payload"
+        assert hermes_constants.install_is_provisionable() is True
+
+    def test_context_override_also_counts_as_writable(self, monkeypatch):
+        self._sealed(monkeypatch, "nix")
+        monkeypatch.delenv("HERMES_INSTALL_ROOT", raising=False)
+        token = hermes_constants.set_install_root_override("/tmp/somewhere")
+        try:
+            assert hermes_constants.install_is_provisionable() is True
+        finally:
+            hermes_constants.reset_install_root_override(token)
+
+    def test_unclassifiable_tree_fails_open(self, monkeypatch):
+        # Never silently skip provisioning: a failed write reports itself
+        # with context, a silent skip leaves the install missing its tools.
+        from hermes_cli import runtime_tree as rt
+
+        def boom(root):
+            raise RuntimeError("stamp unreadable")
+
+        monkeypatch.delenv("HERMES_INSTALL_ROOT", raising=False)
+        monkeypatch.setattr(rt, "runtime_tree", boom)
+        assert hermes_constants.install_is_provisionable() is True
+
+
+class TestProjectRootConsolidation:
+    """Every module's code root must agree.
+
+    These were a dozen independent ``Path(__file__).parent.parent`` chains.
+    On a checkout they all coincide, which is why the drift was invisible —
+    but they disagreed with ``_startup_fast`` under symlinks, and each new
+    copy inherited the "this is a writable repo" assumption.
+    """
+
+    def test_modules_share_one_code_root(self):
+        from hermes_cli import (
+            claw, config, cron, doctor, gateway, setup, status,
+            tools_config, uninstall, web_server,
+        )
+
+        expected = hermes_constants.get_code_root()
+        for mod in (claw, cron, doctor, gateway, setup, status, tools_config, web_server):
+            assert mod.PROJECT_ROOT == expected, mod.__name__
+        assert config.get_project_root() == expected
+        assert uninstall.get_project_root() == expected
+
+    def test_startup_fast_agrees_with_the_resolver(self):
+        # _startup_fast stays import-free for startup latency, so it keeps
+        # its own derivation; it must still land on the same directory.
+        from hermes_cli import _startup_fast
+
+        assert (
+            Path(_startup_fast.project_root_str()).resolve()
+            == hermes_constants.get_code_root().resolve()
+        )

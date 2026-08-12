@@ -26,8 +26,15 @@ def log_warn(msg: str):
     print(f"{color('⚠', Colors.YELLOW)} {msg}")
 
 def get_project_root() -> Path:
-    """Get the project installation directory."""
-    return Path(__file__).parent.parent.resolve()
+    """Get the directory the Hermes code lives in.
+
+    Delegates to ``hermes_constants.get_code_root`` — see the note there:
+    a packaged install resolves inside the installed package tree, not a
+    writable checkout.
+    """
+    from hermes_constants import get_code_root
+
+    return get_code_root()
 
 
 def code_removal_refusal() -> "str | None":

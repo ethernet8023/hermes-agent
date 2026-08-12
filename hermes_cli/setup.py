@@ -24,11 +24,11 @@ from typing import Optional, Dict, Any
 
 from hermes_cli.nous_subscription import get_nous_subscription_features
 from tools.tool_backend_helpers import managed_nous_tools_enabled
-from hermes_constants import get_optional_skills_dir
+from hermes_constants import get_code_root, get_optional_skills_dir
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+PROJECT_ROOT = get_code_root()
 
 _DOCS_BASE = "https://hermes-agent.nousresearch.com/docs"
 

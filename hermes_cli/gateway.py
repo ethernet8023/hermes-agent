@@ -27,7 +27,9 @@ if os.name == "posix":
     if _missing:
         os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + os.pathsep.join(sorted(_missing))
 
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+from hermes_constants import get_code_root
+
+PROJECT_ROOT = get_code_root()
 
 from gateway.config import coerce_systemd_watchdog_seconds, load_gateway_config
 from gateway.status import terminate_pid

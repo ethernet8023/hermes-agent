@@ -585,8 +585,16 @@ def get_env_path() -> Path:
     return get_hermes_home() / ".env"
 
 def get_project_root() -> Path:
-    """Get the project installation directory."""
-    return Path(__file__).parent.parent.resolve()
+    """Get the directory the Hermes code lives in.
+
+    Delegates to ``hermes_constants.get_code_root``. Note this is not
+    guaranteed to be a writable checkout: on Nix and Docker it resolves
+    inside the installed package tree, and repo-relative siblings like
+    ``pyproject.toml`` do not exist there.
+    """
+    from hermes_constants import get_code_root
+
+    return get_code_root()
 
 def _resolve_hermes_uid_gid() -> tuple[Optional[int], Optional[int]]:
     """Read the HERMES_UID / HERMES_GID env vars set by Docker deployments.

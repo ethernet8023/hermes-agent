@@ -224,6 +224,24 @@ def reset_install_root_override(token: Token) -> None:
     _INSTALL_ROOT_OVERRIDE.reset(token)
 
 
+def get_code_root() -> Path:
+    """Return the directory the Hermes Python modules live in.
+
+    In a git checkout this is the repo root. In a packaged install it is
+    wherever the package landed — for Nix, ``<store>/lib/python3.x/
+    site-packages``; for Docker's editable install, ``/opt/hermes``. This is
+    a statement about *where the code is*, nothing more: it does not imply
+    the directory is writable, or that repo-relative siblings
+    (``pyproject.toml``, ``ui-tui/``, ``scripts/``) exist next to it. Callers
+    that need those must handle their absence, and packaged installs point
+    at them with the ``HERMES_*`` env overrides instead.
+
+    Canonical replacement for the ``Path(__file__).parent.parent`` chains
+    that were open-coded in a dozen modules.
+    """
+    return Path(__file__).resolve().parent
+
+
 def get_install_root() -> Path:
     """Return the root directory of THIS install of Hermes.
 
@@ -234,14 +252,14 @@ def get_install_root() -> Path:
          subprocesses) must inherit it across the process boundary.
       2. Context override (``set_install_root_override``) — in-process
          callers that cannot mutate the environment.
-      3. The directory containing this module — for a source checkout
-         this IS the repo root (``hermes_constants.py`` sits at top
-         level; same derivation ``managed_uv.py`` uses for
-         ``_PROJECT_ROOT``).
+      3. :func:`get_code_root` — for a source checkout this IS the repo
+         root (``hermes_constants.py`` sits at top level; same derivation
+         ``managed_uv.py`` uses for ``_PROJECT_ROOT``).
 
-    pip/wheel layouts are unsupported by design (setup.py blocks wheel
-    builds outside Nix), so rung 3 is always a real, writable checkout —
-    or the caller set rung 1/2.
+    Rung 3 is NOT necessarily writable. A Nix build resolves it to a
+    read-only store path, and Docker's image tree is read-only too — both
+    ship an installed package layout, and neither sets rung 1. Ask
+    :func:`install_is_provisionable` before writing anything under it.
     """
     env_root = os.environ.get("HERMES_INSTALL_ROOT", "")
     if env_root:
@@ -249,7 +267,36 @@ def get_install_root() -> Path:
     override = _INSTALL_ROOT_OVERRIDE.get()
     if override is not _UNSET:
         return Path(str(override))
-    return Path(__file__).resolve().parent
+    return get_code_root()
+
+
+def install_is_provisionable() -> bool:
+    """May this install create and populate its own ``.hermes-runtime``?
+
+    True for a git checkout and for an explicit override (the desktop app
+    points at a writable location it owns). False for a sealed tree whose
+    steward supplies the runtime itself: Nix injects tools with
+    ``makeWrapper --suffix PATH``, Docker bakes them into the image, and
+    both roots are read-only — provisioning there would fail on the write
+    and duplicate what the steward already did.
+
+    Sealed installs are recognized from the build stamp rather than by
+    probing the filesystem, so this stays correct for a steward whose root
+    happens to be writable (a locally-built image, a dev container).
+    """
+    if os.environ.get("HERMES_INSTALL_ROOT", "").strip():
+        return True
+    if _INSTALL_ROOT_OVERRIDE.get() is not _UNSET:
+        return True
+    try:
+        from hermes_cli.runtime_tree import Sealed, runtime_tree
+
+        return not isinstance(runtime_tree(get_code_root()), Sealed)
+    except Exception:
+        # No classification available: treat as a checkout. The write itself
+        # reports failure with full context, which beats silently skipping
+        # provisioning on an install that needed it.
+        return True
 
 
 def get_runtime_dir(install_root: Path | None = None) -> Path:

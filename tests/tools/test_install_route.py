@@ -416,3 +416,38 @@ class TestLadderAgreement:
 
         self._pip_install()(["somepkg"])
         assert seen["env"]["VIRTUAL_ENV"] == "/venvs/hermes"
+
+
+class TestLazyLadderVirtualEnv:
+    """The lazy ladder must apply the same VIRTUAL_ENV rule as the other one.
+
+    ``tools.environments.local.hermes_subprocess_env`` deliberately strips
+    VIRTUAL_ENV so a Hermes-side install cannot clobber another project's
+    environment; the lazy ladder then re-adds it for uv. Re-adding a value
+    derived from ``sys.executable``'s ancestry names a non-venv directory on
+    the bundled and store-installed shapes.
+    """
+
+    def _capture_env(self, monkeypatch, tmp_path):
+        target = tmp_path / "lazy-packages"
+        monkeypatch.setenv(ld._LAZY_TARGET_ENV, str(target))
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["env"] = kwargs.get("env") or {}
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        monkeypatch.setattr(ld.subprocess, "run", fake_run)
+        monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: "/fake/uv")
+        ld._venv_pip_install(("somepkg==1.0",))
+        return seen["env"]
+
+    def test_no_venv_means_no_virtual_env(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("sys.prefix", "/opt/payload/python")
+        monkeypatch.setattr("sys.base_prefix", "/opt/payload/python")
+        assert "VIRTUAL_ENV" not in self._capture_env(monkeypatch, tmp_path)
+
+    def test_real_venv_is_reported_by_prefix(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("sys.prefix", "/venvs/hermes")
+        monkeypatch.setattr("sys.base_prefix", "/usr")
+        assert self._capture_env(monkeypatch, tmp_path)["VIRTUAL_ENV"] == "/venvs/hermes"

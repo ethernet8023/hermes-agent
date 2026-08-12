@@ -884,10 +884,15 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
         constraint_args = ["--constraint", str(constraints)]
 
     try:
-        venv_root = Path(sys.executable).parent.parent
         from tools.environments.local import hermes_subprocess_env
         uv_env = hermes_subprocess_env(inherit_credentials=False)
-        uv_env["VIRTUAL_ENV"] = str(venv_root)
+        # VIRTUAL_ENV is only meaningful when a venv actually owns the dep
+        # store. Deriving it from sys.executable's ancestry names a real
+        # directory that is NOT a venv on the bundled desktop runtime and on
+        # store installs, pointing uv at the wrong prefix. Mirrors the same
+        # guard in hermes_cli.tools_config._pip_install.
+        if sys.prefix != sys.base_prefix:
+            uv_env["VIRTUAL_ENV"] = sys.prefix
 
         # Tier 1: uv (preferred — fast, doesn't need pip in the venv)
         # Managed uv first: $HERMES_HOME/bin is never on PATH, so a bare

@@ -134,6 +134,11 @@ jobs:
           for key in linux windows macos; do
             echo "$key=$(echo "$matrices" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(d)[process.argv[1]])))' "$key")" >> "$GITHUB_OUTPUT"
           done
+          # The plan, human-readable: a combination x starting-tag chart on
+          # the run's summary page.
+          node scripts/sandbox/generate-e2e-matrix.mjs \
+            --tags '${{ needs.pick-releases.outputs.tags }}' \
+            --format markdown >> "$GITHUB_STEP_SUMMARY"
 
   linux:
     name: ${{ matrix.name }}

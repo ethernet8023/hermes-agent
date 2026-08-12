@@ -165,14 +165,65 @@ export function buildMatrices(envs, tags) {
   return byOs;
 }
 
+/**
+ * Render the plan as a markdown cross-table for $GITHUB_STEP_SUMMARY:
+ * one row per {os, install -> update} combination, one column per
+ * starting tag. Every cell is dispatched; whether it RUNS or greys out
+ * is the run workflow's call (capability lives there, not here), so the
+ * chart only distinguishes the one thing the plan itself knows: windows
+ * desktop-surface legs from tags that predate the desktop app.
+ *
+ * @param {{os: Os, install: string, update: string}[]} envs
+ * @param {TagAnnotation[]} tags
+ * @returns {string}
+ */
+export function renderMarkdownPlan(envs, tags) {
+  const needsDesktop = (/** @type {string} */ m) =>
+    m.startsWith('desktop-installer') || m === 'app-update';
+  const lines = [
+    '### Install & Update E2E plan',
+    '',
+    `${envs.length} combinations x ${tags.length} starting tags = ${envs.length * tags.length} legs`,
+    '',
+    `| combination | ${tags.map((t) => t.ref).join(' | ')} |`,
+    `|---|${tags.map(() => '---').join('|')}|`,
+  ];
+  for (const env of envs) {
+    const cells = tags.map((tag) => {
+      if (
+        env.os === 'windows' && !tag.desktop &&
+        (needsDesktop(env.install) || needsDesktop(env.update))
+      ) {
+        return 'pre-desktop';
+      }
+      return '&#x2705;';
+    });
+    lines.push(`| \`${env.os}: ${env.install} -> ${env.update}\` | ${cells.join(' | ')} |`);
+  }
+  lines.push(
+    '',
+    '&#x2705; dispatched -- the OS run workflow decides run vs native skip',
+    '(unimplemented method pairs grey out there). `pre-desktop`: the tag',
+    "ships no desktop app, so desktop-surface legs grey out regardless.",
+    '',
+  );
+  return lines.join('\n');
+}
+
 function main() {
   const { values } = parseArgs({
     options: {
       tags: { type: 'string', default: '[]' },
+      format: { type: 'string', default: 'json' },
     },
   });
   const tags = /** @type {TagAnnotation[]} */ (JSON.parse(values.tags));
-  const matrices = buildMatrices(generateEnvironments(SPEC), tags);
+  const envs = generateEnvironments(SPEC);
+  if (values.format === 'markdown') {
+    process.stdout.write(renderMarkdownPlan(envs, tags));
+    return;
+  }
+  const matrices = buildMatrices(envs, tags);
   process.stdout.write(`${JSON.stringify(matrices, null, 2)}\n`);
 }
 

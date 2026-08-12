@@ -88,10 +88,7 @@ permissions:
 jobs:
   # ---- arm 1: install via the website's Hermes-Setup.exe (GUI) -------------
   e2e:
-    # Static name on purpose: the caller's job name already carries the
-    # method pair, and GitHub renders name expressions UNEXPANDED (literal
-    # "${{ inputs... }}") on natively skipped jobs.
-    name: e2e
+    name: Hermes-Setup.exe
     # The one pair the driver can run today, and only from a starting
     # version that ships the desktop app (the caller annotates
     # tag-has-desktop from the tag's own tree; releases before #20059 have
@@ -185,7 +182,7 @@ jobs:
   # ---- arm 2: install via the irm | iex one-liner (headless) ---------------
   script-e2e:
     # Same static-name reasoning as e2e above.
-    name: e2e
+    name: install.ps1
     # The pairs the script driver can run today. app-update from a script
     # install is a declared TODO (the desktop app also has to be BUILT by
     # that path first).

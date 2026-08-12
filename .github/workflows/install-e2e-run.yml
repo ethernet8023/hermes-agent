@@ -66,11 +66,7 @@ permissions:
 
 jobs:
   e2e:
-    # Static name on purpose: the caller's job name already carries the
-    # method pair, and GitHub renders name expressions UNEXPANDED (literal
-    # "${{ inputs... }}") on natively skipped jobs. Short because it is
-    # only a rendered tail ("<combo> / e2e").
-    name: e2e
+    name: install & update
     # The pairs the driver can run today; anything else is a declared TODO
     # and natively skips.
     if: inputs.install-method == 'installer-script' && contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)

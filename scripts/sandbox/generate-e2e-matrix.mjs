@@ -210,13 +210,92 @@ export function renderMarkdownPlan(envs, tags) {
   return lines.join('\n');
 }
 
-function main() {
+/**
+ * Render the run's OUTCOME as the same cross-table, from the run's own job
+ * list (GitHub Actions API): one row per combination, one column per tag,
+ * each cell the leg's conclusion. Input is NDJSON {name, conclusion} lines
+ * -- what `gh api --paginate --jq '.jobs[] | {name, conclusion}'` emits --
+ * and legs are recognized by the exact name shape buildMatrices mints
+ * ("os: install -> update (tag -> HEAD) / ..."), so unrelated jobs
+ * (pick-releases, the report job itself) fall out naturally.
+ *
+ * @param {{name: string, conclusion: string | null}[]} jobs
+ * @returns {string}
+ */
+export function renderMarkdownResults(jobs) {
+  const LEG = /^(linux|windows|macos): (\S+) -> (\S+) \((\S+) -> HEAD\) \//;
+  // A combination can surface as SEVERAL jobs with the same leg name (the
+  // windows run workflow has one arm per driver; exactly one runs and the
+  // others natively skip), so cells merge by significance: a real outcome
+  // always beats a skip, and a bad outcome beats a good one.
+  const RANK = ['skip', '&#x2705;', 'running', 'cancelled', '&#x274C;'];
+  /** @type {Map<string, Map<string, string>>} */
+  const rows = new Map();
+  /** @type {string[]} */
+  const tags = [];
+  for (const job of jobs) {
+    const m = job.name.match(LEG);
+    if (!m) continue;
+    const combo = `${m[1]}: ${m[2]} -> ${m[3]}`;
+    const tag = m[4];
+    if (!tags.includes(tag)) tags.push(tag);
+    if (!rows.has(combo)) rows.set(combo, new Map());
+    const cell = (() => {
+      switch (job.conclusion) {
+        case 'success': return '&#x2705;';
+        case 'failure': return '&#x274C;';
+        case 'skipped': return 'skip';
+        case 'cancelled': return 'cancelled';
+        default: return 'running';
+      }
+    })();
+    const byTag = /** @type {Map<string, string>} */ (rows.get(combo));
+    const prev = byTag.get(tag);
+    if (prev === undefined || RANK.indexOf(cell) > RANK.indexOf(prev)) {
+      byTag.set(tag, cell);
+    }
+  }
+  if (rows.size === 0) return '### Install & Update E2E results\n\n(no legs found in this run)\n';
+  const cells = [...rows.values()].flatMap((r) => [...r.values()]);
+  const passed = cells.filter((c) => c === '&#x2705;').length;
+  const failed = cells.filter((c) => c === '&#x274C;').length;
+  const skipped = cells.filter((c) => c === 'skip').length;
+  const lines = [
+    '### Install & Update E2E results',
+    '',
+    `${passed} passed, ${failed} failed, ${skipped} skipped (declared TODO / pre-desktop), ${cells.length} legs total`,
+    '',
+    `| combination | ${tags.join(' | ')} |`,
+    `|---|${tags.map(() => '---').join('|')}|`,
+  ];
+  for (const [combo, byTag] of rows) {
+    lines.push(`| \`${combo}\` | ${tags.map((t) => byTag.get(t) || '-').join(' | ')} |`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+/** @returns {Promise<string>} all of stdin */
+function readStdin() {
+  return new Promise((resolve) => {
+    let data = '';
+    process.stdin.on('data', (c) => { data += c; });
+    process.stdin.on('end', () => resolve(data));
+  });
+}
+
+async function main() {
   const { values } = parseArgs({
     options: {
       tags: { type: 'string', default: '[]' },
       format: { type: 'string', default: 'json' },
     },
   });
+  if (values.format === 'results') {
+    const jobs = (await readStdin()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+    process.stdout.write(renderMarkdownResults(jobs));
+    return;
+  }
   const tags = /** @type {TagAnnotation[]} */ (JSON.parse(values.tags));
   const envs = generateEnvironments(SPEC);
   if (values.format === 'markdown') {
@@ -228,5 +307,5 @@ function main() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  main();
+  await main();
 }

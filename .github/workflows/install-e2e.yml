@@ -192,3 +192,32 @@ jobs:
       update-method: ${{ matrix.update_method }}
       install-ref: ${{ matrix.install_ref }}
       runner: macos-latest
+
+  # The outcome, human-readable: the plan chart again, with each cell
+  # replaced by how that leg actually concluded. Per-leg conclusions are
+  # NOT reachable through `needs` (a matrix job's result collapses to one
+  # aggregate), so the table body comes from the run's own job list; the
+  # `needs` results only sequence this job after every leg and provide
+  # the per-OS aggregates.
+  report:
+    name: Result chart
+    if: always()
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: scripts/sandbox/generate-e2e-matrix.mjs
+          sparse-checkout-cone-mode: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "OS jobs: linux ${{ needs.linux.result }}, windows ${{ needs.windows.result }}, macos ${{ needs.macos.result }}"
+            echo
+            gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+              --paginate --jq '.jobs[] | {name, conclusion}' |
+              node scripts/sandbox/generate-e2e-matrix.mjs --format results
+          } >> "$GITHUB_STEP_SUMMARY"

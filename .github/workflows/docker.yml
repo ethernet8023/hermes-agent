@@ -52,14 +52,10 @@ jobs:
       - name: Decide whether to build
         id: gate
         env:
-          # python_prod (not python): the image copies installed code, never
-          # tests/, so tests-only PRs skip the build.
-          PYTHON_PROD: ${{ steps.classify.outputs.python_prod }}
-          FRONTEND: ${{ steps.classify.outputs.frontend }}
-          DOCKER_META: ${{ steps.classify.outputs.docker_meta }}
+          DOCKER: ${{ steps.classify.outputs.docker }}
         run: |
           set -euo pipefail
-          if [ "$PYTHON_PROD" = "true" ] || [ "$FRONTEND" = "true" ] || [ "$DOCKER_META" = "true" ]; then
+          if [ "$DOCKER" = "true" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -122,7 +118,6 @@ jobs:
           cache-from: ${{ matrix.cache-from }}
           cache-to: ${{ (github.event_name != 'pull_request') && matrix.cache-to || '' }}
 
-
       # Run the docker-integration test suite against the freshly-built
       # image already loaded into the local daemon (`:test`).
       #
@@ -143,7 +138,7 @@ jobs:
           # Pinned: unpinned setup-uv fetches a 'latest' manifest from
           # raw.githubusercontent.com every job; transient fetch failures
           # fail the job (2026-07-28 incident). Keep in sync with tests.yml.
-          version: "0.9.28"
+          version: '0.9.28'
 
       - name: Set up Python 3.11 (for docker tests)
         uses: ./.github/actions/retry
@@ -165,9 +160,9 @@ jobs:
           HERMES_TEST_IMAGE: ${{ env.IMAGE_NAME }}:test
           # Match the policy in tests.yml :: test job — no accidental
           # real-API calls from inside the harness.
-          OPENROUTER_API_KEY: ""
-          OPENAI_API_KEY: ""
-          NOUS_API_KEY: ""
+          OPENROUTER_API_KEY: ''
+          OPENAI_API_KEY: ''
+          NOUS_API_KEY: ''
         run: |
           scripts/run_tests.sh tests/docker/ --file-timeout 600
 

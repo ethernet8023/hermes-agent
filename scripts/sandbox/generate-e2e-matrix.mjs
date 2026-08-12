@@ -196,16 +196,10 @@ export function renderMarkdownPlan(envs, tags) {
       ) {
         return 'pre-desktop';
       }
-      return '&#x2705;';
+      return '⏳ 	';
     });
     lines.push(`| \`${env.os}: ${env.install} -> ${env.update}\` | ${cells.join(' | ')} |`);
   }
-  lines.push(
-    '',
-    '&#x2705; dispatched -- the OS run workflow decides run vs native skip',
-    '(unimplemented method pairs grey out there). `pre-desktop`: the tag',
-    "ships no desktop app, so desktop-surface legs grey out regardless.",
-    '',
   );
   return lines.join('\n');
 }

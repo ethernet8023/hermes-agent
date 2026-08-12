@@ -417,6 +417,127 @@ def _fail_and_issue(text: str, detail: str, fix: str, issues: list[str]) -> None
     issues.append(fix)
 
 
+def _check_checkout_command_installation(
+    issues: list[str], manual_issues: list[str], should_fix: bool
+) -> int:
+    """Verify the venv entry point + ``~/.local/bin/hermes`` symlink.
+
+    POSIX git-checkout installs only: this is exactly the wiring install.sh
+    performs, so the caller gates it on the tree not being sealed. Returns
+    the number of issues fixed.
+    """
+    fixed = 0
+
+    # Determine the venv entry point location
+    _venv_bin = None
+    for _venv_name in ("venv", ".venv"):
+        _candidate = PROJECT_ROOT / _venv_name / "bin" / "hermes"
+        if _candidate.exists():
+            _venv_bin = _candidate
+            break
+
+    # Determine the expected command link directory (mirrors install.sh logic)
+    _prefix = os.environ.get("PREFIX", "")
+    _is_termux_env = bool(os.environ.get("TERMUX_VERSION")) or "com.termux/files/usr" in _prefix
+    if _is_termux_env and _prefix:
+        _cmd_link_dir = Path(_prefix) / "bin"
+        _cmd_link_display = "$PREFIX/bin"
+    else:
+        _cmd_link_dir = Path.home() / ".local" / "bin"
+        _cmd_link_display = "~/.local/bin"
+    _cmd_link = _cmd_link_dir / "hermes"
+
+    if _venv_bin is None:
+        check_warn(
+            "Venv entry point not found",
+            "(hermes not in venv/bin/ or .venv/bin/ — reinstall with pip install -e '.[all]')"
+        )
+        manual_issues.append(
+            f"Reinstall entry point: cd {PROJECT_ROOT} && source venv/bin/activate && pip install -e '.[all]'"
+        )
+        return fixed
+
+    check_ok(f"Venv entry point exists ({_venv_bin.relative_to(PROJECT_ROOT)})")
+
+    # Check the symlink at the command link location
+    if _cmd_link.is_symlink():
+        _target = _cmd_link.resolve()
+        _expected = _venv_bin.resolve()
+        if _target == _expected:
+            check_ok(f"{_cmd_link_display}/hermes → correct target")
+        else:
+            check_warn(
+                f"{_cmd_link_display}/hermes points to wrong target",
+                f"(→ {_target}, expected → {_expected})"
+            )
+            if should_fix:
+                _cmd_link.unlink()
+                _cmd_link.symlink_to(_venv_bin)
+                check_ok(f"Fixed symlink: {_cmd_link_display}/hermes → {_venv_bin}")
+                fixed += 1
+            else:
+                issues.append(f"Broken symlink at {_cmd_link_display}/hermes — run 'hermes doctor --fix'")
+    elif _cmd_link.exists():
+        # It's a regular file, not a symlink — possibly a wrapper script
+        check_ok(f"{_cmd_link_display}/hermes exists (non-symlink)")
+    else:
+        check_fail(
+            f"{_cmd_link_display}/hermes not found",
+            "(hermes command may not work outside the venv)"
+        )
+        if should_fix:
+            _cmd_link_dir.mkdir(parents=True, exist_ok=True)
+            _cmd_link.symlink_to(_venv_bin)
+            check_ok(f"Created symlink: {_cmd_link_display}/hermes → {_venv_bin}")
+            fixed += 1
+
+            # Check if the link dir is on PATH
+            _path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+            if str(_cmd_link_dir) not in _path_dirs:
+                check_warn(
+                    f"{_cmd_link_display} is not on your PATH",
+                    "(add it to your shell config: export PATH=\"$HOME/.local/bin:$PATH\")"
+                )
+                manual_issues.append(f"Add {_cmd_link_display} to your PATH")
+        else:
+            issues.append(f"Missing {_cmd_link_display}/hermes symlink — run 'hermes doctor --fix'")
+
+    return fixed
+
+
+def _sealed_steward() -> str:
+    """A *known* steward for this install, or ``""``.
+
+    Doctor's remediation advice — reinstall the entry point, activate a
+    venv, run ``pip install -e``  — presupposes a writable checkout. On a
+    sealed tree that advice is not merely unhelpful, it is wrong: the code
+    lives in a read-only store or a signed app bundle, and the steward owns
+    every one of those actions. Checks that only make sense for a checkout
+    consult this first.
+
+    An unrecognized steward returns ``""`` on purpose. A missing or corrupt
+    build stamp also reads as "sealed, unknown", and silently dropping
+    checks on incomplete data hides real problems — so only a steward we can
+    name suppresses anything. Diagnostics fail open.
+    """
+    try:
+        from hermes_cli.runtime_tree import (
+            STEWARD_DESKTOP,
+            STEWARD_DOCKER,
+            STEWARD_NIX,
+            Sealed,
+            runtime_tree,
+        )
+
+        tree = runtime_tree(Path(PROJECT_ROOT))
+        if not isinstance(tree, Sealed):
+            return ""
+        known = {STEWARD_NIX, STEWARD_DOCKER, STEWARD_DESKTOP}
+        return tree.steward if tree.steward in known else ""
+    except Exception:
+        return ""
+
+
 # Deprecated / legacy config keys still read for back-compat. Doctor surfaces
 # them as non-failing warnings with the modern replacement — it does not
 # auto-migrate or delete (migrations live in config.py version steps).
@@ -1128,9 +1249,14 @@ def run_doctor(args):
         _report_database_journal_modes()
     except Exception as e:
         check_warn(f"SQLite version probe failed: {e}")
-    # Check if in virtual environment
+    # Check if in virtual environment. A sealed install is *supposed* to run
+    # outside one (the desktop bundle ships its own interpreter), and Nix
+    # ships a venv that is read-only — so neither state is a finding there.
+    _steward = _sealed_steward()
     in_venv = sys.prefix != sys.base_prefix
-    if in_venv:
+    if _steward:
+        check_ok(f"Python environment managed by {_steward}")
+    elif in_venv:
         check_ok("Virtual environment active")
     else:
         check_warn("Not in virtual environment", "(recommended)")
@@ -1920,78 +2046,18 @@ def run_doctor(args):
 
     if sys.platform != "win32":
         _section("Command Installation")
-        # Determine the venv entry point location
-        _venv_bin = None
-        for _venv_name in ("venv", ".venv"):
-            _candidate = PROJECT_ROOT / _venv_name / "bin" / "hermes"
-            if _candidate.exists():
-                _venv_bin = _candidate
-                break
-
-        # Determine the expected command link directory (mirrors install.sh logic)
-        _prefix = os.environ.get("PREFIX", "")
-        _is_termux_env = bool(os.environ.get("TERMUX_VERSION")) or "com.termux/files/usr" in _prefix
-        if _is_termux_env and _prefix:
-            _cmd_link_dir = Path(_prefix) / "bin"
-            _cmd_link_display = "$PREFIX/bin"
+        # The venv entry point + ~/.local/bin symlink are how install.sh wires
+        # up a checkout. A sealed install has no such venv and its launcher is
+        # the steward's (a Nix wrapper, the app bundle, the image's PATH), so
+        # probing for one reports a phantom problem and the old remediation
+        # told the user to pip install -e into a read-only store.
+        _steward = _sealed_steward()
+        if _steward:
+            check_ok(f"`hermes` launcher provided by {_steward}")
         else:
-            _cmd_link_dir = Path.home() / ".local" / "bin"
-            _cmd_link_display = "~/.local/bin"
-        _cmd_link = _cmd_link_dir / "hermes"
-
-        if _venv_bin is None:
-            check_warn(
-                "Venv entry point not found",
-                "(hermes not in venv/bin/ or .venv/bin/ — reinstall with pip install -e '.[all]')"
+            fixed_count += _check_checkout_command_installation(
+                issues, manual_issues, should_fix
             )
-            manual_issues.append(
-                f"Reinstall entry point: cd {PROJECT_ROOT} && source venv/bin/activate && pip install -e '.[all]'"
-            )
-        else:
-            check_ok(f"Venv entry point exists ({_venv_bin.relative_to(PROJECT_ROOT)})")
-
-            # Check the symlink at the command link location
-            if _cmd_link.is_symlink():
-                _target = _cmd_link.resolve()
-                _expected = _venv_bin.resolve()
-                if _target == _expected:
-                    check_ok(f"{_cmd_link_display}/hermes → correct target")
-                else:
-                    check_warn(
-                        f"{_cmd_link_display}/hermes points to wrong target",
-                        f"(→ {_target}, expected → {_expected})"
-                    )
-                    if should_fix:
-                        _cmd_link.unlink()
-                        _cmd_link.symlink_to(_venv_bin)
-                        check_ok(f"Fixed symlink: {_cmd_link_display}/hermes → {_venv_bin}")
-                        fixed_count += 1
-                    else:
-                        issues.append(f"Broken symlink at {_cmd_link_display}/hermes — run 'hermes doctor --fix'")
-            elif _cmd_link.exists():
-                # It's a regular file, not a symlink — possibly a wrapper script
-                check_ok(f"{_cmd_link_display}/hermes exists (non-symlink)")
-            else:
-                check_fail(
-                    f"{_cmd_link_display}/hermes not found",
-                    "(hermes command may not work outside the venv)"
-                )
-                if should_fix:
-                    _cmd_link_dir.mkdir(parents=True, exist_ok=True)
-                    _cmd_link.symlink_to(_venv_bin)
-                    check_ok(f"Created symlink: {_cmd_link_display}/hermes → {_venv_bin}")
-                    fixed_count += 1
-
-                    # Check if the link dir is on PATH
-                    _path_dirs = os.environ.get("PATH", "").split(os.pathsep)
-                    if str(_cmd_link_dir) not in _path_dirs:
-                        check_warn(
-                            f"{_cmd_link_display} is not on your PATH",
-                            "(add it to your shell config: export PATH=\"$HOME/.local/bin:$PATH\")"
-                        )
-                        manual_issues.append(f"Add {_cmd_link_display} to your PATH")
-                else:
-                    issues.append(f"Missing {_cmd_link_display}/hermes symlink — run 'hermes doctor --fix'")
 
     _section("External Tools")
     # Git

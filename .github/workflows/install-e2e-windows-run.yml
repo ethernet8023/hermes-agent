@@ -63,6 +63,10 @@ on:
         required: false
         type: boolean
         default: true
+      leg-id:
+        description: 'Artifact-safe matrix leg id (from generate-e2e-matrix.mjs legId). Names this leg''s logs + player artifacts so the report job can link a row to its zip.'
+        required: true
+        type: string
       setup-exe-url:
         description: 'Bootstrap installer to install OLD with. Default: the latest published one — what a user downloads today.'
         required: false
@@ -114,6 +118,16 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+
+      - name: Upload leg player
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: install-e2e-player-${{ inputs.leg-id }}
+          path: tests/install/e2e-assets/playback.html
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
 
       # One recording mechanism on every OS: the composite action installs
       # ffmpeg (cached - winget's download is the slow part), starts the
@@ -175,7 +189,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: install-e2e-windows-${{ inputs.install-method }}-${{ inputs.update-method }}-${{ inputs.install-ref }}-${{ github.sha }}
+          name: install-e2e-logs-${{ inputs.leg-id }}
           path: gui-e2e-proof
           retention-days: 14
           if-no-files-found: ignore

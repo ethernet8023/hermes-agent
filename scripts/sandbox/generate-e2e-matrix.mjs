@@ -26,6 +26,7 @@
  * predate the desktop app).
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -72,9 +73,23 @@ import { fileURLToPath } from 'node:url';
  *   A picked release tag plus what its own tree ships (annotated by
  *   pick-releases in install-e2e.yml).
  *
- * @typedef {{name: string, install_method: string, update_method: string,
+ * @typedef {{name: string, leg_id: string, install_method: string, update_method: string,
  *            install_ref: string, tag_has_desktop?: boolean}} MatrixEntry
  */
+
+/**
+ * Artifact-safe key for one leg: the matrix name with every character
+ * outside [A-Za-z0-9._-] collapsed to '-'. Reconstructed by the results
+ * renderer from the parsed job name (same formula, same bytes), and used
+ * by every run workflow to name its logs/player artifacts, so the report
+ * job can map a concluded leg back to its artifacts without GitHub
+ * linking jobs to artifacts.
+ * @param {string} name
+ * @returns {string}
+ */
+export function legId(name) {
+  return name.replace(/[^A-Za-z0-9._-]+/g, '-');
+}
 
 /** @type {Record<Os, OsSpec>} */
 export const SPEC = {
@@ -189,6 +204,7 @@ export function buildMatrices(envs, tags) {
       /** @type {MatrixEntry} */
       const entry = {
         name: `${env.os}: ${env.install} -> ${env.update} (${tag.ref} -> HEAD)`,
+        leg_id: legId(`${env.os}: ${env.install} -> ${env.update} (${tag.ref} -> HEAD)`),
         install_method: env.install,
         update_method: env.update,
         install_ref: tag.ref,
@@ -265,10 +281,16 @@ export function renderMarkdownPlan(envs, tags) {
  *   plan got), skipped cells carry their REASON: `pre-desktop` when a
  *   desktop-surface method meets a tag that predates apps/desktop, `TODO`
  *   when the pair is declared but no driver arm runs it yet.
+ * @param {Map<string, number>} [artifactById] Artifact name -> id for this
+ *   run (the report job's --artifacts). Legs that RAN (success or failure)
+ *   get a 📼 link: the leg's player artifact (playback.html, archive:false)
+ *   with ?zip= pointing at the leg's logs artifact. Both artifacts are
+ *   named install-e2e-{player,logs}-<leg_id>; leg_id is rebuilt from the
+ *   parsed job name with the same formula the generator mints (legId).
  * @returns {string}
  */
-export function renderMarkdownResults(jobs, tagAnnotations = []) {
-  const LEG = /^(linux|windows|macos): (\S+) -> (\S+) \((\S+) -> HEAD\) \//;
+export function renderMarkdownResults(jobs, tagAnnotations = [], artifactById = new Map()) {
+  const LEG = /^(linux|windows|macos): (\S+) -> (\S+) \(([^)]+) -> HEAD\) \//;
   /** @type {Map<string, boolean>} */
   const desktopByTag = new Map(tagAnnotations.map((t) => [t.ref, t.desktop]));
   /**
@@ -303,14 +325,20 @@ export function renderMarkdownResults(jobs, tagAnnotations = []) {
     if (!tags.includes(tag)) tags.push(tag);
     if (!rows.has(combo)) rows.set(combo, new Map());
     const cell = (() => {
-      switch (job.conclusion) {
-        case 'success': return '&#x2705;';
-        case 'failure': return '&#x274C;';
-        case 'skipped': return skipLabel(m[2], m[3], tag);
-        case 'cancelled': return 'cancelled';
-        default: return 'running';
-      }
-    })();
+    const legId2 = legId(`${m[1]}: ${m[2]} -> ${m[3]} (${m[4]} -> HEAD)`);
+    const playerId = artifactById.get(`install-e2e-player-${legId2}`);
+    const logsId = artifactById.get(`install-e2e-logs-${legId2}`);
+    const reel = (playerId !== undefined && logsId !== undefined)
+      ? ` [📼](https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${playerId}?zip=${encodeURIComponent(`https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${logsId}`)})`
+      : '';
+    switch (job.conclusion) {
+      case 'success': return `&#x2705;${reel}`;
+      case 'failure': return `&#x274C;${reel}`;
+      case 'skipped': return skipLabel(m[2], m[3], tag);
+      case 'cancelled': return 'cancelled';
+      default: return 'running';
+    }
+  })();
     const byTag = /** @type {Map<string, string>} */ (rows.get(combo));
     const prev = byTag.get(tag);
     if (prev === undefined || RANK.indexOf(cell) > RANK.indexOf(prev)) {
@@ -351,12 +379,22 @@ async function main() {
     options: {
       tags: { type: 'string', default: '[]' },
       format: { type: 'string', default: 'json' },
+      artifacts: { type: 'string' },
     },
   });
   if (values.format === 'results') {
     const jobs = (await readStdin()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
     const annotations = /** @type {TagAnnotation[]} */ (JSON.parse(values.tags));
-    process.stdout.write(renderMarkdownResults(jobs, annotations));
+    /** @type {Map<string, number>} */
+    const artifactById = new Map();
+    if (values.artifacts) {
+      for (const line of (await fs.promises.readFile(values.artifacts, 'utf8')).split('\n')) {
+        if (!line.trim()) continue;
+        const a = JSON.parse(line);
+        if (typeof a.name === 'string' && typeof a.id === 'number') artifactById.set(a.name, a.id);
+      }
+    }
+    process.stdout.write(renderMarkdownResults(jobs, annotations, artifactById));
     return;
   }
   const tags = /** @type {TagAnnotation[]} */ (JSON.parse(values.tags));

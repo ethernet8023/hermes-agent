@@ -227,11 +227,8 @@ function syncPane() {
 }
 
 /* ── zip loading ───────────────────────────────────────────────────────── */
-async function loadZip(url) {
-  statusEl.textContent = `fetching ${url} …`;
-  const resp = await fetch(url, { credentials: 'same-origin' });
-  if (!resp.ok) throw new Error(`zip fetch failed: ${resp.status} ${resp.statusText}`);
-  const zip = await JSZip.loadAsync(await resp.arrayBuffer());
+async function loadZipFromBlob(blob, label) {
+  const zip = await JSZip.loadAsync(await blob.arrayBuffer());
   const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
 
   const videoName = names.find((n) => n === 'recording.mp4') ||
@@ -245,26 +242,64 @@ async function loadZip(url) {
     state.logs.set(n, { lines, hasTs: lines.some((l) => l.ts !== null) });
   }
   if (state.logs.size === 0) throw new Error('no *.log files in the zip');
-  state.zipName = url.split('/').pop() || url;
+  state.zipName = label || 'leg artifact';
   state.activeTab = [...state.logs.keys()][0];
 }
 
-/* ── boot ──────────────────────────────────────────────────────────────── */
-async function main() {
-  const params = new URLSearchParams(location.search);
-  const zipUrl = params.get('zip');
-  if (!zipUrl) {
-    fail('no ?zip= param — pass the artifact zip URL, e.g.\n' +
-        'playback.html?zip=https://github.com/<repo>/actions/runs/<id>/artifacts/<id>');
-    return;
-  }
+async function loadZip(url) {
+  statusEl.textContent = `fetching ${url} …`;
   try {
-    await loadZip(zipUrl);
+    const resp = await fetch(url, { credentials: 'same-origin' });
+    if (!resp.ok) throw new Error(`zip fetch failed: ${resp.status} ${resp.statusText}`);
+    await loadZipFromBlob(await resp.blob(), url.split('/').pop());
+  } catch (e) {
+    // GitHub artifact downloads are auth-gated: a cross-origin page (this
+    // file opened locally) cannot fetch them. The page then becomes the
+    // download-and-drop path — a normal link click DOES carry the user's
+    // GitHub session.
+    statusEl.className = 'error';
+    statusEl.innerHTML =
+      `Could not fetch the zip directly (GitHub artifact downloads need your session — ` +
+      `a locally-opened page cannot send it). ` +
+      `Download the leg zip: <a href="${url}" style="color:#58a6ff">${url.split('/').pop()}</a> ` +
+      `— then drop it anywhere on this page (or click here to pick the file).`;
+    statusEl.onclick = () => fileInput.click();
+    return false;
+  }
+  return true;
+}
+
+/* drag-drop + file picker: the universal transport for auth-gated zips */
+const fileInput = document.createElement('input');
+fileInput.type = 'file';
+fileInput.accept = '.zip,application/zip';
+fileInput.style.display = 'none';
+fileInput.addEventListener('change', async () => {
+  const f = fileInput.files && fileInput.files[0];
+  if (!f) return;
+  try {
+    await loadZipFromBlob(f, f.name);
+    boot();
   } catch (e) {
     fail(`could not load zip: ${e.message}`);
-    return;
   }
+});
+document.body.appendChild(fileInput);
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const f = [...(e.dataTransfer?.files ?? [])][0];
+  if (!f || !/\.zip$/i.test(f.name)) { fail('drop a .zip artifact file'); return; }
+  try {
+    await loadZipFromBlob(f, f.name);
+    boot();
+  } catch (err) {
+    fail(`could not load zip: ${err.message}`);
+  }
+});
 
+/* ── boot ──────────────────────────────────────────────────────────────── */
+function boot() {
   statusEl.style.display = 'none';
   $('app').style.display = 'flex';
   $('zipName').textContent = state.zipName;
@@ -301,6 +336,21 @@ async function main() {
 
   renderTabs();
   renderPane(true);
+}
+
+async function main() {
+  const params = new URLSearchParams(location.search);
+  const zipUrl = params.get('zip');
+  if (zipUrl) {
+    if (await loadZip(zipUrl)) boot();
+  } else {
+    // No ?zip=: this is the manual path — the leg player artifact page or
+    // a local copy. Drop or pick a leg zip.
+    statusEl.className = 'error';
+    statusEl.innerHTML =
+      'Drop a leg artifact zip anywhere on this page (or click here to pick the file).';
+    statusEl.onclick = () => fileInput.click();
+  }
 }
 main();
 </script>

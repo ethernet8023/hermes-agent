@@ -50,6 +50,10 @@ on:
         required: false
         type: string
         default: refs/heads/main
+      leg-id:
+        description: 'Artifact-safe matrix leg id (from generate-e2e-matrix.mjs legId). Names this leg''s logs + player artifacts so the report job can link a row to its zip.'
+        required: true
+        type: string
       tag-has-desktop:
         description: "Whether install-ref ships the desktop app (apps/desktop). The caller annotates this from the tag's own tree; desktop-method legs from pre-desktop releases natively skip."
         required: false
@@ -130,6 +134,19 @@ jobs:
               -c copy "${{ runner.temp }}/e2e-logs/recording.mp4"
           fi
 
+      # The leg player: one static HTML, uploaded BEFORE the driver runs
+      # (if: always() covers failures too). Single file, no zip, so the
+      # artifacts URL serves playback.html directly.
+      - name: Upload leg player
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: install-e2e-player-${{ inputs.leg-id }}
+          path: tests/install/e2e-assets/playback.html
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
+
       # Artifact names cannot contain '/', and install-ref may be a full ref
       # like refs/heads/main. GitHub Actions expressions have no string-replace
       # function, so build the safe name here. Runs even on failure -- that is
@@ -139,9 +156,7 @@ jobs:
         id: artifact
         run: |
           set -euo pipefail
-          safe_ref='${{ inputs.install-ref }}'
-          safe_ref="${safe_ref//\//-}"
-          echo "name=install-e2e-${{ runner.os }}-${{ inputs.update-method }}-${safe_ref}" >> "$GITHUB_OUTPUT"
+          echo "name=install-e2e-logs-${{ inputs.leg-id }}" >> "$GITHUB_OUTPUT"
 
       # The installer's own transcripts say far more than the assertion that
       # tripped when a real install breaks.

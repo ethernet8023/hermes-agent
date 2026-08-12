@@ -155,8 +155,15 @@ INSTALL_DIR="$HERMES_HOME/hermes-agent"
 # install.sh rather than assuming this checkout's flag set: the point of the
 # matrix is to install releases from months back, whose installers predate
 # options we take for granted.
+#
+# Buffered through a variable, NOT `git show | grep -q`: under pipefail,
+# grep -q exits at the first match (install.sh is ~140KB, the flags appear
+# in the first few KB), git show takes SIGPIPE on its next write, and the
+# pipeline reports 141 -- the probe answers NO for a flag the ref HAS.
 installer_supports() {
-  git -C "$REPO_ROOT" show "$1:scripts/install.sh" | grep -qF -- "$2"
+  local text
+  text="$(git -C "$REPO_ROOT" show "$1:scripts/install.sh")"
+  grep -qF -- "$2" <<< "$text"
 }
 
 run_installer() {

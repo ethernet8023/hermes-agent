@@ -149,10 +149,14 @@ function Invoke-Git([string[]]$GitArgs) {
     # NativeCommandError even when it exits 0 (git loves stderr for
     # progress/notices). Relax EAP around the native call only; exit-code
     # checking below is the real error gate.
+    #
+    # ALWAYS the real git.exe, never the shim we ship.
+    # annoying bug where .bat files eat ^ args.
+    # if hermes ever adds a git command that calls something with ^ this will break, lol.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $output = & git @GitArgs 2>&1
+        $output = & $script:RealGitExe @GitArgs 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "git $($GitArgs -join ' ') failed (exit $LASTEXITCODE): $output"
         }
@@ -164,7 +168,6 @@ function Invoke-Git([string[]]$GitArgs) {
 
 function Set-GitRedirect {
     # we redirect to our own repo so we can play around with what commit hermes thinks we're on.
-    #
     # MECHANISM: a driver-owned global gitconfig selected via
     # GIT_CONFIG_GLOBAL. Do NOT use GIT_CONFIG_COUNT/KEY_n/VALUE_n env
     # config here -- install.ps1 SETS those itself (GIT_CONFIG_COUNT=1,
@@ -191,7 +194,6 @@ function Set-GitRedirect {
     Assert-True ($actualGitUrl -eq $fileUrl) "git URL redirect: origin resolves to '$actualGitUrl', expected '$fileUrl'."
     Write-Host "  git URL redirect via GIT_CONFIG_GLOBAL=$gitCfg"
     Write-Host "    $RepoUrlHttps -> $fileUrl"
-
 
     # shim git and make 'git remote get-url origin' report the actual HA upstream
 
@@ -228,9 +230,28 @@ exit /b %ERRORLEVEL%
 
     $env:PATH = "$shimDir;$env:PATH"
 
-    # check it worked
-    $observedGitUrl = Invoke-Git @("-C", $RepoRoot, "remote", "get-url", "origin")
+    # Check it worked THROUGH the shim - deliberately not Invoke-Git, which
+    # pins the real git.exe. `git` via PATH here is exactly how the
+    # product's callers resolve it. Probe the intercepted verb AND plain
+    # passthrough.
+    #
+    # KNOWN HOLE, accepted: cmd parses the command line before the bat sees
+    # %*, and callers only quote args containing whitespace (PowerShell
+    # native binding and python's list2cmdline alike) - so a caret arg like
+    # rev-parse HEAD^{commit} loses its caret THROUGH ANY .bat, unfixably.
+    # A .ps1 shim would dodge cmd but PATHEXT-resolving callers (python -
+    # the shim's entire audience) never see .ps1 files, so .bat it stays.
+    # The driver's own git plumbing therefore pins git.exe (Invoke-Git),
+    # and the product's shimmed flows (fork detection: remote get-url) use
+    # no caret revs. If a product path ever sends carets through the shim,
+    # the leg fails loudly on a bad-revision error naming the mangled arg.
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    $observedGitUrl = (& git -C $RepoRoot remote get-url origin 2>&1 | Out-String).Trim()
+    $passthroughProbe = (& git -C $RepoRoot rev-parse HEAD 2>&1 | Out-String).Trim()
+    $passthroughExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
     Assert-True ($observedGitUrl -eq $RepoUrlHttps) "git remote get-url shim: origin resolves to '$observedGitUrl', expected '$RepoUrlHttps'"
+    Assert-True ($passthroughExit -eq 0 -and $passthroughProbe -match '^[0-9a-f]{40}$') "shim passthrough works: rev-parse HEAD -> '$passthroughProbe'"
     Write-Host "  git remote get-url shim: $shimPath -> $realGit"
     Write-Host "    'remote get-url origin' now reports $RepoUrlHttps"
 }
@@ -883,6 +904,8 @@ Write-Host "  install:  $InstallMethod"
 Write-Host "  route:    $Route"
 Write-Host "  repo:     $RepoRoot"
 Write-Host "  workroot: $WorkRoot"
+
+$script:RealGitExe = (Get-Command git.exe -ErrorAction Stop).Source
 
 Set-GitRedirect
 

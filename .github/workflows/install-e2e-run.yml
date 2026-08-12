@@ -38,11 +38,11 @@ on:
   workflow_call:
     inputs:
       install-method:
-        description: 'How the starting version gets installed. Supported: installer-script (the real curl | install.sh one-liner).'
+        description: 'How the starting version gets installed. Supported: installer-script (the real curl | install.sh one-liner) and installer-script+desktop (the same one-liner with --include-desktop).'
         required: true
         type: string
       update-method:
-        description: 'How the install updates to HEAD. Supported: hermes-update (the updater) or installer-script (re-run the one-liner). Declared-but-TODO methods (open-app-update, hermes-desktop-app-update) skip.'
+        description: 'How the install updates to HEAD. Supported: hermes-update (the updater), installer-script (re-run the one-liner), installer-script+desktop (re-run with --include-desktop). Declared-but-TODO methods (open-app-update, hermes-desktop-app-update) skip.'
         required: true
         type: string
       install-ref:
@@ -73,8 +73,13 @@ jobs:
   e2e:
     name: install & update
     # The pairs the driver can run today; anything else is a declared TODO
-    # and natively skips.
-    if: inputs.install-method == 'installer-script' && contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
+    # and natively skips. The +desktop variants also need the starting tag
+    # to ship apps/desktop (the --include-desktop flag shipped with it).
+    if: >-
+      (inputs.install-method == 'installer-script'
+        || (inputs.install-method == 'installer-script+desktop' && inputs.tag-has-desktop))
+      && (contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
+        || (inputs.update-method == 'installer-script+desktop' && inputs.tag-has-desktop))
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -90,6 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           tests/install/installer-script-e2e.sh \
+            --install-method '${{ inputs.install-method }}' \
             --update-method '${{ inputs.update-method }}' \
             --install-ref '${{ inputs.install-ref }}'
         env:

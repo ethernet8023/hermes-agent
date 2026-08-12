@@ -43,6 +43,12 @@ A leg can install a release from months back. The driver must not assume that th
 - For the installed CLI, ask the binary with `--help`.
 - If a flag is not found, omit the flag. This is not an error.
 
+## The install methods
+
+- `installer-script`: the platform's one-liner (`curl | bash` on linux and macos, `irm | iex` on windows).
+- `installer-script+desktop`: the same one-liner with its desktop stage opted in (`--include-desktop` / `-IncludeDesktop`). The stage builds the desktop app during the install. On windows it also registers Start Menu and Desktop shortcuts. On linux and macos it builds the app inside the checkout and registers no OS entry point.
+- `desktop-installer@latest`: the published GUI installer (`Hermes-Setup.exe` on windows), clicked through the real window.
+
 ## The two app-update variants
 
 The desktop app has two launch paths, so the matrix has two app-update methods. Both click "Update now" in the running app. They differ in how the app starts:

@@ -31,7 +31,9 @@
 #Requires -Version 5.1
 
 param(
-    [ValidateSet("hermes-update", "installer-script")]
+    [ValidateSet("installer-script", "installer-script+desktop")]
+    [string]$InstallMethod = "installer-script",
+    [ValidateSet("hermes-update", "installer-script", "installer-script+desktop")]
     [string]$UpdateMethod = "hermes-update",
     [string]$InstallRef = "auto"
 )
@@ -123,7 +125,7 @@ $env:HERMES_HOME = $HermesHome
 Set-Content -LiteralPath (Join-Path $HermesHome ".skip_upstream_prompt") -Value "" -Encoding Ascii
 
 function Invoke-Installer {
-    param([string]$Ref, [string]$Label)
+    param([string]$Ref, [string]$Label, [switch]$IncludeDesktop)
     $script = Join-Path $WorkRoot "install-$Label.ps1"
     (Invoke-Git @("-C", $RepoRoot, "show", "$Ref`:scripts/install.ps1")) -join "`n" |
         Set-Content -LiteralPath $script -Encoding UTF8
@@ -134,6 +136,16 @@ function Invoke-Installer {
     $flags = @("-SkipSetup", "-HermesHome", $HermesHome, "-InstallDir", $InstallDir)
     $text = Get-Content -LiteralPath $script -Raw
     if ($text -match '\$NonInteractive') { $flags += "-NonInteractive" }
+    if ($IncludeDesktop) {
+        # The desktop stage is the point of this leg, so a ref without the
+        # parameter is a hard failure, not a silent downgrade to a plain
+        # install. (Pre-desktop releases are already skipped upstream by
+        # the tag-has-desktop gate; the parameter shipped with the app.)
+        if ($text -notmatch '\$IncludeDesktop') {
+            Fail "ref $Ref does not support -IncludeDesktop; this leg cannot mean what it claims"
+        }
+        $flags += "-IncludeDesktop"
+    }
     $log = Join-Path $LogDir "install-$Label.log"
     # Native stderr (git clone progress, pip notices) must not become
     # terminating NativeCommandErrors under EAP=Stop; the exit code is the
@@ -165,6 +177,18 @@ function Assert-Checkout {
         Fail "hermes --version failed after $Label; log in $verLog"
     }
     Ok "hermes --version works: $((Get-Content -LiteralPath $verLog -First 1))"
+}
+
+function Assert-DesktopArtifact {
+    param([string]$Label)
+    # After a +desktop install the built app must exist under the checkout;
+    # the installer also registers Start Menu / Desktop shortcuts, but the
+    # artifact is the ground truth a headless job can check.
+    $exe = Join-Path $InstallDir "apps\desktop\release\win-unpacked\Hermes.exe"
+    if (-not (Test-Path -LiteralPath $exe)) {
+        Fail "no desktop app at $exe after $Label (+desktop install)"
+    }
+    Ok "desktop app built by installer at ${Label}: $exe"
 }
 
 function Test-DesktopSmoke {
@@ -209,9 +233,15 @@ function Test-DesktopSmoke {
 
 # --- install OLD ------------------------------------------------------------------
 
-Step "installing OLD ($InstallRef) via its own scripts/install.ps1"
-Invoke-Installer $OldSha "old"
-Assert-Checkout $OldSha "OLD"
+Step "installing OLD ($InstallRef) via its own scripts/install.ps1 ($InstallMethod)"
+if ($InstallMethod -eq "installer-script+desktop") {
+    Invoke-Installer $OldSha "old" -IncludeDesktop
+    Assert-Checkout $OldSha "OLD"
+    Assert-DesktopArtifact "OLD"
+} else {
+    Invoke-Installer $OldSha "old"
+    Assert-Checkout $OldSha "OLD"
+}
 Test-DesktopSmoke "old"
 
 # --- update OLD -> HEAD --------------------------------------------------------------
@@ -247,6 +277,10 @@ switch ($UpdateMethod) {
     "installer-script" {
         # A user re-running the one-liner today gets the CURRENT script.
         Invoke-Installer $HeadSha "head"
+    }
+    "installer-script+desktop" {
+        Invoke-Installer $HeadSha "head" -IncludeDesktop
+        Assert-DesktopArtifact "HEAD"
     }
 }
 Assert-Checkout $HeadSha "HEAD"

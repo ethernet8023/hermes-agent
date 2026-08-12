@@ -37,10 +37,14 @@ import { fileURLToPath } from 'node:url';
  * @typedef {'latest'} InstallerVersion
  *   The artifact published on the website right now -- Hermes-Setup.exe has
  *   no versioned archive yet. Widen this union when one exists.
- * @typedef {'installer-script' | 'desktop-installer' | 'packaged-app'} InstallMethod
+ * @typedef {'installer-script' | 'installer-script+desktop' | 'desktop-installer' | 'packaged-app'} InstallMethod
  *   installer-script is the platform's one-liner (curl | bash on
- *   linux/macos, irm | iex on windows); packaged-app is declared but not
- *   used by any OS spec yet.
+ *   linux/macos, irm | iex on windows); installer-script+desktop is the
+ *   same one-liner with its desktop stage opted in (--include-desktop /
+ *   -IncludeDesktop), which also builds the desktop app -- on windows it
+ *   registers Start Menu / Desktop shortcuts too, on linux/macos it
+ *   builds into the checkout without registering an OS entry point;
+ *   packaged-app is declared but not used by any OS spec yet.
  * @typedef {InstallMethod | 'hermes-update' | 'open-app-update' | 'hermes-desktop-app-update'} UpdateMethod
  *   Every install method doubles as an update method (re-run it over the
  *   existing install), plus the updater CLI and the two app-update
@@ -78,11 +82,16 @@ export const SPEC = {
     install: [
       // irm https://hermes.nousresearch.com/install.ps1 | iex
       { method: 'installer-script' },
+      // The same one-liner with -IncludeDesktop: builds Hermes.exe AND
+      // registers Start Menu / Desktop shortcuts, so it is a second real
+      // path to a hand-launchable app.
+      { method: 'installer-script+desktop' },
       // Website Hermes-Setup.exe, clicked through the GUI.
       { method: 'desktop-installer', versions: ['latest'] },
     ],
     update: [
       { method: 'installer-script' },
+      { method: 'installer-script+desktop' },
       // Run the bootstrap exe again over an existing install (--update flow).
       { method: 'desktop-installer', versions: ['latest'] },
       { method: 'hermes-update' },
@@ -96,9 +105,11 @@ export const SPEC = {
   macos: {
     install: [
       { method: 'installer-script' },
+      { method: 'installer-script+desktop' },
     ],
     update: [
       { method: 'installer-script' },
+      { method: 'installer-script+desktop' },
       { method: 'hermes-update' },
       // install.sh --include-desktop builds the .app inside the checkout
       // but registers no OS entry point, so open-app-update legs pair
@@ -110,9 +121,11 @@ export const SPEC = {
   linux: {
     install: [
       { method: 'installer-script' },
+      { method: 'installer-script+desktop' },
     ],
     update: [
       { method: 'installer-script' },
+      { method: 'installer-script+desktop' },
       { method: 'hermes-update' },
       // No desktop installer and no packaged desktop artifact exist for
       // linux, so there is no open-app-update; `hermes desktop` is always
@@ -202,7 +215,8 @@ export function buildMatrices(envs, tags) {
  */
 export function renderMarkdownPlan(envs, tags) {
   const needsDesktop = (/** @type {string} */ m) =>
-    m.startsWith('desktop-installer') || m === 'open-app-update' || m === 'hermes-desktop-app-update';
+    m.startsWith('desktop-installer') || m === 'installer-script+desktop' ||
+    m === 'open-app-update' || m === 'hermes-desktop-app-update';
   const lines = [
     '### Install & Update E2E plan',
     '',

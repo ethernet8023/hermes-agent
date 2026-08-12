@@ -58,7 +58,7 @@ on:
   workflow_call:
     inputs:
       install-method:
-        description: 'How OLD gets installed. Supported: desktop-installer@latest (website exe, AHK-clicked) and installer-script (irm | iex install.ps1). Declared-but-TODO methods skip.'
+        description: 'How OLD gets installed. Supported: desktop-installer@latest (website exe, AHK-clicked), installer-script (irm | iex install.ps1) and installer-script+desktop (the same with -IncludeDesktop). Declared-but-TODO methods skip.'
         required: true
         type: string
       update-method:
@@ -190,8 +190,13 @@ jobs:
     # The pairs the script driver can run today. open-app-update and
     # hermes-desktop-app-update from a script install are declared TODOs
     # (the desktop app also has to be BUILT by
-    # that path first).
-    if: inputs.install-method == 'installer-script' && contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
+    # that path first). The +desktop variants also need the starting tag
+    # to ship apps/desktop (the -IncludeDesktop parameter shipped with it).
+    if: >-
+      (inputs.install-method == 'installer-script'
+        || (inputs.install-method == 'installer-script+desktop' && inputs.tag-has-desktop))
+      && (contains(fromJSON('["hermes-update", "installer-script"]'), inputs.update-method)
+        || (inputs.update-method == 'installer-script+desktop' && inputs.tag-has-desktop))
     runs-on: windows-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
@@ -205,7 +210,7 @@ jobs:
 
       - name: Run install + update E2E
         shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-installer-script-e2e.ps1 -UpdateMethod "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\install\windows-installer-script-e2e.ps1 -InstallMethod "${{ inputs.install-method }}" -UpdateMethod "${{ inputs.update-method }}" -InstallRef "${{ inputs.install-ref }}"
         env:
           HERMES_E2E_LOG_DIR: ${{ runner.temp }}\e2e-logs
 

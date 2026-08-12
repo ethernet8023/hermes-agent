@@ -25,11 +25,16 @@
 #              the checkout landed on HEAD with a working `hermes`
 #
 # Usage:
-#   tests/install/installer-script-e2e.sh --update-method hermes-update|installer-script
+#   tests/install/installer-script-e2e.sh --update-method hermes-update|installer-script|installer-script+desktop
+#                                         [--install-method installer-script|installer-script+desktop]
 #                                         [--install-ref REF]
 #
+#   --install-method installer-script          the plain one-liner (default)
+#                    installer-script+desktop  the one-liner with its desktop
+#                                              stage opted in (--include-desktop)
 #   --update-method  hermes-update      `hermes update`
 #                    installer-script   re-run install.sh (HEAD's copy)
+#                    installer-script+desktop  re-run with --include-desktop
 #   --install-ref    what to install first; anything git resolves. Default:
 #                    the newest release tag in the checkout.
 #
@@ -37,23 +42,31 @@
 
 set -euo pipefail
 
+INSTALL_METHOD="installer-script"
 UPDATE_METHOD=""
 INSTALL_REF=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --install-method)
+      [ "$#" -ge 2 ] || { echo 'error: --install-method needs a value' >&2; exit 1; }
+      INSTALL_METHOD="$2"; shift 2 ;;
     --update-method)
       [ "$#" -ge 2 ] || { echo 'error: --update-method needs a value' >&2; exit 1; }
       UPDATE_METHOD="$2"; shift 2 ;;
     --install-ref)
       [ "$#" -ge 2 ] || { echo 'error: --install-ref needs a value' >&2; exit 1; }
       INSTALL_REF="$2"; shift 2 ;;
-    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+case "$INSTALL_METHOD" in
+  installer-script|installer-script+desktop) ;;
+  *) echo "error: --install-method must be installer-script or installer-script+desktop, got '$INSTALL_METHOD'" >&2; exit 1 ;;
+esac
 case "$UPDATE_METHOD" in
-  hermes-update|installer-script) ;;
-  *) echo "error: --update-method must be hermes-update or installer-script, got '$UPDATE_METHOD'" >&2; exit 1 ;;
+  hermes-update|installer-script|installer-script+desktop) ;;
+  *) echo "error: --update-method must be hermes-update, installer-script or installer-script+desktop, got '$UPDATE_METHOD'" >&2; exit 1 ;;
 esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -144,7 +157,8 @@ installer_supports() {
 }
 
 run_installer() {
-  # $1: ref whose scripts/install.sh to run; $2: log name
+  # $1: ref whose scripts/install.sh to run; $2: log name; $3: "desktop" to
+  # opt the desktop stage in (--include-desktop)
   local script="$WORK_ROOT/install-$2.sh"
   git -C "$REPO_ROOT" show "$1:scripts/install.sh" > "$script"
   chmod +x "$script"
@@ -155,12 +169,41 @@ run_installer() {
   if installer_supports "$1" "--skip-browser"; then
     flags+=(--skip-browser)
   fi
+  if [ "${3:-}" = "desktop" ]; then
+    # The desktop stage is the point of this leg, so a ref without the
+    # flag is a hard failure, not a silent downgrade to a plain install.
+    # (Releases that predate apps/desktop are already skipped upstream by
+    # the tag-has-desktop gate; the flag shipped with the app.)
+    installer_supports "$1" "--include-desktop" \
+      || fail "ref $1 does not support --include-desktop; this leg cannot mean what it claims"
+    flags+=(--include-desktop)
+  fi
   # </dev/null: the script reads prompts from stdin when a tty is absent;
   # EOF makes every remaining prompt take its default.
   local rc=0
   bash "$script" "${flags[@]}" < /dev/null > "$LOG_DIR/install-$2.log" 2>&1 || rc=$?
   log_group "install.sh ($2) transcript" "$LOG_DIR/install-$2.log"
   [ "$rc" -eq 0 ] || fail "install.sh ($2) exited $rc; transcript above, log at $LOG_DIR/install-$2.log"
+}
+
+assert_desktop_artifact() {
+  # $1: label. After a +desktop install the built app must exist under the
+  # checkout -- install.sh builds it there and registers no OS entry point.
+  local release_dir="$INSTALL_DIR/apps/desktop/release"
+  local found=""
+  local cand
+  for cand in \
+    "$release_dir/linux-unpacked/Hermes" \
+    "$release_dir/linux-unpacked/hermes" \
+    "$release_dir/mac-arm64/Hermes.app" \
+    "$release_dir/mac/Hermes.app"; do
+    if [ -x "$cand" ] || [ -d "$cand" ]; then
+      found="$cand"
+      break
+    fi
+  done
+  [ -n "$found" ] || fail "no desktop app under $release_dir after $1 (+desktop install)"
+  ok "desktop app built by installer at $1: $found"
 }
 
 assert_checkout() {
@@ -205,9 +248,15 @@ smoke_desktop() {
 
 # --- install OLD ---------------------------------------------------------------
 
-step "installing OLD ($INSTALL_REF) via its own scripts/install.sh"
-run_installer "$OLD_SHA" old
-assert_checkout "$OLD_SHA" OLD
+step "installing OLD ($INSTALL_REF) via its own scripts/install.sh ($INSTALL_METHOD)"
+if [ "$INSTALL_METHOD" = "installer-script+desktop" ]; then
+  run_installer "$OLD_SHA" old desktop
+  assert_checkout "$OLD_SHA" OLD
+  assert_desktop_artifact OLD
+else
+  run_installer "$OLD_SHA" old
+  assert_checkout "$OLD_SHA" OLD
+fi
 smoke_desktop old
 
 # --- update OLD -> HEAD ----------------------------------------------------------
@@ -236,6 +285,10 @@ case "$UPDATE_METHOD" in
   installer-script)
     # A user re-running the one-liner today gets the CURRENT script.
     run_installer "$HEAD_SHA" head
+    ;;
+  installer-script+desktop)
+    run_installer "$HEAD_SHA" head desktop
+    assert_desktop_artifact HEAD
     ;;
 esac
 assert_checkout "$HEAD_SHA" HEAD

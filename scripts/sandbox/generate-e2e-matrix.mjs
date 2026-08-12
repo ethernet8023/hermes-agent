@@ -8,8 +8,8 @@
  * about which combinations CI can drive. Every combination is dispatched to
  * its OS's run workflow, and THAT workflow natively skips the method pairs
  * its driver cannot run yet -- capability knowledge lives next to each
- * driver (install-e2e-run.yml, install-e2e-windows-run.yml,
- * install-e2e-macos-run.yml). Correctness here is enforced by the type
+ * driver (install-e2e-run.yml for linux AND macos,
+ * install-e2e-windows-run.yml). Correctness here is enforced by the type
  * unions below (checked via `tsc --checkJs`), not by runtime validation --
  * anything the types can't catch is self-evident on the next CI run.
  *

@@ -283,10 +283,14 @@ export function renderMarkdownPlan(envs, tags) {
  *   when the pair is declared but no driver arm runs it yet.
  * @param {Map<string, number>} [artifactById] Artifact name -> id for this
  *   run (the report job's --artifacts). Legs that RAN (success or failure)
- *   get a 📼 link: the leg's player artifact (playback.html, archive:false)
- *   with ?zip= pointing at the leg's logs artifact. Both artifacts are
- *   named install-e2e-{player,logs}-<leg_id>; leg_id is rebuilt from the
- *   parsed job name with the same formula the generator mints (legId).
+ *   get a 📼 link: the leg's player artifact (playback.html, archive:false
+ *   — GitHub names those after the FILE, so they all collide on
+ *   `playback.html` and any one of them works, they are the same blob)
+ *   with ?zip= pointing at the leg's logs artifact. Logs artifacts are
+ *   `install-e2e-logs-<leg_id>` (windows) or `install-e2e-logs-<leg_id>-<sha>`
+ *   (posix arms append the sha at upload) — matched by prefix. leg_id is
+ *   rebuilt from the parsed job name with the same formula the generator
+ *   mints (legId).
  * @returns {string}
  */
 export function renderMarkdownResults(jobs, tagAnnotations = [], artifactById = new Map()) {
@@ -326,8 +330,16 @@ export function renderMarkdownResults(jobs, tagAnnotations = [], artifactById = 
     if (!rows.has(combo)) rows.set(combo, new Map());
     const cell = (() => {
     const legId2 = legId(`${m[1]}: ${m[2]} -> ${m[3]} (${m[4]} -> HEAD)`);
-    const playerId = artifactById.get(`install-e2e-player-${legId2}`);
-    const logsId = artifactById.get(`install-e2e-logs-${legId2}`);
+    // Logs artifacts: `install-e2e-logs-<leg_id>` (windows) or with a
+    // trailing `-<sha>` (posix arms append it at upload). Match by prefix.
+    const logsName = [...artifactById.keys()].find((n) => n.startsWith(`install-e2e-logs-${legId2}`));
+    // Player artifacts: upload-artifact `archive: false` names the
+    // artifact after the FILE (playback.html), ignoring `name:` — so
+    // every leg's player artifact is called `playback.html`, and they
+    // are all the same blob. Any one of them works.
+    const playerName = [...artifactById.keys()].find((n) => n === 'playback.html');
+    const playerId = playerName !== undefined ? artifactById.get(playerName) : undefined;
+    const logsId = logsName !== undefined ? artifactById.get(logsName) : undefined;
     const reel = (playerId !== undefined && logsId !== undefined)
       ? ` [📼](https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${playerId}?zip=${encodeURIComponent(`https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${logsId}`)})`
       : '';
@@ -347,8 +359,8 @@ export function renderMarkdownResults(jobs, tagAnnotations = [], artifactById = 
   }
   if (rows.size === 0) return '### Install & Update E2E results\n\n(no legs found in this run)\n';
   const cells = [...rows.values()].flatMap((r) => [...r.values()]);
-  const passed = cells.filter((c) => c === '&#x2705;').length;
-  const failed = cells.filter((c) => c === '&#x274C;').length;
+  const passed = cells.filter((c) => c.startsWith('&#x2705;')).length;
+  const failed = cells.filter((c) => c.startsWith('&#x274C;')).length;
   const skipped = cells.filter((c) => SKIPS.includes(c)).length;
   const lines = [
     '### Install & Update E2E results',

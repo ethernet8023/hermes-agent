@@ -912,11 +912,49 @@ def _commit_staged_replacements(staged) -> None:
                 pass
 
 
+def _print_posix_stale_process_notice() -> None:
+    """After a POSIX update: name the processes still running old code.
+
+    Windows refuses up front (the venv-holder guard), because mutating
+    mapped files there breaks the processes. POSIX inode semantics make
+    the same situation SAFE — an updated file replaces the directory
+    entry while the old process keeps its mapped inode — so a refusal
+    would be theater. But safe is not invisible: those processes keep
+    old behavior until restarted, and a user who just watched an update
+    succeed reasonably assumes everything runs the new code. One line
+    closes that gap; report-only, never a gate (doc 3 §D item 1).
+    """
+    if os.name != "posix":
+        return
+    try:
+        holders = _m()._detect_venv_python_processes(include_posix=True)
+    except Exception:  # noqa: BLE001 — a notice must never break completion
+        return
+    if not holders:
+        return
+    print(
+        f"  {len(holders)} running Hermes process(es) still use pre-update "
+        f"code; restart them when convenient:"
+    )
+    for pid, name, cmdline in holders[:4]:
+        low = cmdline.lower()
+        if "gateway" in low:
+            hint = "  (hermes gateway restart)"
+        elif "serve" in low or "dashboard" in low:
+            hint = "  (restart the Desktop app)"
+        else:
+            hint = ""
+        print(f"    PID {pid}  {name}{hint}")
+    if len(holders) > 4:
+        print(f"    ... and {len(holders) - 4} more")
+
+
 def _print_update_completion(message: str) -> None:
     """Print an update outcome plus, when the dashboard launched this run
     with an action id, a terminal receipt line the Desktop can match after
     the dashboard restarts (see #47359 / #58764)."""
     print(message)
+    _print_posix_stale_process_notice()
     action_id = os.environ.get("HERMES_ACTION_ID", "")
     if len(action_id) == 32 and all(char in "0123456789abcdef" for char in action_id):
         print(f"=== hermes-update completed {action_id} ===")
@@ -3123,7 +3161,7 @@ def _venv_core_imports_healthy() -> tuple[bool, str]:
     return True, ""
 
 def _detect_venv_python_processes(
-    *, exclude_pids: set[int] | None = None
+    *, exclude_pids: set[int] | None = None, include_posix: bool = False
 ) -> list[tuple[int, str, str]]:
     """Find live processes running from the project venv's interpreter.
 
@@ -3140,8 +3178,13 @@ def _detect_venv_python_processes(
     tuples; empty off-Windows / without psutil / when nothing matches. The
     calling process and its ancestors are always excluded (a CLI ``hermes
     update`` itself runs from the venv python). Never raises.
+
+    ``include_posix``: the guard semantics above are Windows-only (POSIX
+    inodes make a mid-update holder safe), so the default keeps the
+    off-Windows empty answer every refusal caller relies on. The
+    completion notice passes True — same detection, report-only use.
     """
-    if not _m()._is_windows():
+    if not include_posix and not _m()._is_windows():
         return []
     try:
         import psutil
@@ -3352,6 +3395,75 @@ def _leftover_pausable_gateway_pids(
             return None
         pids.append(int(pid))
     return pids
+
+
+def _cron_script_holder_pids(
+    matches: list[tuple[int, str, str]],
+) -> list[int] | None:
+    """PIDs from *matches* when every remaining holder is a cron script run.
+
+    Cron jobs execute INSIDE the gateway process (the ticker thread), so
+    the pause machinery already owns the agent side. But a job's
+    data-collection script is a separate ``venv\\python.exe <script>``
+    child (cron/scheduler.py ``_run_job_script``), and on Windows a
+    force-killed gateway does not take its children with it. A script
+    orphaned that way holds venv ``.pyd`` files, matches no gateway or
+    backend pattern, and today dead-ends the update with a refusal aimed
+    at a process that will be gone in seconds — scripts run under a
+    bounded ``script_timeout`` by construction.
+
+    The signature is narrow on purpose: the interpreter must be venv
+    python AND the script argument must live under a Hermes ``scripts``
+    directory (the scheduler validates the same containment before
+    spawning, so anything else claiming this shape did not come from
+    cron). Returns ``None`` when any holder does not match — the guard
+    then refuses exactly as before. The caller's move on a match is a
+    bounded WAIT, not a kill: unlike gateways these have no supervisor
+    to respawn them, and unlike backends they end themselves.
+    """
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        psutil = None
+
+    pids: list[int] = []
+    for pid, _name, cmdline in matches:
+        argv = cmdline
+        if psutil is not None:
+            try:
+                argv = " ".join(psutil.Process(int(pid)).cmdline()) or cmdline
+            except Exception:
+                pass
+        low = argv.lower().replace("\\", "/")
+        if "/scripts/" not in low:
+            return None
+        # The gateway pause already classified gateways; a backend or a
+        # `hermes update` never carries a /scripts/ path argument. Keep
+        # the check symmetric with _run_job_script's containment rule.
+        if "hermes_cli.main" in low or "serve" in low:
+            return None
+        pids.append(int(pid))
+    return pids
+
+
+def _wait_for_cron_script_holders(pids: list[int], budget_seconds: float = 30.0) -> bool:
+    """Wait for cron script processes to end on their own. True when clear.
+
+    Bounded: scripts have their own timeout ceiling, but the update should
+    not inherit it — 30s converts the common case (a script finishing in
+    single-digit seconds) into a short delay, and the pathological case
+    stays a refusal with the standard message.
+    """
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return False
+    deadline = _time.monotonic() + budget_seconds
+    remaining = list(pids)
+    while remaining and _time.monotonic() < deadline:
+        _time.sleep(1.0)
+        remaining = [p for p in remaining if psutil.pid_exists(int(p))]
+    return not remaining
 
 
 def _orphaned_desktop_backend_pids(
@@ -4418,6 +4530,21 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 _m()._stop_process_trees(_orphan_backends)
                 _time.sleep(1.0)
                 _venv_holders = _m()._detect_venv_python_processes()
+        if _venv_holders:
+            _cron_scripts = _m()._cron_script_holder_pids(_venv_holders)
+            if _cron_scripts:
+                # Every remaining holder is a cron job's data-collection
+                # script — short-lived by construction (script_timeout)
+                # and supervisor-less, so a bounded wait converts the
+                # dead-end refusal into a small delay (doc 3 §D item 2).
+                # A kill would work too, but scripts can be mid-write to
+                # their own state files; letting them finish is free.
+                print(
+                    f"  ⏳ {len(_cron_scripts)} cron script process(es) hold "
+                    "the venv; waiting up to 30s for them to finish"
+                )
+                if _m()._wait_for_cron_script_holders(_cron_scripts):
+                    _venv_holders = _m()._detect_venv_python_processes()
         if _venv_holders:
             print(_format_venv_python_holders_message(_venv_holders))
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)

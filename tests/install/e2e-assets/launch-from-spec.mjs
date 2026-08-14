@@ -120,6 +120,7 @@ async function main() {
   }
   const deadline = Date.now() + Number(values['timeout-ms']);
 
+
   // Dismiss the onboarding overlay when present. Two layers of defense:
   // the drivers seed a provider key so the app's runtime check reports
   // configured=true and the overlay never mounts; if it shows anyway
@@ -127,13 +128,20 @@ async function main() {
   // hatch - "I'll choose a provider later" (i18n en: chooseLater). The
   // overlay is a fullscreen div that intercepts ALL clicks, so this must
   // resolve before any Settings navigation.
-  const later = window
-    .getByRole('button', { name: /choose a provider later|skip/i })
-    .first();
-  if (await later.isVisible({ timeout: 10_000 }).catch(() => false)) {
-    await later.click().catch(() => {});
-    await later.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {});
-  }
+  const later = window.getByRole('button', { name: /choose a provider later|skip/i }).first()
+  const settingsButton = window.getByRole('button', { name: /open settings|settings/i }).first()
+
+  await Promise.race([
+    settingsButton.isVisible({ timeout: 60_000 }).catch(() => false),
+    later
+      .isVisible({ timeout: 90_000 })
+      .catch(() => false)
+      .then(async () => {
+        await later.click().catch(() => {})
+        await later.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {})
+      })
+  ])
+
 
   // Settings -> About -> Update now. The settings trigger is an icon
   // button whose accessible name is "Open settings".

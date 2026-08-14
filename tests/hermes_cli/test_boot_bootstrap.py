@@ -7,6 +7,7 @@ per-machine), and the lock protocol including the double-check under lock.
 """
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -141,7 +142,11 @@ def test_record_paths_key_on_install_root(tmp_path, monkeypatch):
     a = record_path(tmp_path / "install-a", "home")
     b = record_path(tmp_path / "install-b", "home")
     assert a != b
-    assert a.parent == b.parent  # same dir, different keys
+    # The key is a FOLDER now (installs/<SHA16>/bootstrap/<profile>.json),
+    # not a filename suffix: same grandparent tree, different key dirs.
+    assert a.parent != b.parent
+    assert a.parent.parent.parent == b.parent.parent.parent  # installs/
+    assert a.name == b.name  # the profile filename is the shared part
 
 
 def test_home_records_differ_per_profile_machine_record_shared(tmp_path, monkeypatch):
@@ -420,3 +425,55 @@ def test_sealed_tree_bootstrap_end_to_end(tmp_path, monkeypatch):
 
     assert run_boot_bootstrap(sealed)["home"] != "skipped"
     assert calls["n"] == 2, "a swapped bundle must re-run the bootstrap"
+
+
+# ── the per-install state folder (doc4 §B) ──────────────────────────
+
+
+def test_ensure_install_dir_writes_the_reverse_map(repo, tmp_path, monkeypatch):
+    """install.json is the sha16 → root reverse map that makes orphan GC
+    possible. Written once; a second call must not rewrite firstSeen."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    state = boot_bootstrap.ensure_install_dir(repo)
+
+    assert state == boot_bootstrap.install_state_dir(repo)
+    record = json.loads((state / "install.json").read_text())
+    assert record["root"] == str(repo.resolve())
+    assert record["steward"] == "checkout"
+    first_seen = record["firstSeen"]
+
+    boot_bootstrap.ensure_install_dir(repo)
+    assert json.loads((state / "install.json").read_text())["firstSeen"] == first_seen
+
+
+def test_orphan_sweep_flags_only_vanished_roots(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    boot_bootstrap.ensure_install_dir(repo)  # alive
+    ghost = tmp_path / "deleted-checkout"
+    ghost.mkdir()
+    ghost_state = boot_bootstrap.ensure_install_dir(ghost)
+    shutil.rmtree(ghost)  # the install is gone; its state folder is not
+
+    orphans = boot_bootstrap.orphaned_installs()
+
+    assert [(folder, root) for folder, root in orphans] == [
+        (ghost_state, str(ghost))
+    ]
+
+
+def test_bootstrap_records_live_inside_the_state_folder(repo, tmp_path, monkeypatch):
+    """Both scopes share the install's folder; profile identity rides the
+    FILENAME. One anchor, not two homes."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    home = boot_bootstrap.record_path(repo, "home")
+    machine = boot_bootstrap.record_path(repo, "machine")
+
+    state = boot_bootstrap.install_state_dir(repo)
+    assert home == state / "bootstrap" / "default.json"
+    assert machine == state / "bootstrap" / "machine.json"

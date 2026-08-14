@@ -399,13 +399,32 @@ def _python_abi_tag() -> str:
 def _lazy_install_target() -> Optional[Path]:
     """Return the durable install-target dir, or None for venv-scoped mode.
 
-    Returns a path only when :data:`_LAZY_TARGET_ENV` is set to a non-empty
-    value. The directory is created on demand by :func:`_ensure_target_ready`.
+    Resolution order (doc4 §B):
+
+    1. :data:`_LAZY_TARGET_ENV` — the explicit override. Docker keeps it
+       one release as the grandfathered bridge (its /opt/data anchor
+       predates the state folder); the desktop bridge dies with §A's
+       Electron work.
+    2. Sealed tree → ``installs/<SHA16>/lazy-packages`` in the state
+       folder. A sealed venv can never take a venv-scoped install, so
+       the derived overlay is not an option there — it is the lane.
+    3. Checkout → None (venv-scoped mode; the venv IS the writable
+       store, and deleting the checkout deletes the packages with it).
     """
     raw = os.environ.get(_LAZY_TARGET_ENV, "").strip()
-    if not raw:
-        return None
-    return Path(raw)
+    if raw:
+        return Path(raw)
+    try:
+        from hermes_cli.boot_bootstrap import ensure_install_dir
+        from hermes_constants import get_install_root
+        from installation.tree import Sealed, runtime_tree
+
+        root = get_install_root()
+        if isinstance(runtime_tree(root), Sealed):
+            return ensure_install_dir(root) / "lazy-packages"
+    except Exception:  # noqa: BLE001 — derivation must not block an install
+        logger.debug("lazy target derivation failed", exc_info=True)
+    return None
 
 
 def _site_packages_writable() -> bool:

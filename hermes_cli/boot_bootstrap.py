@@ -148,25 +148,124 @@ def _install_key(project_root: Path) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+# ---------------------------------------------------------------------------
+# the per-install state folder: installs/<SHA16>/ under the DEFAULT home
+# ---------------------------------------------------------------------------
+#
+# Install state used to live in five anchors: install-bootstrap records in
+# two homes, .hermes-runtime beside the code, a docker env variable, and
+# the Electron userData dir. One folder per install key replaces the
+# key-suffixed-file convention; the sha16 already existed
+# (_install_key), only the bootstrap records used it.
+
+INSTALLS_DIR_NAME = "installs"
+
+
+def installs_root() -> Path:
+    """The parent of every per-install state folder.
+
+    Anchored to the DEFAULT home, not the active profile home: profiles
+    share one folder per install, with per-profile bootstrap records as
+    files INSIDE it (bootstrap/<profile>.json) rather than per-profile
+    folders. That keeps profile semantics while collapsing the anchor
+    count to one.
+    """
+    from hermes_cli.profiles import _get_default_hermes_home
+
+    return _get_default_hermes_home() / INSTALLS_DIR_NAME
+
+
+def install_state_dir(project_root: Path) -> Path:
+    """``installs/<SHA16>/`` for this install. Derivation only — no I/O."""
+    return installs_root() / _install_key(project_root)
+
+
+def ensure_install_dir(project_root: Path) -> Path:
+    """The state folder, created with its identity record on first touch.
+
+    install.json is the REVERSE map (sha16 → canonical root) that makes
+    orphan GC possible: `hermes doctor` enumerates installs/*/install.json
+    and flags entries whose recorded root no longer exists. Written once,
+    under the same single-flight lock the records use; steward comes from
+    runtime_tree so the record says who owns the tree, not who touched it
+    first.
+    """
+    state = install_state_dir(project_root)
+    marker = state / "install.json"
+    if marker.is_file():
+        return state
+    state.mkdir(parents=True, exist_ok=True)
+    lock = _RecordLock(state / ".install-json.lock")
+    if not lock.acquire():
+        return state  # someone else is writing it right now — theirs wins
+    try:
+        if not marker.is_file():
+            from datetime import datetime, timezone
+
+            from installation.tree import Sealed, runtime_tree
+
+            tree = runtime_tree(project_root)
+            payload = {
+                "root": str(Path(project_root).resolve()),
+                "steward": tree.steward if isinstance(tree, Sealed) else "checkout",
+                "firstSeen": datetime.now(timezone.utc).isoformat(),
+            }
+            tmp = marker.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, marker)
+    finally:
+        lock.release()
+    return state
+
+
+def orphaned_installs() -> list[tuple[Path, str]]:
+    """State folders whose recorded root no longer exists.
+
+    ``(folder, recorded_root)`` pairs for `hermes doctor`'s sweep. A
+    folder without a readable install.json is orphaned by definition —
+    nothing can ever claim it again, because claiming goes through
+    ensure_install_dir which writes the record first.
+    """
+    root = installs_root()
+    if not root.is_dir():
+        return []
+    orphans: list[tuple[Path, str]] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        try:
+            recorded = json.loads(
+                (entry / "install.json").read_text(encoding="utf-8")
+            ).get("root", "")
+        except (OSError, ValueError):
+            orphans.append((entry, "<unreadable install.json>"))
+            continue
+        if not recorded or not Path(recorded).exists():
+            orphans.append((entry, recorded or "<empty>"))
+    return orphans
+
+
 def record_path(project_root: Path, scope: str) -> Path:
     """Where the last-known record for ``project_root`` lives.
 
-    ``home`` scope follows the active HERMES_HOME (per profile). ``machine``
-    scope anchors to the default home so every profile shares one record.
+    Both scopes live INSIDE the per-install state folder now:
+    ``bootstrap/machine.json`` for machine scope, ``bootstrap/<profile>.json``
+    for home scope — the per-profile semantics ride the FILENAME, not a
+    per-profile anchor directory. New-location-only: the old
+    ``install-bootstrap/<key>[.machine].json`` spellings are dead markers
+    (never read), and an absent record means one redundant slow path,
+    which is the designed cost of the no-compat-ladder convention.
     """
     if scope == "home":
-        from hermes_constants import get_hermes_home
+        from hermes_cli.profiles import get_active_profile_name
 
-        base = get_hermes_home()
-        suffix = ".json"
+        name = get_active_profile_name() or "default"
+        filename = f"{name}.json"
     elif scope == "machine":
-        from hermes_cli.profiles import _get_default_hermes_home
-
-        base = _get_default_hermes_home()
-        suffix = ".machine.json"
+        filename = "machine.json"
     else:
         raise ValueError(f"unknown record scope: {scope!r}")
-    return base / RECORD_DIR_NAME / f"{_install_key(project_root)}{suffix}"
+    return install_state_dir(project_root) / "bootstrap" / filename
 
 
 def read_last_known(path: Path) -> dict:

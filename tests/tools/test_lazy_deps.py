@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 import tools.lazy_deps as ld
 
 
@@ -448,3 +450,54 @@ class TestInstallSpecs:
         result = ld.install_specs(["honcho-ai==2.2.0"])
         assert result.ok is False
         assert "disk on fire" in result.stderr
+
+
+class TestDerivedLazyTarget:
+    """doc4 §B: on a sealed tree the overlay derives from the state
+    folder — no env var required. Checkouts stay venv-scoped."""
+
+    def test_sealed_tree_derives_the_state_folder_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        import hermes_constants
+        from tools import lazy_deps
+
+        monkeypatch.delenv(lazy_deps._LAZY_TARGET_ENV, raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        sealed_root = tmp_path / "opt" / "hermes"
+        sealed_root.mkdir(parents=True)
+        (sealed_root / "install-stamp.json").write_text(
+            '{"distribution": "docker", "commit": "abc123"}'
+        )
+        monkeypatch.setattr(
+            hermes_constants, "get_install_root", lambda: sealed_root
+        )
+
+        target = lazy_deps._lazy_install_target()
+
+        from hermes_cli.boot_bootstrap import install_state_dir
+
+        assert target == install_state_dir(sealed_root) / "lazy-packages"
+        # And the identity record came with the derivation.
+        assert (install_state_dir(sealed_root) / "install.json").is_file()
+
+    def test_env_var_still_overrides(self, tmp_path, monkeypatch):
+        from tools import lazy_deps
+
+        monkeypatch.setenv(lazy_deps._LAZY_TARGET_ENV, str(tmp_path / "opt-data"))
+
+        assert lazy_deps._lazy_install_target() == tmp_path / "opt-data"
+
+    def test_checkout_stays_venv_scoped(self, tmp_path, monkeypatch):
+        import hermes_constants
+        from tools import lazy_deps
+
+        monkeypatch.delenv(lazy_deps._LAZY_TARGET_ENV, raising=False)
+        checkout = tmp_path / "src"
+        (checkout / ".git").mkdir(parents=True)
+        monkeypatch.setattr(
+            hermes_constants, "get_install_root", lambda: checkout
+        )
+
+        assert lazy_deps._lazy_install_target() is None

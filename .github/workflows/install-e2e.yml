@@ -56,7 +56,7 @@ on:
         description: 'How many release tags to sample (newest, oldest, and a spread between).'
         required: false
         type: string
-        default: '5'
+        default: '3'
   schedule:
     # Every 12 hours, off the hour to avoid the top-of-hour runner crunch.
     - cron: '20 7,19 * * *'

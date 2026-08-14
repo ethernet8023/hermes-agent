@@ -58,14 +58,14 @@ RUN apt-get -o Acquire::Retries=3 update && \
 # through to "unknown" provenance with no crash.
 
 # ---------- Base image ----------
-FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b AS uv_source
 # Node 26 source stage. Debian trixie's bundled nodejs is pinned to 20.x
-# which reached EOL in April 2026 — we copy node + npm from the upstream
-# node:26 image instead (Hermes pins its toolchain to Node 26 everywhere).
-# Bookworm-based slim image used so the produced binary links
-# against glibc 2.36, which runs cleanly on our Debian 13 (trixie, glibc
-# 2.41) runtime.  Bumping to a new Node major is a one-line ARG change; see
-# #4977.
+# which reached EOL in April 2026 — but the runtime image's node does NOT
+# come from here anymore: it comes from installation/runtime-pins.json via
+# the provisioner (decision 8 — the uv_source stage this file used to have
+# had already drifted to 0.11.6 while the pin table said 0.12.3, which is
+# exactly the two-authorities failure the pin table exists to end). This
+# stage remains ONLY as a build-time fallback for platforms the pin table
+# does not cover; nothing COPYs from it into the runtime image today.
 FROM node:26-bookworm-slim@sha256:9e6f9357d371591e32ab6f2d8a26d63bdd0d17c29eee3f4f3e7e454d9634bf73 AS node_source
 FROM debian:13.4
 
@@ -88,7 +88,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 # hermes process, the dashboard, and per-profile gateways.
 RUN apt-get -o Acquire::Retries=3 update && \
     apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps git openssh-client docker-cli xz-utils && \
+    ca-certificates curl iputils-ping python3 python-is-python3 ffmpeg gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps openssh-client docker-cli xz-utils && \
     rm -rf /var/lib/apt/lists/*
 
 # Prefer the fixed SQLite over Debian's vulnerable libsqlite3.so.0. Keep the
@@ -167,22 +167,61 @@ COPY --chmod=0755 docker/tini-shim.sh /usr/bin/tini
 # Non-root user for runtime; UID can be overridden via HERMES_UID at runtime
 RUN useradd -u 10000 -m -d /opt/data hermes
 
-COPY --chmod=0755 --from=uv_source /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
+# ---------- Managed runtimes from the pin table (decision 8) ----------
+# The image used to assemble its tool set from three non-pin authorities
+# (node from a base image digest, git/ripgrep from apt, uv from an astral
+# image tag that had already drifted from the table). It is now a pin
+# consumer: the stdlib-only installation package runs the SAME provisioner
+# invocation the desktop payload staging uses, into a runtime dir that is
+# its own store (self-contained sealed layout — the desktop payload and
+# the Nix bundle have the identical shape). Digest-verified downloads,
+# gh included (previously absent from the image entirely).
+#
+# Placed BEFORE the npm layer: the node that builds web/ui-tui is the
+# pinned node, not a second authority. Layer-cached on the two files that
+# define the outcome: the pin table and the provisioner package.
+COPY installation/ /opt/hermes-build/installation/
+RUN PYTHONPATH=/opt/hermes-build python3 -m installation.provisioner \
+        --runtime-dir /opt/hermes/.hermes-runtime && \
+    PYTHONPATH=/opt/hermes-build python3 - <<'PYEOF'
+import shlex
+import sys
+from pathlib import Path
 
-# Node 26: copy the node binary plus the bundled npm JS install from the
-# upstream image.  npm and npx are recreated as symlinks because they're
-# symlinks in the source image (and need to live on PATH).
-#
-# No corepack: Node unbundled it upstream, so node:26 ships only npm in
-# /usr/local/lib/node_modules.  Nothing here needs it — no package.json
-# declares a `packageManager`, and no build step shells out to yarn or pnpm.
-#
-# See node_source stage at the top of the file for the version-bump
-# rationale (#4977).
-COPY --chmod=0755 --from=node_source /usr/local/bin/node /usr/local/bin/
-COPY --from=node_source /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
-RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
-    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+sys.path.insert(0, "/opt/hermes-build")
+from installation.env import managed_path_dirs, managed_tool_env
+
+runtime_dir = Path("/opt/hermes/.hermes-runtime")
+dirs = managed_path_dirs(runtime_dir)
+assert dirs, "provisioner ran but assembled no PATH dirs"
+(runtime_dir / "path-dirs").write_text(
+    "".join(f"{d}\n" for d in dirs), encoding="utf-8"
+)
+(runtime_dir / "tool-env").write_text(
+    "".join(
+        f"export {key}={shlex.quote(value)}\n"
+        for key, value in sorted(managed_tool_env(runtime_dir).items())
+    ),
+    encoding="utf-8",
+)
+# Symlink each managed binary into /usr/local/bin: ENV PATH cannot hold
+# per-tool dirs computed at build time, and the link farm keeps `docker
+# exec <c> node` working with zero shell-profile tricks. The links point
+# INTO the runtime dir, so the facts file remains the single authority.
+for d in dirs:
+    for binary in Path(d).iterdir():
+        if binary.is_file():
+            link = Path("/usr/local/bin") / binary.name
+            if not link.exists():
+                link.symlink_to(binary)
+PYEOF
+ENV PYTHONPATH_HERMES_BUILD=/opt/hermes-build
+WORKDIR /opt/hermes-build
+RUN PYTHONPATH=/opt/hermes-build python3 -c "\
+from installation.provisioner import require_current_runtimes; \
+require_current_runtimes(project_root=__import__('pathlib').Path('/opt/hermes'), \
+    runtime_dir=__import__('pathlib').Path('/opt/hermes/.hermes-runtime'))" \
+    || (echo 'pinned runtimes drifted from the table' && exit 1)
 
 WORKDIR /opt/hermes
 

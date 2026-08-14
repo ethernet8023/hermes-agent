@@ -545,3 +545,89 @@ class TestSealedDriftBackstop:
         )
         summary = run_boot_bootstrap(root)
         assert "uv" in summary.get("sealed_runtime_drift", "")
+
+
+class TestOrphanedStoreEntries:
+    """orphaned_store_entries — facts are the only authority, keep on doubt."""
+
+    def _publish(self, store, name, payload=b"tool bytes"):
+        entry = store / name
+        entry.mkdir(parents=True)
+        (entry / "tool.bin").write_bytes(payload)
+        (entry / ".hermes-store-entry.json").write_text("{}", encoding="utf-8")
+        return entry
+
+    def _install_with_facts(self, tmp_path, name, facts: dict):
+        """A live install root whose runtimes.json references *facts*."""
+        from installation.registry import RuntimeFact, save_facts
+
+        root = tmp_path / name
+        rt = root / ".hermes-runtime"
+        rt.mkdir(parents=True)
+        save_facts(
+            {t: RuntimeFact(version="1.0.0", path=p) for t, p in facts.items()},
+            rt,
+        )
+        boot_bootstrap.ensure_install_dir(root)
+        return root
+
+    @pytest.fixture
+    def store(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        store = tmp_path / ".hermes" / "tools"
+        store.mkdir(parents=True)
+        import installation.paths as ip
+
+        monkeypatch.setattr(ip, "get_tool_store", lambda: store)
+        return store
+
+    def test_referenced_entries_survive_unreferenced_are_flagged(
+        self, store, tmp_path
+    ):
+        self._publish(store, "ripgrep-15.2.0-linux-x64")
+        stale = self._publish(store, "ripgrep-14.1.0-linux-x64", b"x" * 512)
+        self._install_with_facts(
+            tmp_path, "live-install",
+            {"ripgrep": "ripgrep-15.2.0-linux-x64/rg"},
+        )
+
+        orphans = boot_bootstrap.orphaned_store_entries()
+
+        assert [(e.name, s) for e, s in orphans] == [
+            ("ripgrep-14.1.0-linux-x64", 512 + 2)  # tool.bin + "{}" marker
+        ]
+        assert stale.exists()  # report-only: nothing was deleted
+
+    def test_any_live_installs_reference_keeps_an_entry(self, store, tmp_path):
+        """Two installs, one old, one new — BOTH versions stay."""
+        self._publish(store, "uv-0.12.3-linux-x64")
+        self._publish(store, "uv-0.11.6-linux-x64")
+        self._install_with_facts(tmp_path, "fresh", {"uv": "uv-0.12.3-linux-x64/uv"})
+        self._install_with_facts(tmp_path, "behind", {"uv": "uv-0.11.6-linux-x64/uv"})
+
+        assert boot_bootstrap.orphaned_store_entries() == []
+
+    def test_unreadable_facts_err_toward_keep(self, store, tmp_path):
+        """A busted install must cost disk, not break its neighbours."""
+        self._publish(store, "gh-2.97.0-linux-x64")
+        root = tmp_path / "busted"
+        (root / ".hermes-runtime").mkdir(parents=True)
+        (root / ".hermes-runtime" / "runtimes.json").write_text(
+            "NOT JSON", encoding="utf-8"
+        )
+        boot_bootstrap.ensure_install_dir(root)
+
+        # gh COULD belong to the busted install; with its facts unreadable
+        # the answer must be "keep", not "orphan".
+        assert boot_bootstrap.orphaned_store_entries() == []
+
+    def test_unpublished_dirs_are_not_candidates(self, store, tmp_path):
+        """Scratch dirs and stray files are the provisioner's cleanup, and
+        a store doubling as a facts dir holds runtimes.json — none of it
+        may show up as deletable."""
+        scratch = store / ".staging-abc123"
+        scratch.mkdir()
+        (store / "runtimes.json").write_text("{}", encoding="utf-8")
+
+        assert boot_bootstrap.orphaned_store_entries() == []

@@ -246,6 +246,83 @@ def orphaned_installs() -> list[tuple[Path, str]]:
     return orphans
 
 
+def orphaned_store_entries() -> list[tuple[Path, int]]:
+    """Tool-store entries no live install's facts reference.
+
+    ``(entry_dir, size_bytes)`` pairs for `hermes doctor`'s sweep. An
+    entry is REFERENCED when any install recorded in ``installs/*`` (plus
+    this process's own install) carries a fact whose store-relative path
+    begins with the entry's directory name. Everything else is bytes no
+    lookup can ever return: superseded versions left behind by pin bumps,
+    or entries owned by installs that were deleted.
+
+    Facts are the only authority consulted — the same rule tool_path()
+    resolves by, so this can never flag an entry the registry would still
+    hand out. Doubt errs toward KEEP: an install whose facts file exists
+    but cannot be read aborts the whole sweep, because its references are
+    unknowable and any entry might be one of them. A busted install
+    should cost disk, not break a neighbour that shares the store.
+    """
+    from installation.paths import get_tool_store
+    from installation.registry import load_facts
+
+    store = get_tool_store()
+    if not store.is_dir():
+        return []
+
+    roots: set[Path] = {Path(__file__).resolve().parents[1]}
+    installs = installs_root()
+    if installs.is_dir():
+        for entry in installs.iterdir():
+            try:
+                recorded = json.loads(
+                    (entry / "install.json").read_text(encoding="utf-8")
+                ).get("root", "")
+            except (OSError, ValueError):
+                continue
+            if recorded and Path(recorded).exists():
+                roots.add(Path(recorded))
+
+    referenced: set[str] = set()
+    for root in roots:
+        facts_file = root / ".hermes-runtime" / "runtimes.json"
+        try:
+            facts = load_facts(root / ".hermes-runtime")
+        except Exception:  # noqa: BLE001
+            # An install whose facts file EXISTS but cannot be read might
+            # reference anything — with its references unknowable, no
+            # entry can be safely called an orphan. Abort the whole sweep
+            # (empty = nothing to report) rather than flag entries the
+            # busted install may still own. No facts file at all is just
+            # an unprovisioned install: it references nothing.
+            if facts_file.exists():
+                return []
+            continue
+        for fact in facts.values():
+            head = Path(fact.path).parts[0] if Path(fact.path).parts else ""
+            if head:
+                referenced.add(head)
+
+    orphans: list[tuple[Path, int]] = []
+    for entry in sorted(store.iterdir()):
+        # Only published entries are candidates: scratch dirs and stray
+        # files are the provisioner's own cleanup problem, and a store
+        # that doubles as a facts dir (nix bundle) holds runtimes.json.
+        if not entry.is_dir() or not (entry / ".hermes-store-entry.json").is_file():
+            continue
+        if entry.name in referenced:
+            continue
+        size = 0
+        for f in entry.rglob("*"):
+            try:
+                if f.is_file() and not f.is_symlink():
+                    size += f.stat().st_size
+            except OSError:
+                continue
+        orphans.append((entry, size))
+    return orphans
+
+
 def record_path(project_root: Path, scope: str) -> Path:
     """Where the last-known record for ``project_root`` lives.
 

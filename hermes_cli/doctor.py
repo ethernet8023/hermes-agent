@@ -221,13 +221,14 @@ def _check_managed_runtimes() -> None:
     its steward can fix it.
     """
     try:
-        from installation.registry import load_facts, load_pins, satisfies
+        from installation.paths import resolve_bases
+        from installation.registry import is_optional, load_facts, load_pins
         from installation.tree import Sealed, runtime_tree
-        from hermes_constants import get_install_root, get_runtime_dir
+        from hermes_constants import get_install_root
 
-        runtime_dir = get_runtime_dir()
+        facts_dir, store = resolve_bases()
         pins = load_pins()
-        facts = load_facts(runtime_dir)
+        facts = load_facts(facts_dir)
         tree = runtime_tree(get_install_root())
     except Exception as exc:
         check_warn("Managed runtimes unreadable", f"({exc})")
@@ -246,25 +247,89 @@ def _check_managed_runtimes() -> None:
     for tool, pin in pins.items():
         fact = facts.get(tool)
         if fact is None:
+            # An OPTIONAL tool nobody installed is a capability nobody
+            # asked for, not drift (same rule as provisioner.stale_tools).
+            if is_optional(tool, pins):
+                check_info(f"{tool} not installed (optional)")
+                continue
             system = _safe_which("rg" if tool == "ripgrep" else tool)
             if system:
                 check_ok(f"{tool} (system)", f"at {system}")
             else:
                 report_drift(f"{tool} not provisioned", remedy)
             continue
-        if not (runtime_dir / fact.path).is_file():
+        # A system-sourced fact records a machine tool accepted by the
+        # version-floor probe (decision 1) — its path is absolute and
+        # deliberately NOT at the pinned version.
+        if fact.source == "system":
+            if Path(fact.path).is_file():
+                check_ok(f"{tool} {fact.version} (system)", f"at {fact.path}")
+            else:
+                report_drift(f"{tool} (system) vanished from {fact.path}", remedy)
+            continue
+        # The fact's path is STORE-relative (§E): bytes live in the shared
+        # tool store, facts beside the install. Checking under the facts
+        # dir would misreport every store-provisioned tool as missing.
+        if not (store / fact.path).is_file():
             report_drift(
                 f"{tool} recorded but missing",
                 "(runtime dir was modified) " + remedy if not sealed else remedy,
             )
             continue
-        if not satisfies(fact.version, pin["version"]):
+        # Exact pins make currency an equality check, not a range check —
+        # the same comparison stale_tools and the provisioner make.
+        if fact.version != pin["version"]:
             report_drift(
-                f"{tool} {fact.version} is below the pin {pin['version']}",
+                f"{tool} {fact.version} does not match the pin {pin['version']}",
                 remedy,
             )
             continue
         check_ok(f"{tool} {fact.version}", "(managed)")
+
+
+def _check_install_state_hygiene() -> None:
+    """Orphaned install-state folders and unreferenced tool-store entries.
+
+    Both are derived-state leaks, not breakage: a deleted worktree leaves
+    its ``installs/<sha16>/`` folder behind (nothing can ever claim it —
+    the key is the hash of a path that no longer exists), and a pin bump
+    strands the store entry of the version nobody's facts name anymore.
+    Doctor reports; the user deletes. No auto-delete from a diagnostic
+    command — the whole point of the shared store is that another install
+    might be mid-provision while doctor runs.
+    """
+    try:
+        from hermes_cli.boot_bootstrap import (
+            orphaned_installs,
+            orphaned_store_entries,
+        )
+        from hermes_cli.sizefmt import format_bytes
+
+        install_orphans = orphaned_installs()
+        store_orphans = orphaned_store_entries()
+    except Exception as exc:
+        check_warn("Install-state hygiene unreadable", f"({exc})")
+        return
+
+    if not install_orphans and not store_orphans:
+        check_ok("Install state", "(no orphaned folders or store entries)")
+        return
+
+    for folder, recorded in install_orphans:
+        check_warn(
+            f"Orphaned install state: {folder.name}",
+            f"(its install at {recorded} is gone — safe to delete {folder})",
+        )
+    if store_orphans:
+        total = sum(size for _entry, size in store_orphans)
+        names = ", ".join(entry.name for entry, _size in store_orphans[:4])
+        more = f" +{len(store_orphans) - 4} more" if len(store_orphans) > 4 else ""
+        check_warn(
+            f"{len(store_orphans)} unreferenced tool-store "
+            f"entr{'y' if len(store_orphans) == 1 else 'ies'} "
+            f"({format_bytes(total)})",
+            f"({names}{more} — no install's facts name them; safe to delete)",
+        )
 
 
 def _termux_browser_setup_steps(node_installed: bool) -> list[str]:
@@ -2065,6 +2130,10 @@ def run_doctor(args):
     # A tool that is missing here is not a "go install it yourself"
     # problem — the provisioner owns it and retries on the next update.
     _check_managed_runtimes()
+
+    # Derived-state leaks: orphaned installs/<sha16>/ folders and
+    # tool-store entries nobody's facts reference (§B store GC, report-only).
+    _check_install_state_hygiene()
 
     # Docker (optional)
     terminal_env = os.getenv("TERMINAL_ENV", "local")

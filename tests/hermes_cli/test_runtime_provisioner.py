@@ -1286,3 +1286,115 @@ class TestSystemGitFirst:
         it, and a winget git's bash may be missing or ASLR-broken."""
         monkeypatch.setattr(rp.sys, "platform", "win32")
         assert rp.probe_system_git() is None
+
+
+class TestTermuxLane:
+    """Decision 5: on Termux the pin table governs WHICH tools exist,
+    but pkg supplies the bytes — verify-only, source="system", version
+    floors instead of exact pins (pkg ships one rolling build)."""
+
+    def _pins(self, tmp_path, target):
+        return _pins_file(tmp_path / "repo", {"gh": {
+            "version": "2.97.0",
+            "files": {target: {
+                "url": "https://example.com/never-fetched.tar.gz",
+                "sha256": "0" * 64,
+            }}}})
+
+    def _termux(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TERMUX_VERSION", "0.118.0")
+        bin_dir = tmp_path / "pkgbin"
+        bin_dir.mkdir(exist_ok=True)
+        return bin_dir
+
+    def _pkg_tool(self, bin_dir, name, version):
+        tool = bin_dir / name
+        tool.write_text(f"#!/bin/sh\necho '{name} version {version}'\n")
+        tool.chmod(0o755)
+        return tool
+
+    def test_a_pkg_tool_clearing_the_floor_is_recorded_not_downloaded(
+        self, tmp_path, monkeypatch
+    ):
+        bin_dir = self._termux(monkeypatch, tmp_path)
+        gh = self._pkg_tool(bin_dir, "gh", "2.62.0")
+        monkeypatch.setattr(
+            rp.shutil, "which", lambda n: str(gh) if n == "gh" else None
+        )
+
+        def no_downloads(*a, **k):
+            raise AssertionError("nothing in the pin table runs on bionic")
+
+        monkeypatch.setattr(rp, "_download", no_downloads)
+        rt, store = tmp_path / "rt", tmp_path / "store"
+
+        results = rp.provision_runtimes(
+            runtime_dir=rt, install_root=self._pins(tmp_path, rr.current_target()),
+            store_dir=store,
+        )
+
+        assert [(r.action, r.version) for r in results] == [("system", "2.62.0")]
+        fact = rr.load_facts(rt)["gh"]
+        assert fact.source == "system"
+        assert not rp.stale_tools(
+            runtime_dir=rt,
+            install_root=self._pins(tmp_path, rr.current_target()),
+            store_dir=store,
+        )
+
+    def test_a_missing_pkg_tool_fails_with_the_exact_install_line(
+        self, tmp_path, monkeypatch
+    ):
+        """The failure IS the fix instruction: a Termux user cannot use
+        a download URL, so the message must say `pkg install <name>`."""
+        self._termux(monkeypatch, tmp_path)
+        monkeypatch.setattr(rp.shutil, "which", lambda n: None)
+
+        results = rp.provision_runtimes(
+            runtime_dir=tmp_path / "rt",
+            install_root=self._pins(tmp_path, rr.current_target()),
+            store_dir=tmp_path / "store",
+        )
+
+        assert results[0].action == "failed"
+        assert "pkg install gh" in (results[0].detail or "")
+
+    def test_a_below_floor_pkg_tool_is_rejected_with_versions(
+        self, tmp_path, monkeypatch
+    ):
+        bin_dir = self._termux(monkeypatch, tmp_path)
+        old = self._pkg_tool(bin_dir, "gh", "1.9.0")
+        monkeypatch.setattr(
+            rp.shutil, "which", lambda n: str(old) if n == "gh" else None
+        )
+
+        results = rp.provision_runtimes(
+            runtime_dir=tmp_path / "rt",
+            install_root=self._pins(tmp_path, rr.current_target()),
+            store_dir=tmp_path / "store",
+        )
+
+        assert results[0].action == "failed"
+        detail = results[0].detail or ""
+        assert "gh 1.9.0" in detail and ">= 2.0" in detail
+
+    def test_an_unmapped_tool_is_explicitly_unsupported(
+        self, tmp_path, monkeypatch
+    ):
+        """camoufox has no bionic build and no pkg package. Saying so
+        beats a download that segfaults at first launch."""
+        self._termux(monkeypatch, tmp_path)
+        target = rr.current_target()
+        pins = _pins_file(tmp_path / "repo2", {"camoufox": {
+            "version": "1.0.0", "optional": True,
+            "files": {target: {
+                "url": "https://example.com/x.tar.gz", "sha256": "0" * 64,
+            }}}})
+
+        result = rp.provision_tool(
+            "camoufox", runtime_dir=tmp_path / "rt",
+            install_root=pins, store_dir=tmp_path / "store",
+        )
+
+        assert result.action == "failed"
+        assert "not available on Termux" in (result.detail or "")

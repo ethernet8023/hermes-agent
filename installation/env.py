@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from installation.paths import get_runtime_dir, resolve_bases
-from installation.registry import RuntimeFact, load_facts, load_path_order
+from installation.registry import (
+    PLAYWRIGHT_BROWSER_TOOLS,
+    RuntimeFact,
+    load_facts,
+    load_path_order,
+)
 
 __all__ = [
     "managed_path_dirs",
@@ -162,6 +167,19 @@ def managed_tool_env(
         # risks colliding with unrelated build tooling.
         if sys.platform.startswith("linux"):
             env["PREFIX"] = str(root)
+
+    # The playwright browsers are resolved by playwright itself, by
+    # DIRECTORY NAME under one root — their store entries are named
+    # playwright's way for exactly this (see store_entry_name), so the
+    # browsers path is simply the store. Only exported when a browser
+    # fact exists: pointing playwright at the store on installs that
+    # never browsed would stop `npx playwright install` runs the user
+    # does for their own projects from landing in the default cache.
+    for browser in PLAYWRIGHT_BROWSER_TOOLS:
+        fact = facts.get(browser)
+        if fact is not None and (store / fact.path).is_file():
+            env["PLAYWRIGHT_BROWSERS_PATH"] = str(store)
+            break
     return env
 
 

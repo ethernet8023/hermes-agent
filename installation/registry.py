@@ -223,6 +223,26 @@ def load_pins(install_root: Path | None = None) -> dict[str, dict]:
         files = entry.get("files")
         if not isinstance(files, dict) or not files:
             raise ValueError(f"{path}: tool {name!r} has no 'files' table")
+        missing = entry.get("missingTargets", {})
+        if not isinstance(missing, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) and v for k, v in missing.items()
+        ):
+            # A declared gap must SAY WHY — the reason string is what
+            # separates "upstream ships no such build" from "someone
+            # forgot a row", and the resolver shows it when refusing.
+            raise ValueError(
+                f"{path}: tool {name!r} 'missingTargets' must map target → reason"
+            )
+        if set(missing) & set(files):
+            raise ValueError(
+                f"{path}: tool {name!r} declares targets both present and missing"
+            )
+        if missing and not entry.get("optional", False):
+            # A REQUIRED tool with a hole would brick the whole install
+            # on that platform; only capability tools may declare gaps.
+            raise ValueError(
+                f"{path}: tool {name!r} is required but declares missingTargets"
+            )
         if ANY_TARGET in files and len(files) > 1:
             raise ValueError(
                 f"{path}: tool {name!r} mixes {ANY_TARGET!r} with per-target files; "
@@ -346,12 +366,23 @@ def path_order(pins: dict[str, dict]) -> list[str]:
     node's bundled npm wins. Same edge as ``install_order``, read the
     other way: one declaration in the pin table, both consequences
     derived, so they cannot drift apart.
+
+    Tools pinned with ``onPath: false`` are excluded entirely: a
+    playwright browser tree is program DATA a library resolves by
+    directory, not a CLI surface — putting ``chrome`` ahead of the
+    user's own on PATH would be a hijack, not a convenience. Exclusion
+    here covers every consumer at once, because the facts' recorded
+    ``pathOrder`` (which the TS reader also trusts) is derived from
+    this list.
     """
-    blockers: dict[str, list[str]] = {tool: [] for tool in pins}
-    for tool in pins:
+    blockers: dict[str, list[str]] = {
+        tool: [] for tool in pins if pins[tool].get("onPath", True)
+    }
+    for tool in blockers:
         for dep in _extends(tool, pins):
-            blockers[dep].append(tool)
-    return _ordered_by(pins, blockers)
+            if dep in blockers:
+                blockers[dep].append(tool)
+    return _ordered_by({tool: pins[tool] for tool in blockers}, blockers)
 
 
 def pinned_file(
@@ -376,6 +407,12 @@ def pinned_file(
     key = target or current_target()
     spec = files.get(ANY_TARGET) if ANY_TARGET in files else files.get(key)
     if spec is None:
+        reason = entry.get("missingTargets", {}).get(key)
+        if reason:
+            # A DECLARED gap: upstream genuinely ships nothing here. The
+            # distinct message keeps "fill the table" bugs separable
+            # from "this capability does not exist on this platform".
+            raise KeyError(f"{tool!r} has no build for {key}: {reason}")
         raise KeyError(f"{tool!r} has no pinned download for {key}")
 
     return PinnedFile(version=entry["version"], url=spec["url"], sha256=spec["sha256"])
@@ -511,10 +548,22 @@ def save_facts(
         # to the facts' own keys: an order that lists no tools would drop
         # every managed tool off PATH, which is worse than an arbitrary
         # one. Anything the fallback misses is appended for the same
-        # reason.
+        # reason — EXCEPT tools the pin table deliberately keeps off PATH
+        # (onPath: false): the append is a safety net for legacy facts,
+        # not a bypass of the exclusion. The pin lookup is best-effort;
+        # with no readable table nothing is known to be excluded and the
+        # old behavior stands.
         path_order = load_path_order(runtime_dir)
-    ordered = [name for name in path_order if name in facts]
-    ordered += [name for name in facts if name not in ordered]
+    try:
+        pins = load_pins()
+        off_path = {name for name, entry in pins.items()
+                    if not entry.get("onPath", True)}
+    except Exception:  # noqa: BLE001 — the append fallback predates pins
+        off_path = set()
+    ordered = [name for name in path_order if name in facts and name not in off_path]
+    ordered += [
+        name for name in facts if name not in ordered and name not in off_path
+    ]
     payload = {
         "schemaVersion": FACTS_SCHEMA_VERSION,
         "pathOrder": ordered,
@@ -542,6 +591,12 @@ def record_fact(
 # ─── the tool store (machine-wide bytes) ────────────────────────────────────
 
 
+# The pinned tools playwright itself resolves by directory name (see
+# store_entry_name). Every consumer that special-cases the browsers keys
+# off this one tuple.
+PLAYWRIGHT_BROWSER_TOOLS = ("chromium", "chromium-headless-shell")
+
+
 def store_entry_name(tool: str, version: str, target: str) -> str:
     """The store directory name for one pinned tuple.
 
@@ -551,7 +606,19 @@ def store_entry_name(tool: str, version: str, target: str) -> str:
     makes an entry safe to treat as immutable: same name means the same
     verified artifact, so a publisher that finds one already there can
     keep it instead of rewriting bytes another install is running.
+
+    The playwright browsers are the one exception: playwright resolves
+    ``<name with dashes as underscores>-<revision>`` under
+    PLAYWRIGHT_BROWSERS_PATH and that spelling is not negotiable, so
+    their entries carry playwright's name INSTEAD of ours — the browsers
+    path points at the store root and playwright reads the entries
+    directly (no links — banned — and no per-install copies). The name
+    drops the target key; that costs nothing real, because a store only
+    ever holds the host's own target (cross-provisioning is deleted) and
+    the entry marker still records the full tuple for verification.
     """
+    if tool in PLAYWRIGHT_BROWSER_TOOLS:
+        return f"{tool.replace('-', '_')}-{version}"
     return f"{tool}-{version}-{target}"
 
 

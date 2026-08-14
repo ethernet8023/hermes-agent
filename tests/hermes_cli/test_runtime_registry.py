@@ -255,7 +255,7 @@ class TestRecordedPathOrder:
 class TestRealPinTable:
     """The shipped table, as a contract rather than a snapshot."""
 
-    def test_every_tool_resolves_on_every_supported_target(self):
+    def test_every_tool_resolves_or_declares_its_gap_on_every_target(self):
         expected = {
             "darwin-arm64",
             "darwin-x64",
@@ -265,8 +265,15 @@ class TestRealPinTable:
             "win32-arm64",
         }
 
-        for tool in rr.load_pins():
+        for tool, entry in rr.load_pins().items():
+            declared_missing = entry.get("missingTargets", {})
             for target in expected:
+                if target in declared_missing:
+                    # The gap is allowed ONLY as an explicit, reasoned
+                    # declaration — and the resolver must surface it.
+                    with pytest.raises(KeyError, match="has no build for"):
+                        rr.pinned_file(tool, target)
+                    continue
                 # Either a per-target row or a target-independent 'any'
                 # artifact — what matters is that nothing is unreachable.
                 assert rr.pinned_file(tool, target).url, f"{tool}/{target}"

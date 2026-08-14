@@ -1,6 +1,6 @@
 {
   "$schema": "./runtime-pins.schema.json",
-  "$comment": "ONE source of truth, read by the Python provisioner (installation/provisioner.py) and by the desktop payload staging, which shells out to it. Every entry pins an EXACT version plus, per target, the exact download URL and its sha256. No ranges, no 'resolve latest and hope': a build is reproducible, needs no GitHub API (unauthenticated callers get 60 requests/hour), and a tool cannot silently change under users. Bump deliberately: change the version, refresh every url+sha256 for that tool, verify, commit. Tool ORDER is derived from this file too — see 'extends'.",
+  "$comment": "ONE source of truth, read by the Python provisioner (installation/provisioner.py) and by the desktop payload staging, which shells out to it. Every entry pins an EXACT version plus, per target, the exact download URL and its sha256. No ranges, no 'resolve latest and hope': a build is reproducible, needs no GitHub API (unauthenticated callers get 60 requests/hour), and a tool cannot silently change under users. Bump deliberately: change the version, refresh every url+sha256 for that tool, verify, commit. Tool ORDER is derived from this file too \u2014 see 'extends'.",
   "schemaVersion": 2,
   "tools": {
     "node": {
@@ -34,7 +34,9 @@
     },
     "npm": {
       "version": "12.0.2",
-      "extends": ["node"],
+      "extends": [
+        "node"
+      ],
       "$comment": "Newer than the npm bundled inside the pinned node. 'extends' says both things that follow from that: install npm AFTER node (staging runs node's own npm to unpack this tarball), and put npm's bin dir BEFORE node's on PATH, or node's bundled npm shadows this one. The registry tarball is the same bytes for every target, so it pins one 'any' artifact; the per-target part is the shim layout npm writes on install, which _binary_rel owns.",
       "files": {
         "any": {
@@ -192,6 +194,68 @@
           "url": "https://github.com/daijro/camoufox/releases/download/v152.0.4-beta.28/camoufox-152.0.4-beta.28-win.x86_64.zip",
           "sha256": "386fc2f41139685f9a1a9cef0d024bc041d899c315ea538d561171b5b282e57d"
         }
+      }
+    },
+    "chromium": {
+      "$comment": "OPTIONAL: the Playwright chromium build (decision 13). Replaces the installers' `npx playwright install chromium` ladders: those fetch whatever revision the npm-resolved playwright wants, unverified, and hang on apt releases playwright does not recognize (#35166). The pin version IS playwright's chromium revision, and it must equal the revision in the root package-lock's playwright-core browsers.json (chromium 1208 = browserVersion 145.0.7632.6, playwright 1.58.2) -- enforced by tests/test_chromium_pin_lockstep.py: bump playwright and this pin in ONE commit or CI fails. x64/mac/win are Chrome-for-Testing zips on the bare cdn keyed by browserVersion; linux-arm64 is the classic revision path (playwright-core's own DOWNLOAD_PATHS split). No win32-arm64 build exists upstream -- that target keeps the system-browser rung. STORE LAYOUT EXCEPTION: playwright resolves browsers by directory name under PLAYWRIGHT_BROWSERS_PATH, so these entries are named playwright's way in the shared store (chromium-1208/, no target suffix -- store_entry_name special-cases it) and installation/env.py points PLAYWRIGHT_BROWSERS_PATH at the store root. No links (banned), no per-install copies. Archives keep their internal layout (chrome-linux64/chrome etc.), and the entry gets playwright's INSTALLATION_COMPLETE marker so its registry trusts the dir. Known hazard, accepted: a hand-run `npx playwright install` from a DIFFERENT playwright version may GC entries whose revision it does not expect; the facts detect the vanish and the next sweep reprovisions. onPath false: a browser tree is not a CLI surface.",
+      "version": "1208",
+      "optional": true,
+      "onPath": false,
+      "files": {
+        "linux-x64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/linux64/chrome-linux64.zip",
+          "sha256": "b5e3195041af345a668d110f5daf5581961fa3608626ea588c97dd0fe81c4e38"
+        },
+        "linux-arm64": {
+          "url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1208/chromium-linux-arm64.zip",
+          "sha256": "70b4620521b1ada360475e1059dfe9d549a6461a79b9342f85b7d47e44123077"
+        },
+        "darwin-x64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/mac-x64/chrome-mac-x64.zip",
+          "sha256": "0de8f876af53a93f8832e54490ff7de41a9b6648211590280cb50289ed45f240"
+        },
+        "darwin-arm64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/mac-arm64/chrome-mac-arm64.zip",
+          "sha256": "3dbf04e28a02079148e9c7417840a0c1d3903361eceeee7e7eb59ef77021bdb2"
+        },
+        "win32-x64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/win64/chrome-win64.zip",
+          "sha256": "08476e6fe550ccbc0d11d1ab030292fc4e32d4987400c77b2d1905a6bd13b4f6"
+        }
+      },
+      "missingTargets": {
+        "win32-arm64": "no upstream build (neither CfT nor the classic playwright CDN ship windows-arm64); the target keeps the system-browser rung"
+      }
+    },
+    "chromium-headless-shell": {
+      "$comment": "OPTIONAL: chromium's headless companion. Playwright >=1.49 launches headless=True through chromium_headless_shell-<rev>, NOT the full chromium (playwright-core chromium.js:324), so a pin shipping only chromium would break every headless launch -- which is nearly all of them (doctor_live, google_meet, skills). Same revision lockstep, same store-naming exception, same missing win32-arm64 as chromium.",
+      "version": "1208",
+      "optional": true,
+      "onPath": false,
+      "files": {
+        "linux-x64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/linux64/chrome-headless-shell-linux64.zip",
+          "sha256": "2536e97d8f410df0394b3e7c4252e88ce9f239f04f3af4e247a26caf45baf49e"
+        },
+        "linux-arm64": {
+          "url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1208/chromium-headless-shell-linux-arm64.zip",
+          "sha256": "6bdb4349429ec33e7c0267e0eaa039c2131fa0b3b2997dec0ec96b0d40f579fd"
+        },
+        "darwin-x64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/mac-x64/chrome-headless-shell-mac-x64.zip",
+          "sha256": "4316f7f98213a173e2356406203359cd4ab5b2b2db36cb219b9d99edec746819"
+        },
+        "darwin-arm64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/mac-arm64/chrome-headless-shell-mac-arm64.zip",
+          "sha256": "8510b9b1575538aa6a092ed16d981738b2ebf52c5e41ea4c54a7ce16756cdcf5"
+        },
+        "win32-x64": {
+          "url": "https://cdn.playwright.dev/builds/cft/145.0.7632.6/win64/chrome-headless-shell-win64.zip",
+          "sha256": "839500db9e1b0865961ce8b05134ba3d3d71b82be5dec236d6c87ecd93e082cd"
+        }
+      },
+      "missingTargets": {
+        "win32-arm64": "no upstream build (neither CfT nor the classic playwright CDN ship windows-arm64); the target keeps the system-browser rung"
       }
     }
   }

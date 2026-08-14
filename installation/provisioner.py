@@ -59,6 +59,7 @@ from typing import Callable, Optional
 from installation.paths import get_install_root, resolve_bases
 from installation.tree import Sealed, runtime_tree
 from installation.registry import (
+    PLAYWRIGHT_BROWSER_TOOLS,
     PinnedFile,
     RuntimeFact,
     current_target,
@@ -255,10 +256,15 @@ def _binary_rel(tool: str, target: str) -> str:
     The entry directory carries the tool name, version and target
     (``node-26.7.0-linux-x64/``), so this is the layout INSIDE it —
     ``bin/node``, not ``node/bin/node``.
+
+    Raises for a (tool, target) pair with no known layout: the pin table
+    not carrying the target already refuses earlier (``pinned_file``),
+    so reaching None here means the table and this map drifted — record
+    nothing rather than a fact whose path is the string "None".
     """
     win = target.startswith("win32")
     ext = ".exe" if win else ""
-    return {
+    rel = {
         # The Windows node zip has node.exe at the root; POSIX has bin/node.
         "node": "node.exe" if win else "bin/node",
         # `npm -g --prefix` drops .cmd shims in the prefix root on Windows
@@ -280,7 +286,28 @@ def _binary_rel(tool: str, target: str) -> str:
                 else "camoufox-bin"
             )
         ),
+        # playwright-core's EXECUTABLE_PATHS, verbatim: the archives keep
+        # their internal layout and playwright resolves these inside the
+        # entry, so the fact records the same path playwright will run.
+        # linux-arm64 is the non-CfT build with the old dir spelling.
+        "chromium": {
+            "linux-x64": "chrome-linux64/chrome",
+            "linux-arm64": "chrome-linux/chrome",
+            "darwin-x64": "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "darwin-arm64": "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "win32-x64": "chrome-win64/chrome.exe",
+        }.get(target),
+        "chromium-headless-shell": {
+            "linux-x64": "chrome-headless-shell-linux64/chrome-headless-shell",
+            "linux-arm64": "chrome-linux/headless_shell",
+            "darwin-x64": "chrome-headless-shell-mac-x64/chrome-headless-shell",
+            "darwin-arm64": "chrome-headless-shell-mac-arm64/chrome-headless-shell",
+            "win32-x64": "chrome-headless-shell-win64/chrome-headless-shell.exe",
+        }.get(target),
     }[tool]
+    if rel is None:
+        raise KeyError(f"{tool!r} has no known binary layout for {target}")
+    return rel
 
 
 def _path_dirs(tool: str, target: str) -> Optional[list[str]]:
@@ -309,6 +336,21 @@ def _fact_path_dirs(
         return None
     entry = store_entry_name(tool, version, target)
     return [f"{entry}/{d}" for d in dirs]
+
+
+def _stage_playwright_browser(pin: PinnedFile, dest: Path, tmp: Path) -> None:
+    """A playwright browser: fetch, verify, extract — and DO NOT flatten.
+
+    Playwright resolves the executable through the archive's own top
+    directory (``chrome-linux64/chrome``), so the flattening every other
+    tool wants would break the only reader this entry exists for. The
+    ``INSTALLATION_COMPLETE`` marker is playwright's own installed-flag
+    (registry.js ``browserDirectoryToMarkerFilePath``): without it the
+    registry treats the directory as a partial download and re-fetches.
+    """
+    archive = _fetch_verified(pin, tmp)
+    _extract(archive, dest)
+    (dest / "INSTALLATION_COMPLETE").write_text("", encoding="utf-8")
 
 
 def _stage_archive(pin: PinnedFile, dest: Path, tmp: Path) -> None:
@@ -475,6 +517,10 @@ def _stage(
 
     if tool == "camoufox":
         _stage_camoufox(pin, dest, tmp)
+        return
+
+    if tool in PLAYWRIGHT_BROWSER_TOOLS:
+        _stage_playwright_browser(pin, dest, tmp)
         return
 
     _stage_archive(pin, dest, tmp)

@@ -35,7 +35,7 @@ set -euo pipefail
 # One time base for every transcript in this leg: ts_prefix stamps lines
 # relative to TS_BASE, so all logs share the driver's clock and a single
 # playback.html offset slider aligns every file with the recording.
-TS_BASE=$SECONDS
+export TS_BASE=$SECONDS
 
 PHASE="all"
 UPDATE_METHOD=""

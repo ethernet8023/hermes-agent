@@ -121,7 +121,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
               # the package's wrapper sets. A sealed venv has no repo root
               # above site-packages, so the pin table is pointed at by
               # HERMES_RUNTIME_PINS — the same bare-data-dir treatment as
-              # HERMES_OPTIONAL_SKILLS and HERMES_BUILD_INFO.
+              # HERMES_OPTIONAL_SKILLS and HERMES_INSTALL_ROOT.
               export HERMES_RUNTIME_PINS=${../installation/runtime-pins.json}
               export HERMES_RUNTIME_DIR=${runtimeDir}
 

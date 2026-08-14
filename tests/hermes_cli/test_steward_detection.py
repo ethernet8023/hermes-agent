@@ -19,13 +19,19 @@ from hermes_cli.config import get_managed_system, is_managed
 @pytest.fixture(autouse=True)
 def _no_env_override(monkeypatch):
     monkeypatch.delenv("HERMES_MANAGED", raising=False)
-    monkeypatch.delenv("HERMES_BUILD_INFO", raising=False)
+    monkeypatch.delenv("HERMES_INSTALL_ROOT", raising=False)
 
 
 def _stamp(tmp_path, monkeypatch, **fields):
-    path = tmp_path / "install-stamp.json"
+    """A stamp at a fake install root, resolved the way every steward's
+    is: through get_install_root(). No stamp-specific env override
+    exists anymore — HERMES_INSTALL_ROOT is the one knob, the same one
+    the desktop payload spawn and the nix wrapper set."""
+    root = tmp_path / "install"
+    root.mkdir(exist_ok=True)
+    path = root / "install-stamp.json"
     path.write_text(json.dumps({"commit": "a" * 40, **fields}), encoding="utf-8")
-    monkeypatch.setenv("HERMES_BUILD_INFO", str(path))
+    monkeypatch.setenv("HERMES_INSTALL_ROOT", str(root))
     return path
 
 
@@ -52,13 +58,16 @@ class TestStampDrivenDetection:
         assert get_managed_system() is None
 
     def test_missing_stamp_is_not_managed(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("HERMES_BUILD_INFO", str(tmp_path / "nope.json"))
+        empty = tmp_path / "empty-install"
+        empty.mkdir()
+        monkeypatch.setenv("HERMES_INSTALL_ROOT", str(empty))
         assert get_managed_system() is None
 
     def test_malformed_stamp_degrades_to_unmanaged(self, tmp_path, monkeypatch):
-        path = tmp_path / "install-stamp.json"
-        path.write_text("{not json", encoding="utf-8")
-        monkeypatch.setenv("HERMES_BUILD_INFO", str(path))
+        root = tmp_path / "install"
+        root.mkdir()
+        (root / "install-stamp.json").write_text("{not json", encoding="utf-8")
+        monkeypatch.setenv("HERMES_INSTALL_ROOT", str(root))
         assert get_managed_system() is None
 
 
@@ -84,6 +93,8 @@ class TestLegacyMarkerIsInert:
         home.mkdir()
         (home / ".managed").write_text("", encoding="utf-8")
         monkeypatch.setenv("HERMES_HOME", str(home))
-        monkeypatch.setenv("HERMES_BUILD_INFO", str(tmp_path / "absent.json"))
+        bare = tmp_path / "bare-install"
+        bare.mkdir()
+        monkeypatch.setenv("HERMES_INSTALL_ROOT", str(bare))
 
         assert get_managed_system() is None

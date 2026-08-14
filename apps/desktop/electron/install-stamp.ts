@@ -45,3 +45,24 @@ declare const __HERMES_INSTALL_STAMP__: InstallStamp | undefined
 /** The baked stamp of this artifact, or null on dev bundles. */
 export const INSTALL_STAMP: Readonly<InstallStamp> | null =
   typeof __HERMES_INSTALL_STAMP__ === 'undefined' ? null : Object.freeze(__HERMES_INSTALL_STAMP__)
+
+/**
+ * The install shape this process runs as — THE single split every
+ * lifecycle decision gates on (mirror of Python's runtime_tree()):
+ *  - 'bundled': the runtime ships inside the artifact. Venv machinery,
+ *    installers, repair-reinstall escalation and update checkouts must
+ *    never run; drift means rebuild, updates mean the steward.
+ *  - 'checkout': a git tree with venv machinery, provisioner-on-demand
+ *    and `hermes update`.
+ *
+ * Derived from the stamp CONSTANT, never from filesystem probes: a
+ * payload/venv/marker probe answers "is this artifact intact?", not
+ * "which shape am I?" — those probes remain only as integrity checks
+ * inside an already-chosen shape (a bundled stamp with a damaged
+ * payload throws; it must not quietly become a checkout). Dev runs
+ * (null stamp) and bootstrap artifacts are 'checkout': their runtime
+ * is a local install the app bootstraps and maintains.
+ */
+export function installShape(stamp: Readonly<InstallStamp> | null = INSTALL_STAMP): 'bundled' | 'checkout' {
+  return stamp?.payload === 'bundled' ? 'bundled' : 'checkout'
+}

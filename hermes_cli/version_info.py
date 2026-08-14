@@ -15,7 +15,6 @@ Resolution order:
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,18 +81,16 @@ def _parse_nonnegative(value: str | None) -> int | None:
 
 # --- Install stamp reader ---------------------------------------------------
 
-# The stamp file lives alongside the code in source installs (Docker writes
-# it to the project root) or at a path the Nix wrapper sets via env var
-# (the derivation output and the venv are separate store paths).
+# The stamp file lives at the install root: beside the code in source
+# checkouts and Docker (which writes it to the project root), and in the
+# artifact's resources dir for sealed installs — whose processes carry
+# HERMES_INSTALL_ROOT (the desktop payload spawn, the Nix wrapper). One
+# resolution path for every steward; no stamp-specific env override.
 def _resolve_stamp_file() -> Path | None:
-    override = os.environ.get("HERMES_BUILD_INFO")
-    if override:
-        p = Path(override)
-        return p if p.is_file() else None
-    # Source/Docker: next to the code root.
+    from installation.paths import get_install_root
     from installation.tree import BUILD_INFO_NAME
 
-    p = Path(__file__).parent.parent / BUILD_INFO_NAME
+    p = get_install_root() / BUILD_INFO_NAME
     return p if p.is_file() else None
 
 

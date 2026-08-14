@@ -267,7 +267,7 @@ stdenv.mkDerivation (finalAttrs: {
           --set HERMES_TUI_DIR $out/ui-tui \
           --set HERMES_PYTHON ${hermesVenv}/bin/python3 \
           --set HERMES_NODE ${lib.getExe hermesNpmLib.nodejs} \
-          --set HERMES_BUILD_INFO $out/share/hermes-agent/install-stamp.json${lib.optionalString (extraPythonPackages != [ ]) " \\
+          --set HERMES_INSTALL_ROOT $out/share/hermes-agent${lib.optionalString (extraPythonPackages != [ ]) " \\
           --suffix PYTHONPATH : \"${pythonPath}\""}
       '')
       [

@@ -205,6 +205,100 @@ def step_provision_runtimes() -> dict:
     return _run()
 
 
+def step_expose_cli() -> dict:
+    """Keep the user-facing ``hermes`` launchers alive across updates.
+
+    The installers write POSIX wrapper scripts into the link dir
+    (``~/.local/bin`` and friends) exactly once, at install time — so a
+    moved checkout, a recreated venv, or a user's stray ``rm`` leaves
+    stale or missing launchers that nothing repairs until a full
+    reinstall. This step makes the POST-UPDATE side own the recurring
+    maintenance: rewrite the three wrappers (hermes, hermes-agent,
+    hermes-acp) whenever their recorded shape drifts from what this
+    tree would write today. First-time PATH bootstrapping (shell-rc
+    edits, Windows registry) stays installer-side on purpose — a
+    boot-time step must not edit rc files on every update.
+
+    Config-gated by ``cli.expose_on_path`` (default true). Windows is a
+    no-op for now: venv Scripts are already User-PATH-persisted by the
+    installer, and signed-trampoline copying (bundled installs) lands
+    with the desktop payload work.
+    """
+    if sys.platform == "win32":
+        return {"ok": True, "skipped": "windows-installer-owned"}
+
+    try:
+        from hermes_cli.config import load_config
+
+        cli_cfg = (load_config() or {}).get("cli", {})
+        if isinstance(cli_cfg, dict) and not bool(cli_cfg.get("expose_on_path", True)):
+            return {"ok": True, "skipped": "config-disabled"}
+    except Exception as exc:  # noqa: BLE001 — config trouble must not kill the step
+        logger.debug("Could not read cli.expose_on_path: %s", exc)
+
+    from installation.paths import get_install_root
+
+    root = get_install_root()
+    venv_python = root / "venv" / "bin" / "python"
+    entrypoint = root / "hermes"
+    if not venv_python.is_file() or not entrypoint.is_file():
+        # Sealed/bundled trees have no venv to point wrappers at; their
+        # launchers ship with the payload. Nothing to maintain here.
+        return {"ok": True, "skipped": "no-venv-layout"}
+
+    link_dir = Path.home() / ".local" / "bin"
+    wrappers = {
+        "hermes": f'exec "{venv_python}" "{entrypoint}" "$@"',
+        "hermes-agent": f'exec "{venv_python}" "{root / "run_agent.py"}" "$@"',
+        "hermes-acp": f'exec "{venv_python}" "{entrypoint}" acp "$@"',
+    }
+
+    written: list[str] = []
+    try:
+        link_dir.mkdir(parents=True, exist_ok=True)
+        for name, exec_line in wrappers.items():
+            target = link_dir / name
+            body = (
+                "#!/usr/bin/env bash\n"
+                "unset PYTHONPATH\n"
+                "unset PYTHONHOME\n"
+                f"{exec_line}\n"
+            )
+            try:
+                existing = target.read_text(encoding="utf-8")
+            except (FileNotFoundError, UnicodeDecodeError, OSError):
+                existing = None
+            if existing == body:
+                continue  # current — do not churn mtimes every boot
+            # A launcher pointing at ANOTHER install is the user's own
+            # arrangement (two checkouts, one link dir) — leave it alone.
+            # Ours means: mentions this root in its text, OR is a symlink
+            # resolving into this root (the pre-#21454 install shape,
+            # where the link dir pointed straight at the venv console
+            # script — reading THROUGH it shows no path at all).
+            is_symlink_into_root = (
+                target.is_symlink()
+                and str(target.resolve()).startswith(str(root) + os.sep)
+            )
+            if (
+                existing is not None
+                and existing.strip()
+                and str(root) not in existing
+                and not is_symlink_into_root
+            ):
+                continue
+            # The installers' #21454 lesson: clear first, so writing can
+            # never follow an old symlink into the venv and clobber a
+            # console script.
+            target.unlink(missing_ok=True)
+            target.write_text(body, encoding="utf-8")
+            target.chmod(0o755)
+            written.append(name)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "written": written}
+
+
 # ---------------------------------------------------------------------------
 # step registries — boot_bootstrap gates each list with the matching record
 # ---------------------------------------------------------------------------
@@ -213,6 +307,7 @@ HOME_STEPS: tuple = (
     ("migrate_config", step_migrate_config),
     ("sync_skills", step_sync_skills),
     ("state_db_guard", step_state_db_guard),
+    ("expose_cli", step_expose_cli),
 )
 
 # Machine steps may be slow (network installers); boot bootstrap runs them

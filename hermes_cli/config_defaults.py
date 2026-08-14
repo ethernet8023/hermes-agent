@@ -3027,6 +3027,17 @@ DEFAULT_CONFIG = {
         "refresh_cua_driver": True,
     },
 
+    # The user-facing `hermes` command surface.
+    "cli": {
+        # Maintain the ~/.local/bin launcher wrappers (hermes,
+        # hermes-agent, hermes-acp) from the post-update bootstrap, so a
+        # moved checkout or recreated venv repairs its own launchers on
+        # next boot instead of waiting for a reinstall. First-time PATH
+        # bootstrapping (shell rc edits, Windows registry) remains the
+        # installer's job. Set false if you manage launchers yourself.
+        "expose_on_path": True,
+    },
+
     # Language Server Protocol — semantic diagnostics from real
     # language servers (pyright, gopls, rust-analyzer, etc.) wired
     # into the post-write lint check used by ``write_file`` and

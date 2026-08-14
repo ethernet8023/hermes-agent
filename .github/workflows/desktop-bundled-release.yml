@@ -344,6 +344,9 @@ jobs:
           # requires a list.)
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_TOKEN_CREDENTIALS: prod
+
+          # so fork-built bundles can continue updating from their forks
+          GITHUB_REPOSITORY: ${{ env.GITHUB_REPOSITORY }}
         run: |
           # Windows signing turns on inside run-electron-builder.mjs when the
           # AZURE_SIGN_* variables above are present. It cannot ride through

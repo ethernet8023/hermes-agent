@@ -124,6 +124,12 @@ class Requirement:
     kind: str  # import | reload | getattr
     function: str
     source_file: str
+    guarded: bool = False
+    """True when the load sits in a ``try`` that catches its failure.
+
+    A guarded requirement cannot brick an update — the old code has a
+    fallback arm — so it is reported as informational, not frozen.
+    """
 
     def key(self) -> tuple[str, str]:
         return (self.module, self.symbol or "")
@@ -191,6 +197,47 @@ def _string_constants(tree: ast.AST) -> dict[str, list[str]]:
     return out
 
 
+def _guarded_spans(func: _AnyFunc) -> list[tuple[int, int]]:
+    """Line spans of ``try`` bodies whose handlers catch an import failure.
+
+    ``except Exception``, ``except ImportError`` and bare ``except``
+    all swallow a missing name; a load inside such a body has a fallback
+    arm in the OLD code and cannot brick the update by itself.
+    """
+    spans: list[tuple[int, int]] = []
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Try):
+            continue
+        catches = False
+        for handler in node.handlers:
+            if handler.type is None:
+                catches = True
+            elif isinstance(handler.type, ast.Name) and handler.type.id in (
+                "Exception",
+                "BaseException",
+                "ImportError",
+                "ModuleNotFoundError",
+                "AttributeError",
+            ):
+                catches = True
+            elif isinstance(handler.type, ast.Tuple):
+                for el in handler.type.elts:
+                    if isinstance(el, ast.Name) and el.id in (
+                        "Exception",
+                        "ImportError",
+                        "ModuleNotFoundError",
+                        "AttributeError",
+                    ):
+                        catches = True
+        if catches and node.body:
+            first = node.body[0].lineno
+            last = max(
+                getattr(stmt, "end_lineno", stmt.lineno) for stmt in node.body
+            )
+            spans.append((first, last))
+    return spans
+
+
 def _requirements_in(
     func: _AnyFunc,
     source_file: str,
@@ -199,20 +246,38 @@ def _requirements_in(
     """Every name *func* needs from the new tree, plus what we could not read."""
     reqs: list[Requirement] = []
     unresolved: list[str] = []
+    guarded_spans = _guarded_spans(func)
 
-    def add(module: str, symbol: str | None, kind: str) -> None:
+    def _is_guarded(node: ast.AST) -> bool:
+        line = getattr(node, "lineno", None)
+        if line is None:
+            return False
+        return any(first <= line <= last for first, last in guarded_spans)
+
+    def add(
+        module: str, symbol: str | None, kind: str, node: ast.AST
+    ) -> None:
         if _first_party(module):
-            reqs.append(Requirement(module, symbol, kind, func.name, source_file))
+            reqs.append(
+                Requirement(
+                    module,
+                    symbol,
+                    kind,
+                    func.name,
+                    source_file,
+                    guarded=_is_guarded(node),
+                )
+            )
 
     for child in ast.walk(func):
         # ── plain lazy imports ─────────────────────────────────────────
         if isinstance(child, ast.ImportFrom):
             if not child.level and child.module:
                 for alias in child.names:
-                    add(child.module, alias.name, "import")
+                    add(child.module, alias.name, "import", child)
         elif isinstance(child, ast.Import):
             for alias in child.names:
-                add(alias.name, None, "import")
+                add(alias.name, None, "import", child)
 
         # ── dynamic loads ──────────────────────────────────────────────
         elif isinstance(child, ast.Call):
@@ -229,10 +294,10 @@ def _requirements_in(
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                     # importlib.reload("x") is not legal, but
                     # import_module("x") is — same requirement either way.
-                    add(arg.value, None, "reload")
+                    add(arg.value, None, "reload", child)
                 elif isinstance(arg, ast.Name) and arg.id in constants:
                     for module in constants[arg.id]:
-                        add(module, None, "reload")
+                        add(module, None, "reload", child)
                 else:
                     # A reload of a loop variable: find the collection the
                     # loop walks. `for m in (...)` / `for m in CONST`.
@@ -256,7 +321,7 @@ def _requirements_in(
                         elif isinstance(loop.iter, ast.Name):
                             names = constants.get(loop.iter.id, [])
                         for module in names:
-                            add(module, None, "reload")
+                            add(module, None, "reload", child)
                             resolved = True
                     if not resolved:
                         try:
@@ -270,7 +335,7 @@ def _requirements_in(
                 if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
                     module = _module_of(holder)
                     if module:
-                        add(module, attr.value, "getattr")
+                        add(module, attr.value, "getattr", child)
 
     return reqs, unresolved
 
@@ -446,6 +511,13 @@ class Surface:
     required: dict[tuple[str, str], set[str]] = field(default_factory=dict)
     kinds: dict[tuple[str, str], set[str]] = field(default_factory=dict)
     sites: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+    guarded_only: set[tuple[str, str]] = field(default_factory=set)
+    """Pairs whose every load site sits under a swallowing ``try``.
+
+    These cannot brick an update (the old code has a fallback arm), so
+    they are informational: reported, but absent from the frozen surface
+    and never fatal in ``--check``.
+    """
     unresolved: set[str] = field(default_factory=set)
     stats: dict = field(default_factory=dict)
 
@@ -459,6 +531,7 @@ def audit_history() -> Surface:
     surface = Surface()
     memo: dict[int, Analysis | None] = {}
     distinct = 0
+    bare_pairs: set[tuple[str, str]] = set()
 
     for ref, source in blobs.items():
         commit, _, path = ref.partition(":")
@@ -477,8 +550,11 @@ def audit_history() -> Surface:
             surface.sites.setdefault(req.key(), set()).add(
                 f"{req.source_file}:{req.function}"
             )
+            if not req.guarded:
+                bare_pairs.add(req.key())
         surface.unresolved.update(analysis.unresolved)
 
+    surface.guarded_only = set(surface.required) - bare_pairs
     surface.stats = {
         "commits": len(commits),
         "revisions_read": len(blobs),
@@ -551,15 +627,54 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--explain", metavar="MODULE", help="Show every requirement on MODULE."
     )
+    parser.add_argument(
+        "--freeze",
+        metavar="PATH",
+        help="Write the surface as JSON (the file the enforcing test reads). "
+        "CI clones are often shallow, which would silently shrink a "
+        "re-walked surface — so the walk happens here, on a full clone, "
+        "and the test only resolves the frozen names.",
+    )
     ns = parser.parse_args(argv)
 
     surface = audit_history()
 
+    if ns.freeze:
+        payload = {
+            "_comment": (
+                "Generated by scripts/audit-old-updater-imports.py --freeze. "
+                "Names an already-running `hermes update` loads from the NEW "
+                "tree after the checkout swap. Deleting a bare name bricks "
+                "every release that loads it, mid-update, on a half-new "
+                "tree. Regenerate on a FULL clone after changing the update "
+                "flow; never hand-trim."
+            ),
+            "stats": surface.stats,
+            "bare": sorted(
+                f"{m}::{s}"
+                for (m, s) in surface.required
+                if (m, s) not in surface.guarded_only
+            ),
+            "guarded_only": sorted(
+                f"{m}::{s}" for (m, s) in surface.guarded_only
+            ),
+        }
+        Path(ns.freeze).write_text(json.dumps(payload, indent=2) + "\n")
+        print(
+            f"froze {len(payload['bare'])} bare + "
+            f"{len(payload['guarded_only'])} guarded pairs -> {ns.freeze}"
+        )
+        return 0
+
     missing = []
+    soft_missing = []
     for (module, symbol), commits in sorted(surface.required.items()):
         ok, why = resolve_in_tree(module, symbol or None, REPO_ROOT)
         if not ok:
-            missing.append((module, symbol, sorted(commits), why))
+            if (module, symbol) in surface.guarded_only:
+                soft_missing.append((module, symbol, sorted(commits), why))
+            else:
+                missing.append((module, symbol, sorted(commits), why))
 
     if ns.explain:
         print(f"Requirements on {ns.explain!r}:")
@@ -586,6 +701,7 @@ def main(argv: list[str] | None = None) -> int:
                             "kinds": sorted(surface.kinds[(m, s)]),
                             "commits": sorted(c),
                             "sites": sorted(surface.sites[(m, s)]),
+                            "guarded_only": (m, s) in surface.guarded_only,
                         }
                         for (m, s), c in sorted(surface.required.items())
                     ],
@@ -593,6 +709,10 @@ def main(argv: list[str] | None = None) -> int:
                     "missing": [
                         {"module": m, "symbol": s or None, "commits": c, "why": w}
                         for m, s, c, w in missing
+                    ],
+                    "soft_missing": [
+                        {"module": m, "symbol": s or None, "commits": c, "why": w}
+                        for m, s, c, w in soft_missing
                     ],
                 },
                 indent=2,
@@ -612,15 +732,30 @@ def main(argv: list[str] | None = None) -> int:
         for kind in kinds:
             by_kind[kind] = by_kind.get(kind, 0) + 1
     kinds_summary = ", ".join(f"{v} {k}" for k, v in sorted(by_kind.items()))
+    hard = {k for k in surface.required if k not in surface.guarded_only}
     print(
-        f"FROZEN COMPAT SURFACE — {len(surface.required)} module/symbol pairs "
-        f"an old updater can load from the NEW tree ({kinds_summary}):"
+        f"FROZEN COMPAT SURFACE — {len(hard)} module/symbol pairs an old "
+        f"updater can load BARE from the NEW tree ({kinds_summary} overall; "
+        f"{len(surface.guarded_only)} more guarded-only, listed after):"
     )
     by_module: dict[str, list[str]] = {}
-    for module, symbol in surface.required:
+    for module, symbol in hard:
         by_module.setdefault(module, []).append(symbol or "<module>")
     for module in sorted(by_module):
         print(f"  {module}: {', '.join(sorted(by_module[module]))}")
+
+    if surface.guarded_only:
+        print()
+        print(
+            f"GUARDED-ONLY — {len(surface.guarded_only)} pairs loaded solely "
+            f"under a swallowing try (deleting one degrades a fallback arm, "
+            f"not the update):"
+        )
+        by_module = {}
+        for module, symbol in surface.guarded_only:
+            by_module.setdefault(module, []).append(symbol or "<module>")
+        for module in sorted(by_module):
+            print(f"  {module}: {', '.join(sorted(by_module[module]))}")
 
     if surface.unresolved:
         print()
@@ -642,6 +777,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    [{kinds}] {why}\n        from {where}  [{shown}{more}]")
     else:
         print("✓ every name an old updater needs still exists in this tree")
+
+    if soft_missing:
+        print()
+        print(
+            f"○ {len(soft_missing)} guarded-only name(s) gone — fallback arms "
+            f"now taken, worth knowing but not fatal:"
+        )
+        for module, symbol, commits, why in soft_missing:
+            where = ", ".join(sorted(surface.sites[(module, symbol or "")])[:2])
+            print(f"    {why}  (from {where})")
 
     return 1 if (missing and ns.check) else 0
 

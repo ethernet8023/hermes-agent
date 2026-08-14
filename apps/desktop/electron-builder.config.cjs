@@ -173,7 +173,9 @@ module.exports = {
     // Copilot hardware key floor anyway.
     minVersion: '10.0.22621.0',
     maxVersionTested: '10.0.26100.0',
-    customExtensionsPath: copilotKeyFragmentPath()
+    customExtensionsPath: copilotKeyFragmentPath(),
+    // Without this the Start tile renders logo-only, no app name.
+    showNameOnTiles: true
   },
   linux: {
     category: 'Development',
@@ -192,6 +194,41 @@ module.exports = {
     warningsAsErrors: false
   }
 }
+
+// ── msix assets ─────────────────────────────────────────────────────────────
+
+// MSIX tile/store logos. Without these, makeappx falls back to
+// app-builder-lib's bundled SampleAppx.*.png placeholders — the packaged app
+// installs with a generic gray sample icon in Start/taskbar/Settings.
+//
+// MsixTarget discovers user assets via getResource(undefined, "appx"), which
+// only looks inside directories.buildResources (default: build/ — gitignored
+// scratch). The committed source of truth lives in assets/appx/; this stages
+// it into build/appx/ at config-require time, same pattern as the copilot
+// key fragment above. Regenerate from assets/icon.png with ImageMagick:
+//   magick assets/icon.png -resize 44x44   assets/appx/Square44x44Logo.png
+//   magick assets/icon.png -resize 50x50   assets/appx/StoreLogo.png
+//   magick assets/icon.png -resize 150x150 assets/appx/Square150x150Logo.png
+//   magick assets/icon.png -resize 128x128 -background none -gravity center \
+//     -extent 310x150 assets/appx/Wide310x150Logo.png
+function stageMsixAssets() {
+  const sourceDir = path.join(__dirname, 'assets', 'appx')
+  const stageDir = path.join(__dirname, 'build', 'appx')
+  fs.mkdirSync(stageDir, { recursive: true })
+  const staged = []
+  for (const name of fs.readdirSync(sourceDir)) {
+    if (!name.endsWith('.png')) {
+      continue
+    }
+    fs.copyFileSync(path.join(sourceDir, name), path.join(stageDir, name))
+    staged.push(name)
+  }
+  if (staged.length === 0) {
+    throw new Error(`no MSIX assets found in ${sourceDir}`)
+  }
+  return staged
+}
+stageMsixAssets()
 
 // ── copilot key provider fragment ───────────────────────────────────────────
 

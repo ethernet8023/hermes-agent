@@ -11,7 +11,7 @@
 // app-builder-lib's dist because the exports map hides the internals; the
 // paths are the same ones MsixTarget itself uses, so a bump that moves
 // them fails here loudly.
-import { readFile } from "node:fs/promises"
+import { readFile, readdir } from "node:fs/promises"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -19,9 +19,12 @@ import { fileURLToPath } from "node:url"
 import {
   buildCapabilitiesXml,
   buildExtensionsXml,
+  defaultTileTag,
+  lockScreenTag,
   resolvePackageApplicationId,
   resolvePackageIdentityName,
   resourceLanguageTag,
+  splashScreenTag,
   substituteManifestMacros,
 } from "../../../node_modules/app-builder-lib/dist/targets/win/winAppUtil.js"
 
@@ -45,6 +48,12 @@ const executable = `app\\${config.productName}.exe`
 const displayName = options.displayName || config.productName
 // appInfo.name honours extraMetadata.name the way packager merging does.
 const appInfoName = config.extraMetadata?.name || pkg.name
+
+// Same asset discovery as computeUserAssets: requiring the config staged
+// assets/appx/ into build/appx/ (the buildResources "appx" dir MsixTarget
+// reads), so listing it here sees exactly what the win32 lane packs.
+const userAssets = (await readdir(path.join(desktop, "build", "appx")))
+  .filter((it) => !it.startsWith(".") && !it.endsWith(".db") && it.includes("."))
 
 const extensions = await buildExtensionsXml({
   protocols: config.protocols,
@@ -81,9 +90,9 @@ const manifest = substituteManifestMacros(template, (m) => {
     case "logo": return "assets\\StoreLogo.png"
     case "square150x150Logo": return "assets\\Square150x150Logo.png"
     case "square44x44Logo": return "assets\\Square44x44Logo.png"
-    case "lockScreen": return ""
-    case "defaultTile": return ""
-    case "splashScreen": return ""
+    case "lockScreen": return lockScreenTag(userAssets)
+    case "defaultTile": return defaultTileTag(userAssets, options.showNameOnTiles || false)
+    case "splashScreen": return splashScreenTag(userAssets)
     case "arch": return arch
     case "resourceLanguages": return resourceLanguageTag(options.languages)
     case "capabilities": return `<Capabilities>\n${buildCapabilitiesXml(options.capabilities)}\n</Capabilities>`

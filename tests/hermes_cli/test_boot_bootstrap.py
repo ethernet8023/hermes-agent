@@ -477,3 +477,71 @@ def test_bootstrap_records_live_inside_the_state_folder(repo, tmp_path, monkeypa
     state = boot_bootstrap.install_state_dir(repo)
     assert home == state / "bootstrap" / "default.json"
     assert machine == state / "bootstrap" / "machine.json"
+
+
+class TestSealedDriftBackstop:
+    """_report_sealed_runtime_drift — every boot of a drifted sealed tree
+    says so; nothing else makes a sound, and nothing ever gates boot."""
+
+    def _sealed_tree(self, tmp_path):
+        root = tmp_path / "sealed"
+        root.mkdir()
+        (root / "install-stamp.json").write_text(
+            json.dumps({"schemaVersion": 2, "commit": "a" * 40, "distribution": "docker"}),
+            encoding="utf-8",
+        )
+        return root
+
+    def test_drifted_sealed_tree_reports_to_stderr(self, tmp_path, capsys, monkeypatch):
+        import installation.provisioner as prov
+
+        root = self._sealed_tree(tmp_path)
+        monkeypatch.setattr(
+            prov, "stale_tools", lambda **kw: {"node": ("26.7.0", "26.5.1")}
+        )
+        message = boot_bootstrap._report_sealed_runtime_drift(root)
+        assert message is not None and "node" in message
+        err = capsys.readouterr().err
+        assert "docker" in err and "26.7.0" in err and "26.5.1" in err
+
+    def test_current_sealed_tree_is_silent(self, tmp_path, capsys, monkeypatch):
+        import installation.provisioner as prov
+
+        root = self._sealed_tree(tmp_path)
+        monkeypatch.setattr(prov, "stale_tools", lambda **kw: {})
+        assert boot_bootstrap._report_sealed_runtime_drift(root) is None
+        assert capsys.readouterr().err == ""
+
+    def test_checkout_is_silent_even_with_drift(self, repo, capsys, monkeypatch):
+        """A checkout provisions on demand; drift there is self-healing
+        and must not produce boot noise."""
+        import installation.provisioner as prov
+
+        monkeypatch.setattr(
+            prov, "stale_tools", lambda **kw: {"node": ("26.7.0", None)}
+        )
+        assert boot_bootstrap._report_sealed_runtime_drift(repo) is None
+        assert capsys.readouterr().err == ""
+
+    def test_a_broken_check_never_gates_boot(self, tmp_path, monkeypatch):
+        import installation.provisioner as prov
+
+        root = self._sealed_tree(tmp_path)
+
+        def explode(**kw):
+            raise RuntimeError("facts file corrupted")
+
+        monkeypatch.setattr(prov, "stale_tools", explode)
+        assert boot_bootstrap._report_sealed_runtime_drift(root) is None
+
+    def test_drift_lands_in_the_boot_summary(self, tmp_path, capsys, monkeypatch):
+        import installation.provisioner as prov
+
+        root = self._sealed_tree(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setattr(
+            prov, "stale_tools", lambda **kw: {"uv": ("0.12.3", "0.11.6")}
+        )
+        summary = run_boot_bootstrap(root)
+        assert "uv" in summary.get("sealed_runtime_drift", "")

@@ -38,6 +38,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -379,6 +380,43 @@ class _RecordLock:
 # the boot entry point
 # ---------------------------------------------------------------------------
 
+def _report_sealed_runtime_drift(project_root: Path) -> str | None:
+    """Check a SEALED tree's managed tools against its pin table, loudly.
+
+    ``require_current_runtimes`` is the artifact-time gate (docker build,
+    nix check, desktop payload staging). This is the boot-time backstop
+    for artifacts assembled around those gates: every boot of a drifted
+    sealed tree prints the steward message to stderr, so the drift is
+    impossible to not-know about.
+
+    Report, not refusal: this runs inside the never-raises boot path, and
+    a sealed gateway that boots on stale tools is degraded — but a
+    gateway that refuses to boot over a tool version is DOWN, remotely,
+    with the fix (rebuild the artifact) out of the machine's own reach.
+    The message names the steward; the steward's own gate is the wall.
+
+    Returns the message when drift was found (for the boot summary), None
+    otherwise. Checkouts return None without reading anything — they
+    provision on demand and drift is their normal, self-healing state.
+    """
+    try:
+        from installation.provisioner import (
+            StaleManagedRuntimes,
+            require_current_runtimes,
+        )
+    except Exception as exc:  # noqa: BLE001 — a backstop must not become a gate
+        logger.debug("sealed runtime drift check unavailable: %s", exc)
+        return None
+    try:
+        require_current_runtimes(project_root=project_root)
+    except StaleManagedRuntimes as exc:
+        print(f"\n✗ {exc}\n", file=sys.stderr)
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("sealed runtime drift check failed: %s", exc)
+    return None
+
+
 def run_boot_bootstrap(project_root: Path) -> dict:
     """Run due home- and machine-scoped steps for this install. Returns a
     summary dict (for tests/logs); use maybe_run_boot_bootstrap at call
@@ -386,6 +424,10 @@ def run_boot_bootstrap(project_root: Path) -> dict:
     from hermes_cli import post_update
 
     summary: dict = {"home": "skipped", "machine": "skipped"}
+
+    drift_message = _report_sealed_runtime_drift(Path(project_root))
+    if drift_message:
+        summary["sealed_runtime_drift"] = drift_message
 
     for scope, steps, deferred in (
         ("home", post_update.HOME_STEPS, False),

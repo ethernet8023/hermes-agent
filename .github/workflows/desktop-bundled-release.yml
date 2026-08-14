@@ -202,6 +202,19 @@ jobs:
             apps/desktop/build/agent-payload/.stage-cache-key
           key: agent-payload-${{ matrix.target.label }}-py${{ env.HERMES_PAYLOAD_PYTHON }}-${{ hashFiles('uv.lock') }}
 
+      # ── electron-builder winCodeSign cache ─────────────────────────────
+      # electron-builder downloads its winCodeSign tooling bundle (signtool
+      # wrappers, rcedit, etc.) from GitHub on first use of every run. The
+      # version is part of the directory name, so the key is static: a new
+      # electron-builder pin that bumps winCodeSign lands in a new path and
+      # simply misses this cache until the path below is updated.
+      - name: Cache electron-builder winCodeSign
+        if: startsWith(matrix.target.label, 'win32-')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\Users\runneradmin\AppData\Local\electron-builder\Cache\win-codesign@1.3.0
+          key: electron-builder-win-codesign-1.3.0
+
       # ── Azure OIDC login for Windows signing ───────────────────────────
       # No client secret exists anywhere. GitHub mints an OIDC token for
       # this job; Azure redeems it only when the token's subject matches

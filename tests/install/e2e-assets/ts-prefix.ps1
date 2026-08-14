@@ -13,6 +13,9 @@ $script:TsPrefixStart = Get-Date
 function Add-TsPrefix {
     process {
         $t = (Get-Date) - $script:TsPrefixStart
-        "[+{0:D2}:{1:D2}] {2}" -f [math]::Floor($t.TotalMinutes), [math]::Floor($t.TotalSeconds % 60), $_
+        # {0:00} not {0:D2}: Floor() returns a double and the D specifier
+        # is integer-only - it throws per line, and under the driver's
+        # relaxed EAP every line errors into the void (empty transcripts).
+        "[+{0:00}:{1:00}] {2}" -f [math]::Floor($t.TotalMinutes), [math]::Floor($t.TotalSeconds % 60), $_
     }
 }

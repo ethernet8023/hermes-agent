@@ -283,14 +283,14 @@ export function renderMarkdownPlan(envs, tags) {
  *   when the pair is declared but no driver arm runs it yet.
  * @param {Map<string, number>} [artifactById] Artifact name -> id for this
  *   run (the report job's --artifacts). Legs that RAN (success or failure)
- *   get a 📼 link: the leg's player artifact (playback.html, archive:false
- *   — GitHub names those after the FILE, so they all collide on
- *   `playback.html` and any one of them works, they are the same blob)
- *   with ?zip= pointing at the leg's logs artifact. Logs artifacts are
- *   `install-e2e-logs-<leg_id>` (windows) or `install-e2e-logs-<leg_id>-<sha>`
- *   (posix arms append the sha at upload) — matched by prefix. leg_id is
- *   rebuilt from the parsed job name with the same formula the generator
- *   mints (legId).
+ *   get TWO links: 📼 to the run's single player artifact (playback.html,
+ *   archive:false names artifacts after the FILE) with the leg's logs zip
+ *   as a #zip= HASH param — the artifact URL 307s server-side and strips
+ *   the query, the hash survives — and ⬇️ to the raw logs zip. Logs
+ *   artifacts are `install-e2e-logs-<leg_id>` (windows) or
+ *   `install-e2e-logs-<leg_id>-<sha>` (posix arms append the sha at
+ *   upload) — matched by prefix. leg_id is rebuilt from the parsed job
+ *   name with the same formula the generator mints (legId).
  * @returns {string}
  */
 export function renderMarkdownResults(jobs, tagAnnotations = [], artifactById = new Map()) {
@@ -333,15 +333,17 @@ export function renderMarkdownResults(jobs, tagAnnotations = [], artifactById = 
     // Logs artifacts: `install-e2e-logs-<leg_id>` (windows) or with a
     // trailing `-<sha>` (posix arms append it at upload). Match by prefix.
     const logsName = [...artifactById.keys()].find((n) => n.startsWith(`install-e2e-logs-${legId2}`));
-    // Player artifacts: upload-artifact `archive: false` names the
-    // artifact after the FILE (playback.html), ignoring `name:` — so
-    // every leg's player artifact is called `playback.html`, and they
-    // are all the same blob. Any one of them works.
+    // Player artifacts: the single per-run leg-player upload; archive:
+    // false names it after the FILE (playback.html), ignoring `name:`.
     const playerName = [...artifactById.keys()].find((n) => n === 'playback.html');
     const playerId = playerName !== undefined ? artifactById.get(playerName) : undefined;
     const logsId = logsName !== undefined ? artifactById.get(logsName) : undefined;
+    // Two links per ran leg: the player with the zip as a HASH param
+    // (GitHub's artifact URL 307s to /suites/... and strips the query —
+    // the hash survives client-side), and the raw zip download.
+    const runBase = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
     const reel = (playerId !== undefined && logsId !== undefined)
-      ? ` [📼](https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${playerId}?zip=${encodeURIComponent(`https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${logsId}`)})`
+      ? ` [📼](${runBase}/artifacts/${playerId}#zip=${encodeURIComponent(`${runBase}/artifacts/${logsId}`)}) [⬇️](${runBase}/artifacts/${logsId})`
       : '';
     switch (job.conclusion) {
       case 'success': return `&#x2705;${reel}`;

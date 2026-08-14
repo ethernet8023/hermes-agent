@@ -134,23 +134,10 @@ jobs:
               -c copy "${{ runner.temp }}/e2e-logs/recording.mp4"
           fi
 
-      # The leg player: one static HTML, uploaded BEFORE the driver runs
-      # (if: always() covers failures too). Single file, no zip, so the
-      # artifacts URL serves playback.html directly.
-      - name: Upload leg player
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: install-e2e-player-${{ inputs.leg-id }}
-          path: tests/install/e2e-assets/playback.html
-          archive: false
-          retention-days: 14
-          if-no-files-found: error
-
-      # Artifact names cannot contain '/', and install-ref may be a full ref
-      # like refs/heads/main. GitHub Actions expressions have no string-replace
-      # function, so build the safe name here. Runs even on failure -- that is
-      # exactly when the logs are wanted.
+      # The leg player: ONE static HTML per run, uploaded up front by the
+      # leg-player job in install-e2e.yml (archive: false, so GitHub names
+      # the artifact after the file: playback.html). The report job links
+      # every ran leg to it with the leg's zip as a #zip= hash param.
       - name: Build artifact name
         if: always()
         id: artifact

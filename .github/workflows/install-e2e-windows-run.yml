@@ -119,16 +119,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Upload leg player
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: install-e2e-player-${{ inputs.leg-id }}
-          path: tests/install/e2e-assets/playback.html
-          archive: false
-          retention-days: 14
-          if-no-files-found: error
-
       # One recording mechanism on every OS: the composite action installs
       # ffmpeg (cached - winget's download is the slow part), starts the
       # capture, and record-stop fails on a zero-frame file so a silently

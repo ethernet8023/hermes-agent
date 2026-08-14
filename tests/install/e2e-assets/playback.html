@@ -269,6 +269,19 @@ async function loadZip(url) {
   return true;
 }
 
+/**
+ * Resolve the zip URL: hash param wins (?zip= gets stripped by GitHub's
+ * artifact redirect, the hash survives), then the query param.
+ * @returns {string | null}
+ */
+function resolveZipUrl() {
+  const m = location.hash.match(/(?:^|[#&])zip=([^&]+)/);
+  if (m) {
+    try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+  }
+  return new URLSearchParams(location.search).get('zip');
+}
+
 /* drag-drop + file picker: the universal transport for auth-gated zips */
 const fileInput = document.createElement('input');
 fileInput.type = 'file';
@@ -339,13 +352,15 @@ function boot() {
 }
 
 async function main() {
-  const params = new URLSearchParams(location.search);
-  const zipUrl = params.get('zip');
+  const zipUrl = resolveZipUrl();
   if (zipUrl) {
+    // Attempt the direct fetch (works when the page is served on
+    // github.com itself — same-origin, session cookies flow). On failure
+    // the status line becomes a download link + drop target.
     if (await loadZip(zipUrl)) boot();
   } else {
-    // No ?zip=: this is the manual path — the leg player artifact page or
-    // a local copy. Drop or pick a leg zip.
+    // No zip param: this is the manual path — the leg player artifact
+    // page or a local copy. Drop or pick a leg zip.
     statusEl.className = 'error';
     statusEl.innerHTML =
       'Drop a leg artifact zip anywhere on this page (or click here to pick the file).';

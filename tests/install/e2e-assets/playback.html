@@ -60,6 +60,7 @@
     border-radius: 3px; }
   .line:hover { background: rgba(88,166,255,.08); }
   .line .ts { color: var(--dim); margin-right: 8px; user-select: none; }
+  .line .file { color: #7ee787; margin-right: 8px; user-select: none; }
   .line.synced { color: var(--accent); }
   #noSync { color: var(--dim); padding: 4px 10px; font-size: 12px; }
   #syncing { position: sticky; top: 0; z-index: 3; background: rgba(13,17,23,.9);
@@ -191,6 +192,12 @@ function renderPane(scrollToEnd) {
         $('video').play().catch(() => {});
       };
     }
+    if (ln.file) {
+      const file = document.createElement('span');
+      file.className = 'file';
+      file.textContent = `${ln.file}: `;
+      div.appendChild(file);
+    }
     div.appendChild(document.createTextNode(ln.text));
     frag.appendChild(div);
   }
@@ -227,6 +234,27 @@ function syncPane() {
 }
 
 /* ── zip loading ───────────────────────────────────────────────────────── */
+/**
+ * Merge every log into one timeline, in time order, with each line
+ * filename-prefixed. Untimed lines inherit the previous timed line of
+ * their file so ordering within a file survives the sort.
+ * @param {Map<string, {lines: {ts: number | null, text: string}[]}>} logs
+ * @returns {{lines: {ts: number, text: string, file: string}[], hasTs: boolean}}
+ */
+function buildMergedLog(logs) {
+  /** @type {{ts: number, text: string, file: string}[]} */
+  const merged = [];
+  for (const [name, entry] of logs) {
+    let lastTs = 0;
+    for (const ln of entry.lines) {
+      if (ln.ts !== null) lastTs = ln.ts;
+      merged.push({ ts: lastTs, text: ln.text, file: name });
+    }
+  }
+  merged.sort((a, b) => a.ts - b.ts);
+  return { lines: merged, hasTs: true };
+}
+
 async function loadZipFromBlob(blob, label) {
   const zip = await JSZip.loadAsync(await blob.arrayBuffer());
   const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
@@ -242,6 +270,9 @@ async function loadZipFromBlob(blob, label) {
     state.logs.set(n, { lines, hasTs: lines.some((l) => l.ts !== null) });
   }
   if (state.logs.size === 0) throw new Error('no *.log files in the zip');
+  // The merged view comes first: one timeline across every log, synced
+  // to the video like any other tab.
+  state.logs = new Map([['ALL · merged', buildMergedLog(state.logs)], ...state.logs]);
   state.zipName = label || 'leg artifact';
   state.activeTab = [...state.logs.keys()][0];
 }

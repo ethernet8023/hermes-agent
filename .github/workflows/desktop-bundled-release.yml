@@ -102,12 +102,16 @@ jobs:
       HERMES_PAYLOAD_TAG: ${{ github.event.inputs.tag || github.ref_name }}
       HERMES_PAYLOAD_PYTHON: '3.11'
     steps:
-      # disable spotlight. for speed and dmg detaching flakiness
+      # disable spotlight and XProtect. for speed and dmg detaching flakiness
+      # both of thsese are documented as reasons for dmg detach failures
       # ("hdiutil: couldn't eject — Resource busy")
-      - name: Disable Spotlight indexing
+      - name: Disable Spotlight indexing & XProtect
         if: startsWith(matrix.target.label, 'darwin-')
         shell: bash
-        run: sudo mdutil -a -i off || true
+        run: |
+          sudo mdutil -a -i off || true
+          echo killing...; sudo pkill -9 XProtect >/dev/null || true;
+          echo waiting...; while pgrep XProtect; do sleep 3; done;
 
       - name: Validate tag shape
         shell: bash

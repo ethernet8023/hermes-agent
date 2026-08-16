@@ -267,7 +267,12 @@ def test_make_tui_argv_dev_prebuilds_hermes_ink(monkeypatch, main_mod, tmp_path)
     monkeypatch.setattr(main_mod, "_ensure_tui_node", lambda: None)
     monkeypatch.setattr(main_mod, "_tui_need_npm_install", lambda _tui_dir: False)
     monkeypatch.delenv("HERMES_TUI_DIR", raising=False)
-    monkeypatch.setattr(main_mod.shutil, "which", lambda bin_name: f"/usr/bin/{bin_name}")
+    # _make_tui_argv resolves the PINNED npm/node via installation.nodejs
+    # now (738a986e00), not shutil.which — stub the pinned resolvers.
+    from installation import nodejs as _nodejs
+
+    monkeypatch.setattr(_nodejs, "npm_path", lambda: Path("/usr/bin/npm"))
+    monkeypatch.setattr(_nodejs, "node_path", lambda: Path("/usr/bin/node"))
 
     calls = []
 

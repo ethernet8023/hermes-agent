@@ -141,16 +141,16 @@ class TestBuildWebUISkipsWhenFresh:
 
         install_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
         build_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
-        with patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), \
-             patch("hermes_cli.main.subprocess.run", return_value=install_cp) as mock_run, \
+        with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
+             patch("installation.nodejs.npm_install", return_value=install_cp) as mock_install, \
              patch("hermes_cli.main._run_with_idle_timeout", return_value=build_cp):
             result = _build_web_ui(web_dir)
 
         assert result is True
-        args, kwargs = mock_run.call_args
-        assert "--workspace" not in args[0]
-        assert args[0] == ["/usr/bin/npm", "ci", "--include=dev", "--silent", "--prefer-offline"]
-        assert kwargs["cwd"] == web_dir
+        args, kwargs = mock_install.call_args
+        assert args[0] == web_dir
+        assert "--workspace" not in kwargs["extra_args"]
+        assert "--prefer-offline" in kwargs["extra_args"]
 
     def test_workspace_root_install_names_update_closure(self, tmp_path, monkeypatch):
         """From the workspace root, _build_web_ui must install the SAME
@@ -171,18 +171,18 @@ class TestBuildWebUISkipsWhenFresh:
 
         install_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
         build_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
-        with patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), \
-             patch("hermes_cli.main.subprocess.run", return_value=install_cp) as mock_run, \
+        with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
+             patch("installation.nodejs.npm_install", return_value=install_cp) as mock_install, \
              patch("hermes_cli.main._run_with_idle_timeout", return_value=build_cp):
             result = _build_web_ui(web_dir)
 
         assert result is True
-        args, kwargs = mock_run.call_args
-        cmd = args[0]
+        args, kwargs = mock_install.call_args
+        cmd = kwargs["extra_args"]
         assert "--include-workspace-root" in cmd
-        assert cmd.count("--workspace") == 2
+        assert list(cmd).count("--workspace") == 2
         assert "ui-tui" in cmd and "web" in cmd
-        assert kwargs["cwd"] == tmp_path
+        assert args[0] == tmp_path
 
     def test_workspace_root_install_skips_missing_ui_tui(self, tmp_path, monkeypatch):
         """A checkout without the ui-tui workspace must not name it — npm
@@ -194,13 +194,13 @@ class TestBuildWebUISkipsWhenFresh:
 
         install_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
         build_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
-        with patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), \
-             patch("hermes_cli.main.subprocess.run", return_value=install_cp) as mock_run, \
+        with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
+             patch("installation.nodejs.npm_install", return_value=install_cp) as mock_install, \
              patch("hermes_cli.main._run_with_idle_timeout", return_value=build_cp):
             result = _build_web_ui(web_dir)
 
         assert result is True
-        cmd = mock_run.call_args[0][0]
+        cmd = mock_install.call_args.kwargs["extra_args"]
         assert "ui-tui" not in cmd
         assert "--include-workspace-root" in cmd
         assert "web" in cmd
@@ -216,8 +216,8 @@ class TestBuildWebUISkipsWhenFresh:
 
         install_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
         build_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
-        with patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), \
-             patch("hermes_cli.main.subprocess.run", return_value=install_cp), \
+        with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
+             patch("installation.nodejs.npm_install", return_value=install_cp), \
              patch("hermes_cli.main._run_with_idle_timeout", return_value=build_cp) as mock_idle:
             result = _build_web_ui(web_dir)
 
@@ -240,9 +240,9 @@ class TestBuildWebUIRetryAndStaleFallback:
         # build attempt 1: fail; build attempt 2: success.
         build_fail = Subprocess.CompletedProcess([], 1, stdout="EPERM", stderr="")
         build_ok = Subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), \
+        with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
              patch("hermes_cli.main._time.sleep") as mock_sleep, \
-             patch("hermes_cli.main.subprocess.run", return_value=install_ok), \
+             patch("installation.nodejs.npm_install", return_value=install_ok), \
              patch("hermes_cli.main._run_with_idle_timeout",
                    side_effect=[build_fail, build_ok]) as mock_idle:
             result = _build_web_ui(web_dir)
@@ -260,9 +260,9 @@ class TestBuildWebUIRetryAndStaleFallback:
         Subprocess = __import__("subprocess")
         install_ok = Subprocess.CompletedProcess([], 0, stdout="", stderr="")
         build_fail = Subprocess.CompletedProcess([], 1, stdout="vite ENOMEM", stderr="")
-        with patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), \
+        with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
              patch("hermes_cli.main._time.sleep"), \
-             patch("hermes_cli.main.subprocess.run", return_value=install_ok), \
+             patch("installation.nodejs.npm_install", return_value=install_ok), \
              patch("hermes_cli.main._run_with_idle_timeout",
                    side_effect=[build_fail, build_fail]):
             result = _build_web_ui(web_dir, fatal=True)
@@ -390,7 +390,7 @@ class TestBuildRecoversFromMissingToolchain:
         build_ok = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
 
         with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
-             patch("hermes_cli.main._run_npm_install_deterministic", return_value=install_ok) as mock_install, \
+             patch("installation.nodejs.npm_install", return_value=install_ok) as mock_install, \
              patch("hermes_cli.main._run_with_idle_timeout", side_effect=[build_fail, build_ok]) as mock_build, \
              patch("hermes_cli.main._web_ui_build_needed", return_value=True), \
              patch("hermes_cli.main._write_web_ui_build_stamp"), \
@@ -410,7 +410,7 @@ class TestBuildRecoversFromMissingToolchain:
         build_ok = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
 
         with patch("hermes_cli.main._resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
-             patch("hermes_cli.main._run_npm_install_deterministic", return_value=install_ok) as mock_install, \
+             patch("installation.nodejs.npm_install", return_value=install_ok) as mock_install, \
              patch("hermes_cli.main._run_with_idle_timeout", return_value=build_ok) as mock_build, \
              patch("hermes_cli.main._web_ui_build_needed", return_value=True), \
              patch("hermes_cli.main._write_web_ui_build_stamp"):

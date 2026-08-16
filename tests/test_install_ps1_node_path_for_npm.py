@@ -28,11 +28,17 @@ def test_install_ps1_defines_ensure_node_exe_on_path_helper() -> None:
 
 
 def test_test_node_prepends_node_dir_before_success() -> None:
+    """Provisioning is mandatory now (6a2f155165: 'the pin table is the only
+    Node authority'), so the old Test-Node system-Node version gate is gone.
+    The surviving property from #48130: the one place that invokes npm
+    (Install-NodeDeps) still puts node.exe's directory on PATH first, so
+    npm lifecycle scripts that shell out to bare ``node`` resolve it."""
     text = _install_ps1()
+    assert "function Test-Node" not in text  # gate removed with the refactor
     assert re.search(
-        r"if \(Test-NodeVersionOk \$version\) \{[\s\S]{0,200}?Ensure-NodeExeOnPath",
+        r"function Install-NodeDeps \{[\s\S]{0,400}?Ensure-NodeExeOnPath",
         text,
-    ), "Test-Node must call Ensure-NodeExeOnPath when a system Node passes the version floor"
+    ), "Install-NodeDeps must call Ensure-NodeExeOnPath before invoking npm"
 
 
 def test_install_node_deps_prepends_node_dir_before_npm() -> None:

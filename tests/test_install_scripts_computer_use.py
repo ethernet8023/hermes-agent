@@ -24,8 +24,9 @@ class TestInstallSh:
     def test_install_function_wired_into_main_and_stage(self) -> None:
         text = INSTALL_SH.read_text()
         assert "install_computer_use_driver() {" in text
-        # main() flow and the node-deps stage both run it.
-        assert text.count("install_computer_use_driver\n") >= 2
+        # 5be3ef33e6 consolidated the stage protocol: the node-deps stage no
+        # longer runs it separately, so exactly the main() flow invokes it.
+        assert text.count("install_computer_use_driver\n") >= 1
 
     def test_install_is_timeboxed_above_upstream_lock_window(self) -> None:
         """The upstream installer serializes on a lock with a 600s stale

@@ -115,13 +115,16 @@ def test_gui_installs_packages_and_launches_desktop_app(tmp_path, monkeypatch):
         cli_main.cmd_gui(_ns())
 
     assert exc.value.code == 0
-    # The install now runs with a resolved env (managed-Node PATH), never a bare
-    # ``env=None`` that would leave npm's child scripts unable to find ``node``.
+    # The install now runs through installation.nodejs.npm_install (which
+    # resolves the pinned npm and assembles the managed-runtime env itself),
+    # never a bare ``env=None`` that would leave npm's child scripts unable
+    # to find ``node``.
     mock_install.assert_called_once()
-    assert mock_install.call_args.args == ("/usr/bin/npm", root)
+    assert mock_install.call_args.args == (root,)
     assert mock_install.call_args.kwargs["capture_output"] is False
-    install_env = mock_install.call_args.kwargs["env"]
-    assert install_env is not None and "PATH" in install_env
+    # env is the optional NixOS python hint (None off-NixOS); the managed-Node
+    # PATH itself is assembled inside npm_install, not passed by cmd_gui.
+    assert "env" in mock_install.call_args.kwargs
     assert mock_run.call_args_list[0].args[0] == ["/usr/bin/npm", "run", "pack"]
     assert mock_run.call_args_list[0].kwargs["cwd"] == desktop_dir
     assert mock_run.call_args_list[1].args[0] == [str(packaged_exe)]
@@ -145,9 +148,39 @@ def test_gui_install_env_prepends_managed_node_on_bare_path(tmp_path, monkeypatc
     # A managed Node tree on disk so with_managed_runtimes() actually
     # prepends it. It lives in the INSTALL's runtime dir, not HERMES_HOME
     # (hermes-home lifetime split): binaries belong to an install.
+    # managed_path_dirs() is facts-driven now: it reads the provisioner's
+    # runtimes.json rather than globbing directories, so the fixture writes
+    # a minimal valid facts file (schema 2) pointing at the node tree.
+    import json
+
     install_root = tmp_path / "install"
-    (install_root / ".hermes-runtime" / "node" / "bin").mkdir(parents=True)
+    runtime_dir = install_root / ".hermes-runtime"
+    node_bin = runtime_dir / "node" / "bin"
+    node_bin.mkdir(parents=True)
+    (node_bin / "node").touch()
+    (runtime_dir / "runtimes.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "pathOrder": ["node"],
+                "tools": {
+                    "node": {
+                        "version": "26.7.0",
+                        "path": "node/bin/node",
+                        "installedAt": "2026-01-01T00:00:00Z",
+                        "pathDirs": ["node/bin"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("HERMES_INSTALL_ROOT", str(install_root))
+    # Facts and bytes must resolve against the SAME dir here (default mode
+    # reads bytes from the machine-wide ~/.hermes/tools store, which this
+    # hermetic test must not touch) — HERMES_RUNTIME_DIR is the documented
+    # self-contained override the Nix bundle and desktop payload also use.
+    monkeypatch.setenv("HERMES_RUNTIME_DIR", str(runtime_dir))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))
     # Simulate the stripped PATH the desktop updater chain hands us.
     monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))

@@ -206,42 +206,43 @@ def _extract_function_body(source: str, name: str) -> str:
     return m.group(0)
 
 
-def test_ensure_browser_no_longer_npm_installs_agent_browser() -> None:
+def test_agent_browser_is_never_eagerly_npm_installed() -> None:
     """agent-browser resolves lazily via npx everywhere else in the system
-    (tools/browser_tool.py::_find_agent_browser); this was the last place
-    that still eagerly npm-installed a second, separately version-pinned
-    copy of it. Removed: agent-browser acquisition now happens only via
-    `hermes update`'s npx cache warm or an actual browser-tool call's lazy
-    npx resolution (PR #44772 review)."""
-    body = _extract_function_body(INSTALL_SH.read_text(), "ensure_browser")
+    (tools/browser_tool.py::_find_agent_browser); ensure_browser() was the
+    last place that eagerly npm-installed a second, separately version-pinned
+    copy (PR #44772 review trimmed it). ensure_browser() itself is gone now —
+    0583e3a720 moved browser provisioning to the pinned-binary provisioner —
+    so guard the property script-wide: no eager agent-browser install may
+    come back anywhere in the installer."""
+    text = INSTALL_SH.read_text()
 
-    assert "agent-browser@" not in body
-    assert "Installing Chromium via agent-browser install" not in body
-    # camofox is unrelated to this change and must still be installed here.
-    assert "@askjo/camofox-browser@^1.5.2" in body
-    # System-browser detection is still cheap/valuable without agent-browser.
-    assert "find_system_browser" in body
-    assert "configure_browser_env_from_system_browser" in body
+    assert "ensure_browser()" not in text  # the whole function was removed
+    assert "agent-browser@" not in text
+    assert "Installing Chromium via agent-browser install" not in text
+    assert "$HERMES_HOME/node/bin/agent-browser" not in text
 
 
-def test_ensure_browser_still_ignore_scripts_and_timeout_guarded() -> None:
-    """The removal of agent-browser must not have also dropped the
-    supply-chain and hang-protection hardening that still applies to the
-    remaining camofox install."""
-    body = _extract_function_body(INSTALL_SH.read_text(), "ensure_browser")
+def test_camofox_npm_module_is_not_installed_by_the_installer() -> None:
+    """0583e3a720 ('pin the browser BINARY; the npm module gets a lockfile')
+    moved camoufox acquisition to the pin table precisely because the npm
+    module's caret range and release-scraping postinstall were unpinned.
+    The installer must not resurrect the npm path."""
+    text = INSTALL_SH.read_text()
 
-    assert "--ignore-scripts" in body
-    assert "run_with_timeout" in body
+    assert "@askjo/camofox-browser" not in text
 
 
-def test_ensure_browser_no_longer_references_agent_browser_binary_path() -> None:
-    """No dangling reference to a local agent-browser binary path should
-    remain now that this function never installs it — a leftover reference
-    would be dead code pointing at a binary that no longer gets placed
-    there by this function."""
-    body = _extract_function_body(INSTALL_SH.read_text(), "ensure_browser")
+def test_browser_use_cli_install_is_managed_and_guarded() -> None:
+    """The default browser backend install (install_browser_use_cli):
+    binary lands in Hermes' managed bin via UV_TOOL_BIN_DIR, user-level uv
+    config cannot redirect it (UV_NO_CONFIG), and system-browser detection
+    helpers survive elsewhere in the script."""
+    text = INSTALL_SH.read_text()
+    body = _extract_function_body(text, "install_browser_use_cli")
 
-    assert "$HERMES_HOME/node/bin/agent-browser" not in body
+    assert "UV_TOOL_BIN_DIR" in body
+    assert "UV_NO_CONFIG" in body
+    assert "find_system_browser()" in text
 
 
 

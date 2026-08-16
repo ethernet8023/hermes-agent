@@ -9253,11 +9253,14 @@ def cmd_update(args):
         sys.exit(cmd_update_eject(args))
 
     # Bundled desktop installs are materialized from payloads shipped inside
-    # the desktop app. The updater of the app re-materializes the checkout
-    # after the app updates itself. If `hermes update` changes that checkout,
-    # the checkout no longer agrees with the stamped tag of the shell. Thus
-    # refuse, and point at the in-app updater or at eject. Eject changes the
-    # install to source mode.
+    # the desktop app. `hermes update` must not git-mutate that checkout —
+    # but refusing outright is a dead end for CLI-first users. Instead,
+    # drive the same motion the in-app updater would: check the release
+    # feed, download + sha512-verify the new installer, then hand off to a
+    # detached helper that stops every Hermes process (this one included),
+    # runs the installer silently, and relaunches the GUI iff it was
+    # running. Anything this path cannot serve (non-Windows, no feed,
+    # offline, --eject flows) falls back to the steward refusal.
     #
     # TWO detectors, deliberately OR'd. The manifest (is_bundled_install)
     # covers materialized checkouts the desktop bootstrap wrote a manifest
@@ -9268,10 +9271,19 @@ def cmd_update(args):
     # through into _cmd_update_impl, which then stages an update INTO the
     # signed app resources (*.hermes-update-staging debris beside every
     # repo/ dir; observed live on a v0.27.0 win-arm64 bundled install).
-    # A sealed tree cannot provision itself; the steward owns it.
     from hermes_cli.install_manifest import format_bundled_update_message, is_bundled_install
 
     if install_method == "desktop-app" or is_bundled_install(PROJECT_ROOT):
+        from hermes_cli.sealed_update import SealedUpdateUnavailable, cmd_update_sealed_desktop
+
+        try:
+            sys.exit(cmd_update_sealed_desktop(args, Path(PROJECT_ROOT)))
+        except SealedUpdateUnavailable as exc:
+            logger.debug("sealed self-update unavailable: %s", exc)
+        except Exception as exc:
+            # Feed/network/download failures must not strand the user with
+            # a stack trace; say what failed, then give the steward answer.
+            print(f"⚠ Could not self-update from the release feed: {exc}")
         print(format_bundled_update_message())
         sys.exit(1)
 

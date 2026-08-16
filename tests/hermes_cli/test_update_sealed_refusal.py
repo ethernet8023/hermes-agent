@@ -33,11 +33,18 @@ def _args(**overrides):
 class TestSealedDesktopUpdateRefusal:
     def test_sealed_payload_without_manifest_refuses(self, capsys):
         """The live-bug shape: stamp says desktop-app, no manifest on disk
-        (is_bundled_install False). Must refuse, print the steward message,
-        and never reach the update body."""
+        (is_bundled_install False). With the CLI self-update path also
+        unavailable, must refuse with the steward message and never reach
+        the update body."""
+        from hermes_cli.sealed_update import SealedUpdateUnavailable
+
         with (
             patch("hermes_cli.config.detect_install_method", return_value="desktop-app"),
             patch("hermes_cli.install_manifest.is_bundled_install", return_value=False),
+            patch(
+                "hermes_cli.sealed_update.cmd_update_sealed_desktop",
+                side_effect=SealedUpdateUnavailable("test: path unavailable"),
+            ),
             patch("hermes_cli.main._cmd_update_impl") as impl,
         ):
             with pytest.raises(SystemExit) as exc:

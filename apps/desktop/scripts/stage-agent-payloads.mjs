@@ -802,6 +802,155 @@ function writeBundlePth(outDir, pythonBinary) {
   )
 }
 
+/**
+ * Drop payload members that no runtime path can reach. Every entry is a
+ * deliberate, named decision — this is an allowlist of deletions, not a
+ * heuristic sweep, and it runs LAST so the staging probes above always
+ * see the full trees they verified.
+ *
+ * What is NOT pruned, and why (verified against the runtime code):
+ *  - python's pip/setuptools/ensurepip and the payload uv: sealed
+ *    installs lazy-install optional extras at runtime through the
+ *    installation.pip_ladder tiers (uv → `python -m pip` → ensurepip),
+ *    so all three are load-bearing.
+ *  - repo/apps: `hermes gui` dev/unpacked flows read apps/desktop.
+ *  - site-packages: pip already installs without tests for most wheels;
+ *    the few residual test dirs are single-digit MB and package-owned.
+ *
+ * Measured on the v0.27.0 win32-arm64 payload (1,268 MB installed):
+ *  - PortableGit ships a full MSYS2 userland; git never calls the perl
+ *    scripts Hermes can't reach (git-svn, send-email, legacy add -i),
+ *    the HTML docs, gitk/git-gui, or the message catalogs. ~85 MB.
+ *  - repo/ ships tests/ (34 MB) and website/ (27 MB) from git archive;
+ *    nothing imports either at runtime.
+ *  - the interpreter ships tcl/tkinter, idlelib, turtledemo and
+ *    pydoc_data; no dependency imports tkinter (repo-wide grep). ~8 MB.
+ */
+export function prunePayload(outDir, target, fsImpl = fs) {
+  const rmrf = (rel) => {
+    const full = path.join(outDir, rel)
+    if (!fsImpl.existsSync(full)) return 0
+    const size = duBytes(full, fsImpl)
+    fsImpl.rmSync(full, { recursive: true, force: true })
+    return size
+  }
+
+  let reclaimed = 0
+
+  // repo/: build- and docs-only trees. git archive exports every tracked
+  // file; these two are the largest with zero runtime consumers.
+  for (const rel of ["repo/tests", "repo/website"]) {
+    reclaimed += rmrf(rel)
+  }
+
+  // python/: GUI/teaching stdlib nobody imports. KEEP ensurepip (pip
+  // ladder tier 3), venv (eject flows), distutils (setuptools compat).
+  const pythonRoot = path.join(outDir, "python")
+  if (fsImpl.existsSync(pythonRoot)) {
+    for (const entry of fsImpl.readdirSync(pythonRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink?.()) continue
+      const installRel = path.join("python", entry.name)
+      // POSIX python-build-standalone nests lib/python3.11/; Windows uses Lib/.
+      const libCandidates = [
+        path.join(installRel, "Lib"),
+        ...(fsImpl.existsSync(path.join(outDir, installRel, "lib"))
+          ? fsImpl
+              .readdirSync(path.join(outDir, installRel, "lib"), { withFileTypes: true })
+              .filter((e) => e.isDirectory() && /^python\d/.test(e.name))
+              .map((e) => path.join(installRel, "lib", e.name))
+          : []),
+      ]
+      for (const lib of libCandidates) {
+        for (const mod of ["tkinter", "turtledemo", "idlelib", "pydoc_data", "test"]) {
+          reclaimed += rmrf(path.join(lib, mod))
+        }
+        reclaimed += rmrf(path.join(lib, "turtle.py"))
+      }
+      // Tcl/Tk data + DLLs exist only for the tkinter just removed.
+      reclaimed += rmrf(path.join(installRel, "tcl"))
+      for (const dll of ["tcl86t.dll", "tk86t.dll", "_tkinter.pyd", "zlib1.dll__tk"]) {
+        reclaimed += rmrf(path.join(installRel, "DLLs", dll))
+      }
+    }
+  }
+
+  // git/: Windows-only (POSIX ships lean dugite-native already). The
+  // store entry name comes from the facts — the layout authority.
+  if (target.platform === "win32") {
+    let facts
+    try {
+      facts = JSON.parse(fsImpl.readFileSync(path.join(outDir, "runtimes.json"), "utf8"))
+    } catch {
+      facts = null
+    }
+    const gitPath = facts?.tools?.git?.path
+    if (gitPath && !path.isAbsolute(gitPath)) {
+      // fact path is like git-2.53.0-win32-arm64/cmd/git.exe → store root.
+      const gitRoot = gitPath.split(/[\\/]/)[0]
+      const gitPrunes = [
+        // Perl: only reachable via git-svn / send-email / legacy add -i,
+        // none of which Hermes invokes. Biggest single win (~32 MB).
+        "usr/share/perl5",
+        "usr/lib/perl5",
+        // HTML documentation (~21 MB) and localized messages.
+        "clangarm64/share/doc",
+        "mingw64/share/doc",
+        "usr/share/doc",
+        "clangarm64/share/locale",
+        "mingw64/share/locale",
+        "usr/share/locale",
+        "clangarm64/share/man",
+        "mingw64/share/man",
+        "usr/share/man",
+        // Tk GUIs (gitk / git-gui) and the Tcl runtime that exists for them.
+        "clangarm64/share/gitk",
+        "mingw64/share/gitk",
+        "clangarm64/share/git-gui",
+        "mingw64/share/git-gui",
+        "clangarm64/lib/tcl8.6",
+        "mingw64/lib/tcl8.6",
+        "clangarm64/lib/tk8.6",
+        "mingw64/lib/tk8.6",
+      ]
+      for (const rel of gitPrunes) {
+        reclaimed += rmrf(path.join(gitRoot, rel))
+      }
+    }
+  }
+
+  console.log(`[stage-agent-payloads] pruned ${(reclaimed / (1024 * 1024)).toFixed(1)} MB of unreachable payload members`)
+  return reclaimed
+}
+
+function duBytes(root, fsImpl = fs) {
+  let total = 0
+  const stack = [root]
+  while (stack.length) {
+    const dir = stack.pop()
+    let entries
+    try {
+      const stat = fsImpl.lstatSync(dir)
+      if (!stat.isDirectory()) return total + stat.size
+      entries = fsImpl.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        stack.push(full)
+      } else {
+        try {
+          total += fsImpl.lstatSync(full).size
+        } catch {
+          /* vanished */
+        }
+      }
+    }
+  }
+  return total
+}
+
 function main() {
   if (process.env.HERMES_DESKTOP_VARIANT !== "bundled") {
     // bootstrap and light artifacts carry no payload: write a stub
@@ -874,6 +1023,12 @@ function main() {
   // digests, writing the runtimes.json the desktop reads at launch.
   console.log(`[stage-agent-payloads] staging: managed runtimes (${target.key}, ${tag})`)
   stageManagedRuntimes(target, OUT_DIR, payloadPython)
+  // Prune AFTER every stage and probe has seen its full tree, and on the
+  // cache-reuse path too (deletions are idempotent — a pruned tree just
+  // yields zero). The import backstop already proved the heavy natives
+  // load; nothing pruned below is on any import path.
+  console.log(`[stage-agent-payloads] pruning unreachable payload members`)
+  prunePayload(OUT_DIR, target)
   console.log(`[stage-agent-payloads] sanitizing symlinks`)
   sanitizeSymlinks(OUT_DIR)
 

@@ -174,7 +174,13 @@ def read_build_info(project_root: Path) -> dict:
     every consumer misclassifying the tree.
     """
     try:
-        data = json.loads((Path(project_root) / BUILD_INFO_NAME).read_text(encoding="utf-8"))
+        # utf-8-sig: tolerate a UTF-8 BOM. Windows tooling (PowerShell
+        # Set-Content/Out-File, some editors) BOM-prefixes JSON it touches;
+        # plain utf-8 then fails json.loads and the except below silently
+        # demotes a sealed tree to "unknown" — observed live when a stamp
+        # edit via PowerShell made detect_install_method forget the tree
+        # was desktop-app. For BOM-less files utf-8-sig is byte-identical.
+        data = json.loads((Path(project_root) / BUILD_INFO_NAME).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):

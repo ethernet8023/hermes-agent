@@ -23,7 +23,6 @@ from hermes_cli.main import (
     _build_web_ui,
     _compute_web_ui_content_hash,
     _missing_web_build_tool,
-    _run_npm_install_deterministic,
     _web_build_toolchain_ready,
     _web_toolchain_roots,
     _web_ui_stamp_path,

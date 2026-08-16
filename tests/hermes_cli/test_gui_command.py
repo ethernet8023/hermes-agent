@@ -15,8 +15,6 @@ from hermes_cli import main as cli_main
 
 
 @pytest.fixture(autouse=True)
-
-@pytest.fixture(autouse=True)
 def _pinned_npm():
     """A provisioned npm, which these tests assume and the harness lacks.
 

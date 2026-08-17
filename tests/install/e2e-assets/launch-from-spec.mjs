@@ -121,31 +121,45 @@ async function main() {
   const deadline = Date.now() + Number(values['timeout-ms']);
 
 
-  // Dismiss the onboarding overlay when present. Two layers of defense:
-  // the drivers seed a provider key so the app's runtime check reports
-  // configured=true and the overlay never mounts; if it shows anyway
-  // (fresh HERMES_HOME, slow readiness check), click the real escape
-  // hatch - "I'll choose a provider later" (i18n en: chooseLater). The
-  // overlay is a fullscreen div that intercepts ALL clicks, so this must
-  // resolve before any Settings navigation.
+  // Dismiss the onboarding overlay when present. The drivers seed a
+  // provider so the overlay SHOULD never mount, but it has a real boot
+  // window: the renderer inits `configured` from a localStorage cache
+  // (null on a fresh install) and only flips after gateway probes, so the
+  // overlay can mount late - first as a buttonless boot-progress card,
+  // then as the provider picker with the real escape hatch, "I'll choose
+  // a provider later" (i18n en: chooseLater). Two traps this loop avoids:
+  // a one-shot dismiss probe loses to the late mount, and visibility is
+  // the wrong readiness signal - the settings gear is "visible" UNDER the
+  // fullscreen overlay while the overlay intercepts every click. So:
+  // alternate short-timeout dismiss clicks with short-timeout settings
+  // clicks until a settings click actually LANDS (Playwright's hit-target
+  // check makes a landed click proof the overlay is gone).
   const later = window.getByRole('button', { name: /choose a provider later|skip/i }).first()
   const settingsButton = window.getByRole('button', { name: /open settings|settings/i }).first()
 
-  await Promise.race([
-    settingsButton.isVisible({ timeout: 60_000 }).catch(() => false),
-    later
-      .isVisible({ timeout: 90_000 })
-      .catch(() => false)
+  const overlayDeadline = Date.now() + 180_000
+  let settingsOpened = false
+  for (;;) {
+    await later
+      .click({ timeout: 2_000 })
       .then(async () => {
-        await later.click().catch(() => {})
+        log('dismissed onboarding overlay')
         await later.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {})
       })
-  ])
+      .catch(() => {})
+    try {
+      await settingsButton.click({ timeout: 4_000 })
+      settingsOpened = true
+      break
+    } catch {}
+    if (Date.now() > overlayDeadline) break
+  }
+  if (!settingsOpened) {
+    await window.screenshot({ path: `${values.spec}.overlay-stuck.png` }).catch(() => {})
+    throw new Error('onboarding overlay never cleared: Settings not clickable within 180s')
+  }
 
-
-  // Settings -> About -> Update now. The settings trigger is an icon
-  // button whose accessible name is "Open settings".
-  await window.getByRole('button', { name: /open settings|settings/i }).first().click();
+  // Settings is open: About -> Update now.
   await window.getByRole('tab', { name: /about/i }).or(
     window.getByRole('button', { name: /about/i })).first().click();
   const updateNow = window.getByRole('button', { name: /update now/i }).first();

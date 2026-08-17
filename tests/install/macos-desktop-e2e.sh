@@ -145,7 +145,7 @@ EOF
   export PATH="$SHIM_DIR:$PATH"
 
   # check it worked
-  observed_git_url="$(git -C "$REPO_DIR" remote get-url origin)"
+  observed_git_url="$(git -C "$REPO_ROOT" remote get-url origin)"
   if [[ "$observed_git_url" != "$REPO_URL_HTTPS" ]]; then
     fail "failed git remote get-url shim: origin resolves to '$observed_git_url', expected '$REPO_URL_HTTPS'"
   fi

@@ -133,8 +133,11 @@ async function main() {
 
   const overlayDeadline = Date.now() + 180_000
   let openedSettings = false
+  const brief = e => String((e && e.message) || e).split('\n').slice(0, 3).join(' | ')
+  let iter = 0
 
   while (!openedSettings) {
+    iter++
     for (const make of laterLocators) {
       try {
         await make(page).first().click({ timeout: 1_500 })
@@ -142,8 +145,8 @@ async function main() {
         await page.waitForTimeout(2500)
         await shot(page, '01b-onboarding-dismissed')
         break
-      } catch {
-        // button not there (yet) or not clickable; try the next shape
+      } catch (e) {
+        log(`[overlay] iter ${iter} dismiss click failed: ${brief(e)}`)
       }
     }
     for (const make of settingsLocators) {
@@ -152,8 +155,8 @@ async function main() {
         openedSettings = true
         log('clicked: Open settings')
         break
-      } catch {
-        // occluded or absent; keep cycling
+      } catch (e) {
+        log(`[overlay] iter ${iter} settings click failed: ${brief(e)}`)
       }
     }
     if (!openedSettings && Date.now() > overlayDeadline) break

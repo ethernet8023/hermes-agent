@@ -139,19 +139,22 @@ async function main() {
 
   const overlayDeadline = Date.now() + 180_000
   let settingsOpened = false
-  for (;;) {
+  const brief = (e) => String(e && e.message || e).split('\n').slice(0, 3).join(' | ')
+  for (let iter = 1; ; iter++) {
     await later
       .click({ timeout: 2_000 })
       .then(async () => {
         log('dismissed onboarding overlay')
         await later.waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {})
       })
-      .catch(() => {})
+      .catch((e) => log(`[overlay] iter ${iter} chooseLater click failed: ${brief(e)}`))
     try {
       await settingsButton.click({ timeout: 4_000 })
       settingsOpened = true
       break
-    } catch {}
+    } catch (e) {
+      log(`[overlay] iter ${iter} settings click failed: ${brief(e)}`)
+    }
     if (Date.now() > overlayDeadline) break
   }
   if (!settingsOpened) {

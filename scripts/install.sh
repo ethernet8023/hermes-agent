@@ -970,7 +970,27 @@ provision_managed_runtimes() {
     for attempt in 1 2 3; do
         if (cd "$INSTALL_DIR" && "$UV_CMD" run --no-project python -m installation.provisioner); then
             log_success "Managed runtimes provisioned"
-            export PATH="$INSTALL_DIR/.hermes-runtime/node/bin:$PATH"
+            # PATH for the REST OF THIS INSTALLER RUN (npm for browser deps,
+            # node for ui-tui build). The provisioner publishes tool BYTES
+            # into the machine-wide store (~/.hermes/tools/<tool>-<ver>-<target>/)
+            # and records install-scoped FACTS in .hermes-runtime/runtimes.json;
+            # ask the same reader every runtime consumer uses
+            # (installation.env.managed_path_dirs) instead of hardcoding a
+            # directory shape — the old literal
+            # "$INSTALL_DIR/.hermes-runtime/node/bin" does not exist under the
+            # store split, so npm was never found and the node-deps stage died
+            # with "npm: command not found".
+            local managed_dirs
+            managed_dirs=$(cd "$INSTALL_DIR" && "$UV_CMD" run --no-project python -c '
+import os
+from installation import env
+print(os.pathsep.join(str(d) for d in env.managed_path_dirs()))
+' 2>/dev/null) || managed_dirs=""
+            if [ -n "$managed_dirs" ]; then
+                export PATH="$managed_dirs:$PATH"
+            else
+                log_warn "Could not resolve managed tool PATH from runtimes.json"
+            fi
             return 0
         fi
         if [ "$attempt" -lt 3 ]; then
@@ -1046,7 +1066,19 @@ install_system_packages() {
     # Detect what's missing
     HAS_FFMPEG=false
     local need_ffmpeg=false
+    local need_libatomic=false
 
+    # Node >= 24 on arm64 Linux links against libatomic.so.1, which minimal
+    # cloud/container images (Ubuntu 24.04 minimal, Debian slim) do not ship.
+    # Without it the provisioner's verify-by-running step fails with
+    # "error while loading shared libraries: libatomic.so.1" AFTER a correct
+    # download+sha256, which reads like corruption. Only Linux needs the
+    # probe; macOS links atomics from libSystem.
+    if [ "$OS" = "linux" ]; then
+        if ! ldconfig -p 2>/dev/null | grep -q "libatomic.so.1"; then
+            need_libatomic=true
+        fi
+    fi
 
     log_info "Checking ffmpeg (TTS voice messages)..."
     if command -v ffmpeg &> /dev/null; then
@@ -1078,7 +1110,7 @@ install_system_packages() {
     fi
 
     # Nothing to install — done
-    if [ "$need_ffmpeg" = false ]; then
+    if [ "$need_ffmpeg" = false ] && [ "$need_libatomic" = false ]; then
         return 0
     fi
 
@@ -1089,8 +1121,21 @@ install_system_packages() {
         desc_parts+=("ffmpeg for TTS voice messages")
         pkgs+=("ffmpeg")
     fi
+    if [ "$need_libatomic" = true ]; then
+        desc_parts+=("libatomic1 for the pinned Node runtime")
+        case "$DISTRO" in
+            fedora) pkgs+=("libatomic") ;;
+            arch)   ;;  # part of gcc-libs, always present
+            *)      pkgs+=("libatomic1") ;;
+        esac
+    fi
     local description
     description=$(IFS=" and "; echo "${desc_parts[*]}")
+    # Everything needed is already covered (e.g. arch: libatomic ships in
+    # gcc-libs) — nothing to install after all.
+    if [ ${#pkgs[@]} -eq 0 ]; then
+        return 0
+    fi
 
     # ── macOS: brew ──
     if [ "$OS" = "macos" ]; then
@@ -3291,10 +3336,15 @@ main() {
     provision_managed_runtimes || return
     setup_venv
     install_deps
+    # The hermes command exists as soon as install_deps finishes — link it
+    # NOW. When a later optional stage fails (browser deps needing npm, the
+    # cua driver download), the user still gets a working `hermes` plus a
+    # clear warning, instead of a complete install whose only symptom is
+    # "command not found" because the symlink stage was never reached.
+    setup_path
     install_node_deps || return
     install_browser_use_cli
     install_computer_use_driver
-    setup_path
     copy_config_templates
     run_setup_wizard
     maybe_start_gateway

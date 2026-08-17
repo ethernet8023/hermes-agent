@@ -1,0 +1,38 @@
+# TEMPORARY debug wrapper — dispatch ONE install-e2e leg instead of the
+# whole matrix. Used to read the overlay-loop click errors from a single
+# linux app-update leg (run 32037888858 follow-up). Delete when the
+# overlay fix is verified.
+name: install-e2e one leg (debug)
+
+on:
+  workflow_dispatch:
+    inputs:
+      install-method:
+        description: 'Install method for the leg.'
+        required: false
+        type: string
+        default: installer-script
+      update-method:
+        description: 'Update method for the leg.'
+        required: false
+        type: string
+        default: hermes-desktop-app-update
+      install-ref:
+        description: 'Tag to install as OLD.'
+        required: false
+        type: string
+        default: v2026.8.13
+
+permissions:
+  contents: read
+
+jobs:
+  one-leg:
+    name: "debug: ${{ inputs.install-method }} -> ${{ inputs.update-method }} (${{ inputs.install-ref }} -> HEAD)"
+    uses: ./.github/workflows/install-e2e-run.yml
+    with:
+      install-method: ${{ inputs.install-method }}
+      update-method: ${{ inputs.update-method }}
+      install-ref: ${{ inputs.install-ref }}
+      tag-has-desktop: true
+      leg-id: debug-one-leg

@@ -93,7 +93,29 @@ async function main() {
     timeout: 120_000
   })
 
-  const page = await app.firstWindow({ timeout: 120_000 })
+  // firstWindow() can grab a helper webContents (wake indicator etc.), not
+  // the main app window - see run 32041211230 where locators waited forever
+  // in an empty page while the app shell was on screen. Pick the window
+  // that actually renders UI (has a <button>), retrying as windows appear.
+  await app.firstWindow({ timeout: 120_000 })
+  let page = null
+  const windowDeadline = Date.now() + 120_000
+  while (!page) {
+    for (const candidate of app.windows()) {
+      const hasUi = await candidate
+        .evaluate(() => document.querySelector('button') !== null)
+        .catch(() => false)
+      if (hasUi) { page = candidate; break }
+    }
+    if (!page) {
+      if (Date.now() > windowDeadline) {
+        for (const c of app.windows()) log(`  window seen: url=${c.url()}`)
+        throw new Error('no window with app UI (a <button>) appeared within 120s')
+      }
+      await new Promise(r => setTimeout(r, 1_000))
+    }
+  }
+  log(`window picked (${app.windows().length} windows, url=${page.url()})`)
   log('first window acquired')
 
   // Boot: wait for the composer to exist — the shell is mounted by then.

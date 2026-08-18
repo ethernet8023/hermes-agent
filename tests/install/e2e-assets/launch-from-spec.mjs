@@ -104,9 +104,32 @@ async function main() {
     cwd: launch.cwd,
     env: launch.env,
   });
-  const window = await app.firstWindow({ timeout: 120_000 });
+  // The app spawns several BrowserWindows (wake indicator, helper surfaces);
+  // firstWindow() grabs whichever webContents came first, which on CI is NOT
+  // the main app window - the run 32041211230 recording shows the app shell
+  // on screen while every locator waits forever in an empty page. Pick the
+  // window that actually contains the app UI (a button element renders only
+  // in the real renderer), retrying as windows appear.
+  await app.firstWindow({ timeout: 120_000 });
+  let window = null;
+  const windowDeadline = Date.now() + 120_000;
+  while (!window) {
+    for (const candidate of app.windows()) {
+      const hasUi = await candidate
+        .evaluate(() => document.querySelector('button') !== null)
+        .catch(() => false);
+      if (hasUi) { window = candidate; break; }
+    }
+    if (!window) {
+      if (Date.now() > windowDeadline) {
+        for (const c of app.windows()) log(`  window seen: url=${c.url()}`);
+        throw new Error('no window with app UI (a <button>) appeared within 120s');
+      }
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+  }
   await window.waitForLoadState('domcontentloaded');
-  log(`window up: ${await window.title()}`);
+  log(`window up: ${await window.title()} (${app.windows().length} windows, picked url=${window.url()})`);
   await window.screenshot({ path: `${values.spec}.window.png` }).catch(() => {});
 
   if (values['no-update']) {

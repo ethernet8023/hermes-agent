@@ -155,7 +155,7 @@ async function main() {
 
   const overlayDeadline = Date.now() + 180_000
   let openedSettings = false
-  const brief = e => String((e && e.message) || e).split('\n').slice(0, 3).join(' | ')
+  const brief = e => String((e && e.message) || e).split('\n').slice(0, 25).join(' | ')
   let iter = 0
 
   while (!openedSettings) {

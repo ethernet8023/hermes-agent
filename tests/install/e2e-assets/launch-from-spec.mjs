@@ -162,7 +162,7 @@ async function main() {
 
   const overlayDeadline = Date.now() + 180_000
   let settingsOpened = false
-  const brief = (e) => String(e && e.message || e).split('\n').slice(0, 3).join(' | ')
+  const brief = (e) => String(e && e.message || e).split('\n').slice(0, 25).join(' | ')
   for (let iter = 1; ; iter++) {
     await later
       .click({ timeout: 2_000 })

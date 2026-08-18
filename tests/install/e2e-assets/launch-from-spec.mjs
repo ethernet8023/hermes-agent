@@ -181,6 +181,18 @@ async function main() {
     if (Date.now() > overlayDeadline) break
   }
   if (!settingsOpened) {
+    // Dump what the page actually contains so the next reader doesn't guess.
+    const dump = await window.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      buttons: [...document.querySelectorAll('button')].slice(0, 30).map((b) => ({
+        text: (b.textContent || '').trim().slice(0, 40),
+        aria: b.getAttribute('aria-label'),
+        rect: (() => { const r = b.getBoundingClientRect(); return `${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)}`; })(),
+      })),
+      bodyPreview: (document.body ? document.body.innerText : '').slice(0, 400),
+    })).catch((e) => `dump failed: ${e.message}`);
+    log(`[overlay] page dump: ${JSON.stringify(dump)}`);
     await window.screenshot({ path: `${values.spec}.overlay-stuck.png` }).catch(() => {})
     throw new Error('onboarding overlay never cleared: Settings not clickable within 180s')
   }

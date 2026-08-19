@@ -81,3 +81,56 @@ class TestNightlyDateStamps:
         stamped = release._NIGHTLY_TAG_RE.fullmatch("v0.28.0-nightly.20260801235959")
         assert legacy and legacy.group(1)[:8] == "20260801"
         assert stamped and stamped.group(1)[:8] == "20260801"
+
+
+class TestNightlyIsDrafted:
+    """A nightly is created as a DRAFT prerelease.
+
+    A published release with no installers attached is one users can
+    reach and cannot use. The desktop matrix attaches the installers to
+    the draft by tag, and the nightly workflow publishes it only after
+    that matrix is green.
+    """
+
+    def _create_argv(self, monkeypatch, tmp_path):
+        """The argv of the `gh release create` cmd_nightly would run."""
+        import subprocess
+        from types import SimpleNamespace
+
+        captured: list[list[str]] = []
+
+        def fake_run(cmd, *a, **kw):
+            captured.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, stdout="url", stderr="")
+
+        def fake_git_result(*args, **kw):
+            # `rev-parse --verify --quiet refs/tags/<tag>` must MISS, or
+            # cmd_nightly short-circuits on "tag already exists".
+            code = 1 if "rev-parse" in args else 0
+            return subprocess.CompletedProcess(args, code, "", "")
+
+        monkeypatch.setattr(release, "get_last_tag", lambda: "v0.27.0")
+        monkeypatch.setattr(release, "get_last_nightly_tag", lambda: None)
+        monkeypatch.setattr(release, "get_commits", lambda **kw: [{"hash": "a" * 40, "subject": "feat: x", "author": "e"}])
+        monkeypatch.setattr(release, "generate_changelog", lambda *a, **kw: "notes")
+        monkeypatch.setattr(release, "resolve_push_remote", lambda r: "origin")
+        monkeypatch.setattr(release, "remote_github_repo", lambda r: "o/r")
+        monkeypatch.setattr(release, "git_result", fake_git_result)
+        monkeypatch.setattr(release, "git", lambda *a, **kw: "")
+        monkeypatch.setattr(release, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+
+        release.cmd_nightly(SimpleNamespace(date="20260818103000", publish=True, remote="origin"))
+        return next(c for c in captured if c[:3] == ["gh", "release", "create"])
+
+    def test_created_as_a_draft_prerelease(self, monkeypatch, tmp_path):
+        argv = self._create_argv(monkeypatch, tmp_path)
+        assert "--draft" in argv, argv
+        assert "--prerelease" in argv, argv
+
+    def test_refuses_to_invent_a_tag(self, monkeypatch, tmp_path):
+        """Without --verify-tag, gh creates a missing tag from the default
+        branch tip, which would release a different commit than the one
+        the nightly math tagged."""
+        assert "--verify-tag" in self._create_argv(monkeypatch, tmp_path)

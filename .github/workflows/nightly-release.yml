@@ -67,6 +67,27 @@ jobs:
       upload_release: true
     secrets: inherit
 
+  publish:
+    name: Publish the nightly once its installers are attached
+    runs-on: ubuntu-24.04
+    needs: [tag, build]
+    # Only when the whole matrix is green. release.py drafts the nightly,
+    # the build attaches the installers to that draft by tag, and this
+    # step is what makes it visible. A failed or cancelled matrix leaves
+    # the draft in place: inspectable, re-runnable, and unreachable by
+    # users — instead of a published nightly with no installers on it.
+    if: needs.tag.outputs.tag != '' && needs.build.result == 'success'
+    permissions:
+      contents: write
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published $TAG"
+
   prune:
     name: Prune nightlies older than 14 days
     runs-on: ubuntu-24.04

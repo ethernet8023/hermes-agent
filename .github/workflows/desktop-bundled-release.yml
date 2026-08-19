@@ -565,12 +565,15 @@ jobs:
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::no release artifacts found"; exit 1
           fi
-          # release.py creates the release we should use.
-          # we don't upload artifacts if there's no release.
-
-          if gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
-            gh release upload "$HERMES_PAYLOAD_TAG" "${files[@]}" --clobber
+          # release.py creates the release (a draft) before this build can
+          # reach this step, so a missing one is a broken release process,
+          # not a state to tolerate. Skipping quietly here is how a green
+          # build ends up attached to nothing: fail loudly instead.
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — release.py must create it (as a draft) before the build uploads to it"
+            exit 1
           fi
+          gh release upload "$HERMES_PAYLOAD_TAG" "${files[@]}" --clobber
 
   # ── Universal MSIX bundle ────────────────────────────────────────────
   # electron-builder's MsixTarget CAN assemble a .msixbundle itself
@@ -701,9 +704,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$HERMES_PAYLOAD_TAG" "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+          # Same contract as the per-target upload: the release must
+          # already exist, so a missing one fails the job instead of
+          # leaving the bundle off an otherwise-green release.
+          if ! gh release view "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot attach the msixbundle"
+            exit 1
           fi
+          gh release upload "$HERMES_PAYLOAD_TAG" "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --clobber
 
   # ── Builds table ─────────────────────────────────────────────────────
   # After EVERY matrix leg has uploaded, render the download tables into
@@ -712,9 +720,8 @@ jobs:
   # artifact is a missing row, not a dead link). The universal .msixbundle
   # and mac .zip stay out of the tables by design (store/sideload channel /
   # updater delta target; the bare per-arch .msix never reaches the release
-  # at all). Their legs still gate this job through needs:. Draft stable
-  # releases and published nightly prereleases both work: gh resolves
-  # drafts too.
+  # at all). Their legs still gate this job through needs:. Both release
+  # kinds are drafts at this point, and gh resolves drafts by tag.
   builds-table:
     name: Render the release builds table
     needs: build
@@ -727,9 +734,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HERMES_PAYLOAD_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          if gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
-            python3 scripts/render-builds-table.py \
-              --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY"
-          else
-            echo "no release for $HERMES_PAYLOAD_TAG — nothing to render"
+          # The release is created before the build starts, so a missing
+          # one here means the release process broke. Rendering nothing
+          # would ship a release whose body still holds the unrendered
+          # marker, so fail instead.
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot render the builds table"
+            exit 1
           fi
+          python3 scripts/render-builds-table.py \
+            --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY"

@@ -2607,17 +2607,25 @@ def generate_changelog(commits, tag_name, semver, repo_url="https://github.com/N
 
 
 def cmd_nightly(args) -> None:
-    """--nightly: tag + publish today's nightly prerelease.
+    """--nightly: tag + draft today's nightly prerelease.
 
     Owns ALL the tag math (the workflow passes only --publish/--remote):
     next-MINOR over the newest stable tag, dated suffix, changelog since
     the last nightly (or last stable for the first one). No version-file
     bump, no commit — the tag points at HEAD as-is, and the stamp's
-    displayVersion carries the nightly version from the tag. Published as
-    PRERELEASE immediately (no human in the loop; the desktop workflow
-    attaches artifacts to the existing release by tag). Exits 0 with
-    "nothing to do" when HEAD is already tagged by the last nightly —
-    the skip-if-no-new-commits gate lives HERE, not in workflow YAML.
+    displayVersion carries the nightly version from the tag.
+
+    Created as a DRAFT prerelease, for the same reason the stable path
+    drafts: a published release with no installers attached is a release
+    users can reach and cannot use. The desktop matrix attaches the
+    installers to this draft by tag, and the nightly workflow's publish
+    job flips it to published only after that matrix is green. A failed
+    bundle therefore leaves an inspectable draft rather than a broken
+    nightly.
+
+    Exits 0 with "nothing to do" when HEAD is already tagged by the last
+    nightly — the skip-if-no-new-commits gate lives HERE, not in workflow
+    YAML.
     """
     date_utc = args.date or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     stable_tag = get_last_tag()
@@ -2674,7 +2682,12 @@ def cmd_nightly(args) -> None:
     changelog_file.write_text(changelog, encoding="utf-8")
     gh_cmd = [
         "gh", "release", "create", tag_name,
+        "--draft",
         "--prerelease",
+        # Abort rather than let gh invent a tag: without this it creates a
+        # missing tag from the default branch's tip, which would silently
+        # release a different commit than the one we tagged.
+        "--verify-tag",
         "--title", f"Hermes Agent nightly {date_utc} ({tag_name})",
         "--notes-file", str(changelog_file),
     ]
@@ -2689,7 +2702,9 @@ def cmd_nightly(args) -> None:
         print(f"    Notes kept at {changelog_file}; tag {tag_name} is pushed.")
         sys.exit(1)
     changelog_file.unlink(missing_ok=True)
-    print(f"✓ Nightly prerelease published: {result.stdout.strip()}")
+    print(f"✓ Nightly prerelease drafted: {result.stdout.strip()}")
+    print("    The Desktop Bundled Release workflow attaches installers to the draft.")
+    print(f"    Publish after that matrix is green: gh release edit {tag_name} --draft=false")
     # Hand the tag to the calling workflow (the desktop build job keys on
     # it). Emitting here keeps ALL the tag math inside release.py.
     github_output = os.environ.get("GITHUB_OUTPUT")
@@ -2869,7 +2884,13 @@ def main():
             return
         print(f"  ✓ Created tag {tag_name}")
 
-        # Push
+        # Push the tag WITH the branch, before the draft exists. gh
+        # auto-creates a missing tag "from the latest state of the default
+        # branch", so creating the release first risks pinning it to the
+        # wrong commit. The build cannot lose this race: the tag push only
+        # starts the workflow, which spends minutes provisioning runners
+        # and building before it reaches its upload step, while the draft
+        # lands a second later.
         push_result = git_result("push", push_remote, "HEAD", "--tags")
         if push_result.returncode == 0:
             print(f"  ✓ Pushed to {push_remote}")
@@ -2888,6 +2909,10 @@ def main():
         gh_cmd = [
             "gh", "release", "create", tag_name,
             "--draft",
+            # Abort rather than let gh invent a tag: without this it creates
+            # a missing tag from the default branch's tip, so a failed tag
+            # push above would silently release a different commit.
+            "--verify-tag",
             "--title", f"Hermes Agent v{new_version} ({calver_date})",
             "--notes-file", str(changelog_file),
         ]

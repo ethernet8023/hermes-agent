@@ -163,6 +163,38 @@ async function main() {
   const overlayDeadline = Date.now() + 180_000
   let settingsOpened = false
   const brief = (e) => String(e && e.message || e).split('\n').slice(0, 25).join(' | ')
+  // bug-011 recon: when a settings click fails, capture WHAT is winning the
+  // hit-test at the button's center plus the titlebar geometry the shell
+  // computes. Local repro (same tag, packaged build, 1366x768) shows the
+  // fixed z-70 controls cluster winning as static z-order says it should;
+  // CI logs show the in-flow titlebar bar div intercepting instead. This
+  // dump is the evidence that difference needs.
+  const hitDump = () => window.evaluate(() => {
+    const describe = (el) => el ? {
+      tag: el.tagName,
+      cls: (typeof el.className === 'string' ? el.className : '').slice(0, 110),
+      aria: el.getAttribute?.('aria-label') || null,
+      z: (() => { try { return getComputedStyle(el).zIndex } catch { return null } })(),
+    } : null
+    const settings = document.querySelector('button[aria-label="Open settings"]')
+    const r = settings?.getBoundingClientRect()
+    const cluster = settings?.closest('div[class*="fixed"]')
+    const bar = document.querySelector('div[class*="h-[34px]"]')
+    const cs = getComputedStyle(document.documentElement)
+    const rect = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}x${Math.round(b.height)}` }
+    return {
+      settingsRect: rect(settings),
+      stack: r ? document.elementsFromPoint(r.x + r.width / 2, r.y + r.height / 2).slice(0, 6).map(describe) : null,
+      cluster: cluster ? { rect: rect(cluster), z: getComputedStyle(cluster).zIndex, cls: (cluster.className || '').slice(0, 120) } : null,
+      bar: bar ? { rect: rect(bar), z: getComputedStyle(bar).zIndex } : null,
+      vars: {
+        controlsLeft: cs.getPropertyValue('--titlebar-controls-left'),
+        toolsRight: cs.getPropertyValue('--titlebar-tools-right'),
+        toolsWidth: cs.getPropertyValue('--titlebar-tools-width'),
+      },
+      win: `${window.innerWidth}x${window.innerHeight} dpr=${window.devicePixelRatio}`,
+    }
+  }).then((d) => JSON.stringify(d)).catch((e) => `hit-dump failed: ${e.message}`)
   for (let iter = 1; ; iter++) {
     await later
       .click({ timeout: 2_000 })
@@ -177,6 +209,11 @@ async function main() {
       break
     } catch (e) {
       log(`[overlay] iter ${iter} settings click failed: ${brief(e)}`)
+      // Every 5th failure, log the hit-test stack (every iteration would be
+      // noise; the interceptor identity is what matters, not its frequency).
+      if (iter === 1 || iter % 5 === 0) {
+        log(`[overlay] iter ${iter} hit-test: ${await hitDump()}`)
+      }
     }
     if (Date.now() > overlayDeadline) break
   }

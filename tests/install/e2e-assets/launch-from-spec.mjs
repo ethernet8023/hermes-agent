@@ -296,7 +296,19 @@ async function main() {
   await window.getByRole('tab', { name: /about/i }).or(
     window.getByRole('button', { name: /about/i })).first().click();
   const updateNow = window.getByRole('button', { name: /update now/i }).first();
-  await updateNow.waitFor({ state: 'visible', timeout: 60_000 });
+  // "Update now" only renders once an update check reports behind > 0, and
+  // the About panel starts at "Last checked: never". drive-update.cjs has
+  // always nudged this with "Check now"; this driver never needed to until
+  // the zoom fix let linux legs reach this point (run 32231900743 failed
+  // exactly here). Same impatient-user pattern: press Check now, then give
+  // the check against the staged repo time to land.
+  if (!(await updateNow.isVisible().catch(() => false))) {
+    log('Update now not visible yet - clicking Check now');
+    await window.getByRole('button', { name: /check now/i }).first()
+      .click({ timeout: 20_000 })
+      .catch((e) => log(`Check now click failed (continuing to wait): ${brief(e)}`));
+  }
+  await updateNow.waitFor({ state: 'visible', timeout: 120_000 });
   await updateNow.click();
   log('clicked Update now; polling for result file');
 

@@ -137,6 +137,36 @@ async function main() {
   log(`window picked (${app.windows().length} windows, url=${page.url()})`)
   log('first window acquired')
 
+  // bug-011 recon, zoom pin round 2 (mirror of launch-from-spec.mjs): the
+  // file seed above may miss the real userData dir, so ask the main process
+  // where it actually is and force 100% zoom via webContents directly.
+  try {
+    const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'))
+    log(`[zoom] app userData actually at: ${userData}`)
+  } catch (e) {
+    log(`[zoom] userData query failed: ${e.message}`)
+  }
+  try {
+    // Single-shot set gets reverted: the app's boot path re-applies its 90%
+    // default asynchronously (verified locally, 3 rounds needed). Retry
+    // until dpr reads 1.
+    const before = await page.evaluate(() => window.devicePixelRatio)
+    let after = before
+    for (let i = 0; i < 20; i++) {
+      await app.evaluate(({ BrowserWindow }) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.webContents.setZoomLevel(0)
+        }
+      })
+      await page.waitForTimeout(1000)
+      after = await page.evaluate(() => window.devicePixelRatio)
+      if (Math.abs(after - 1) < 0.001) break
+    }
+    log(`[zoom] forced 100% via webContents.setZoomLevel(0): dpr ${before} -> ${after}`)
+  } catch (e) {
+    log(`[zoom] direct zoom set failed (continuing): ${e.message}`)
+  }
+
   // Boot: wait for the composer to exist — the shell is mounted by then.
   // The real backend (`hermes serve`) is booting underneath; give it time.
   await page.waitForSelector('textarea, [contenteditable="true"]', {

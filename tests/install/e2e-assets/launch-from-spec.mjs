@@ -154,6 +154,42 @@ async function main() {
   log(`window up: ${await window.title()} (${app.windows().length} windows, picked url=${window.url()})`);
   await window.screenshot({ path: `${values.spec}.window.png` }).catch(() => {});
 
+  // bug-011 recon, zoom pin round 2: run 32228054089 proved the seed above
+  // never engages - the app resolves userData elsewhere (spec env decides,
+  // not the driver's HOME guess) and dpr stayed 0.9. Stop guessing paths:
+  // ask the main process where userData REALLY is, then force zoom to 100%
+  // through the same webContents API the app's own zoom control uses, and
+  // log dpr before/after. This makes the next run a clean experiment:
+  // dpr=1 + green legs confirms the zoom x runner-input interplay; dpr=1 +
+  // the same interception kills the zoom theory with evidence.
+  try {
+    const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath('userData'));
+    log(`[zoom] app userData actually at: ${userData}`);
+  } catch (e) {
+    log(`[zoom] userData query failed: ${e.message}`);
+  }
+  try {
+    // Single-shot set gets reverted: the app's boot path re-applies its 90%
+    // default asynchronously (restorePersistedZoomLevel's localStorage leg
+    // lands after us - verified locally, 3 rounds needed). Set-verify-retry
+    // until dpr reads 1.
+    const before = await window.evaluate(() => window.devicePixelRatio);
+    let after = before;
+    for (let i = 0; i < 20; i++) {
+      await app.evaluate(({ BrowserWindow }) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.webContents.setZoomLevel(0);
+        }
+      });
+      await window.waitForTimeout(1000);
+      after = await window.evaluate(() => window.devicePixelRatio);
+      if (Math.abs(after - 1) < 0.001) break;
+    }
+    log(`[zoom] forced 100% via webContents.setZoomLevel(0): dpr ${before} -> ${after}`);
+  } catch (e) {
+    log(`[zoom] direct zoom set failed (continuing): ${e.message}`);
+  }
+
   if (values['no-update']) {
     log('smoke mode: window proven, closing');
     await app.close().catch(() => {});

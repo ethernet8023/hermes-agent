@@ -3105,9 +3105,10 @@ def cmd_whatsapp(args):
         print(
             "\n→ Installing WhatsApp bridge dependencies (this can take a few minutes)..."
         )
-        npm = str(nodejs.npm_path())
-        if not npm:
-            print("  ✗ npm not found on PATH — install Node.js first")
+        try:
+            npm = str(nodejs.npm_path())
+        except nodejs.NotProvisioned as exc:
+            print(f"  ✗ {exc}")
             return
         try:
             result = subprocess.run(
@@ -6883,8 +6884,9 @@ def _redownload_electron_dist(
         return False
     from installation import env as runtime_env, nodejs
 
-    node = str(nodejs.node_path())
-    if not node:
+    try:
+        node = str(nodejs.node_path())
+    except nodejs.NotProvisioned:
         return False
 
     dist_dir = electron_dir / "dist"

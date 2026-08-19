@@ -9243,11 +9243,12 @@ def _ensure_whatsapp_bridge_dependencies(bridge_dir: Path) -> None:
     from installation import env as runtime_env, nodejs
     from utils import env_int
 
-    npm = str(nodejs.npm_path())
-    if not npm:
+    try:
+        npm = str(nodejs.npm_path())
+    except nodejs.NotProvisioned as exc:
         raise HTTPException(
             status_code=500,
-            detail="npm was not found. WhatsApp setup needs Node.js and npm.",
+            detail=f"WhatsApp setup needs the managed Node.js: {exc}",
         )
 
     timeout = env_int("WHATSAPP_NPM_INSTALL_TIMEOUT", 300)

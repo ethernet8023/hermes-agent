@@ -253,9 +253,12 @@ def _install_npm(
     # Managed npm first: $HERMES_HOME/node is not on an arbitrary process's
     # PATH, so a bare which() misses the Node that Hermes installed and
     # reports "npm not on PATH" on a machine that has a perfectly good one.
-    npm = str(nodejs.npm_path())
-    if npm is None:
-        logger.info("[install] cannot install %s: no usable npm found", pkg)
+    try:
+        npm = str(nodejs.npm_path())
+    except nodejs.NotProvisioned as exc:
+        # Auto-install is a convenience path: degrade to "no LSP server"
+        # instead of crashing the caller on a damaged runtime dir.
+        logger.info("[install] cannot install %s: %s", pkg, exc)
         return None
     staging = hermes_lsp_bin_dir().parent  # <HERMES_HOME>/lsp/
     install_targets = [pkg] + list(extra_pkgs or [])

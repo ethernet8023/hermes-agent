@@ -383,11 +383,10 @@ def test_lazy_deps_uv_install_hides_console_window(monkeypatch):
     monkeypatch.delenv(lazy_deps._LAZY_TARGET_ENV, raising=False)
     monkeypatch.setattr(lazy_deps, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
     monkeypatch.setattr(lazy_deps.subprocess, "run", fake_run)
-    monkeypatch.setattr(lazy_deps.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
-    # resolve_uv() is the first rung and finds a real managed uv wherever the
-    # runtime dir is populated (the Nix dev shell points at a built one), so
-    # the PATH stub below would never be reached.
-    monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: None)
+    # The ladder is managed-uv only: pin resolve_uv to a known managed path
+    # so the spawn asserted below is deterministic on any host (a Nix dev
+    # shell or a provisioned tree would otherwise resolve its own uv).
+    monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: "/managed/bin/uv")
 
     res = lazy_deps._venv_pip_install(("left-pad",))
 
@@ -395,9 +394,40 @@ def test_lazy_deps_uv_install_hides_console_window(monkeypatch):
     spawns = _spawns(captured, "pip", "install", "left-pad")
     assert len(spawns) == 1, captured
     cmd, kwargs = spawns[0]
-    assert cmd[:3] == ["/usr/bin/uv", "pip", "install"]
+    assert cmd[:3] == ["/managed/bin/uv", "pip", "install"]
     assert kwargs["creationflags"] == _CREATE_NO_WINDOW
     assert kwargs["stdin"] == subprocess.DEVNULL
+
+
+def test_lazy_deps_path_uv_never_installs(monkeypatch):
+    """A PATH uv is a side install and must never touch the sealed venv.
+
+    With no managed uv the ladder fails with the provisioner hint — it
+    must not fall back to a `shutil.which("uv")` result (old version,
+    pyenv shim, corporate wrapper) or to bare pip.
+    """
+    from tools import lazy_deps
+
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append((cmd, kwargs))
+        return _Completed(stdout="installed", returncode=0)
+
+    monkeypatch.delenv(lazy_deps._LAZY_TARGET_ENV, raising=False)
+    monkeypatch.setattr(lazy_deps.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        lazy_deps.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None
+    )
+    monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: None)
+    from installation import pip_ladder
+    monkeypatch.setattr(pip_ladder, "default_uv", lambda: None)
+
+    res = lazy_deps._venv_pip_install(("left-pad",))
+
+    assert not res.success
+    assert "provision" in res.stderr
+    assert captured == [], f"an install ran with no managed uv: {captured}"
 
 
 

@@ -45,7 +45,8 @@ def test_install_npm_works_without_extras(tmp_path, monkeypatch):
     from agent.lsp import install as install_mod
 
     monkeypatch.setattr(install_mod.subprocess, "run", fake_run)
-    monkeypatch.setattr(install_mod.shutil, "which", lambda c: "/usr/bin/npm" if c == "npm" else None)
+    # _install_npm resolves the pinned npm, never a PATH lookup.
+    monkeypatch.setattr(install_mod.nodejs, "npm_path", lambda: "/managed/bin/npm")
 
     install_mod._install_npm("pyright", "pyright-langserver")
 
@@ -54,9 +55,31 @@ def test_install_npm_works_without_extras(tmp_path, monkeypatch):
     # Should not blow up when extra_pkgs is omitted/None
     install_targets = [c for c in cmd if not c.startswith("-") and c not in {
         "install", "--prefix", str(install_mod.hermes_lsp_bin_dir().parent),
-        "/usr/bin/npm",
+        "/managed/bin/npm",
     }]
     assert install_targets == ["pyright"]
+
+
+def test_install_npm_degrades_when_unprovisioned(tmp_path, monkeypatch):
+    """A damaged runtime dir means "no LSP server", not a crash.
+
+    ``nodejs.npm_path()`` raises ``NotProvisioned``; the auto-installer is a
+    convenience path and must degrade to None so the caller falls back to
+    running without a server.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from agent.lsp import install as install_mod
+
+    def raise_unprovisioned():
+        raise install_mod.nodejs.NotProvisioned("npm is not in this install's runtime dir")
+
+    ran = []
+    monkeypatch.setattr(install_mod.subprocess, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(install_mod.nodejs, "npm_path", raise_unprovisioned)
+
+    assert install_mod._install_npm("pyright", "pyright-langserver") is None
+    assert ran == [], "npm must not be spawned on an unprovisioned tree"
 
 
 

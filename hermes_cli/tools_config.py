@@ -1864,7 +1864,12 @@ def _run_post_setup(post_setup_key: str):
 
     elif post_setup_key == "camofox":
         camofox_dir = PROJECT_ROOT / "node_modules" / "@askjo" / "camofox-browser"
-        _npm_bin = str(nodejs.npm_path())
+        try:
+            _npm_bin = str(nodejs.npm_path())
+        except nodejs.NotProvisioned:
+            # The existing not-_npm_bin branches below print the Docker
+            # fallback; an unprovisioned tree takes the same path.
+            _npm_bin = None
         if camofox_dir.exists():
             _print_success("    Camofox already installed, nothing to do")
         elif _npm_bin:

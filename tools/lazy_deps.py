@@ -677,11 +677,18 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     known-impossible installs out of both first-use lazy installation and the
     ``hermes update`` lazy-refresh pass.
     """
-    if sys.platform == "win32" and feature == "platform.matrix":
+    if feature == "platform.matrix" and sys.platform != "linux":
         return (
-            "unsupported on Windows: Matrix E2EE depends on python-olm, "
-            "which has no Windows wheel and requires make + libolm to build "
-            "from sdist. Run Hermes under WSL to use Matrix on Windows."
+            "unsupported on this platform: Matrix E2EE depends on python-olm, "
+            "which has no wheel and requires make + libolm to build from sdist. "
+            "Run Hermes on Linux (or WSL on Windows) to use Matrix."
+        )
+    if feature == "stt.silk" and sys.platform != "win32":
+        return (
+            "unsupported on this platform: pilk (SILK codec) only publishes "
+            "Windows wheels. On macOS/Linux it falls back to a C source build "
+            "that hangs for minutes. Use a Windows host or decode SILK "
+            "voice notes elsewhere."
         )
     return None
 

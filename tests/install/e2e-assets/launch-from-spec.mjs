@@ -98,6 +98,28 @@ async function main() {
   const launch = resolveLaunch(spec);
   log(`launching ${launch.executablePath} (shape: ${spec.matchedShape})`);
 
+  // bug-011 recon, zoom pin: the app ships a 90% Appearance zoom default
+  // (electron/zoom.ts DEFAULT_ZOOM_LEVEL), so a fresh install renders at
+  // devicePixelRatio 0.9 - confirmed in this driver's hit-test dumps (run
+  // 32220379726) and reproduced locally. On the linux runners every
+  // Playwright click then lands ~10% off target (the "titlebar intercepts"
+  // failures); locally at the same zoom clicks land fine, so the zoom x
+  // runner-input-pipeline interplay is the live suspect. Pin zoom to 100%
+  // by seeding the persisted zoom-state.json the main process reads at
+  // startup (restorePersistedZoomLevel): green legs confirm the mechanism,
+  // red legs with dpr=1 in the hit-dump exonerate zoom entirely.
+  const userDataDir = launch.env.HERMES_DESKTOP_USER_DATA_DIR
+    || (process.platform === 'darwin'
+      ? path.join(process.env.HOME || '', 'Library', 'Application Support', 'Hermes')
+      : path.join(process.env.HOME || '', '.config', 'Hermes'));
+  try {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(path.join(userDataDir, 'zoom-state.json'), JSON.stringify({ zoomLevel: 0 }));
+    log(`seeded 100% zoom at ${path.join(userDataDir, 'zoom-state.json')}`);
+  } catch (e) {
+    log(`zoom seed failed (continuing at app default): ${e.message}`);
+  }
+
   const app = await _electron.launch({
     executablePath: launch.executablePath,
     args: launch.args,

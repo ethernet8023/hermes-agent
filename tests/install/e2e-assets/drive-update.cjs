@@ -83,6 +83,25 @@ async function clickFirstVisible(page, locators, description, timeoutMs) {
 async function main() {
   log(`launching ${exePath}`)
 
+  // bug-011 recon, zoom pin (same as launch-from-spec.mjs): the app ships a
+  // 90% zoom default (electron/zoom.ts), giving devicePixelRatio 0.9 on
+  // fresh installs; on the linux runners Playwright clicks then land ~10%
+  // off target. Seed the persisted zoom-state.json to 100% before launch.
+  // These legs launch the OS-installed app, so user-data resolves to the
+  // productName default unless overridden (~/.config/Hermes on linux,
+  // %APPDATA%\Hermes on windows).
+  const userDataDir = process.env.HERMES_DESKTOP_USER_DATA_DIR
+    || (process.platform === 'win32'
+      ? path.join(process.env.APPDATA || '', 'Hermes')
+      : path.join(process.env.HOME || '', '.config', 'Hermes'))
+  try {
+    fs.mkdirSync(userDataDir, { recursive: true })
+    fs.writeFileSync(path.join(userDataDir, 'zoom-state.json'), JSON.stringify({ zoomLevel: 0 }))
+    log(`seeded 100% zoom at ${path.join(userDataDir, 'zoom-state.json')}`)
+  } catch (e) {
+    log(`zoom seed failed (continuing at app default): ${e.message}`)
+  }
+
   const app = await _electron.launch({
     executablePath: exePath,
     args: ['--disable-gpu', '--no-sandbox'],

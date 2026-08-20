@@ -199,11 +199,12 @@ module.exports = {
     shortcutName: displayName,
     uninstallDisplayName: displayName,
     warningsAsErrors: false,
-    // customInit arch guard: a wrong-arch NSIS installer must refuse to run
-    // instead of installing an emulated app (x64-on-arm64) or an empty dir
-    // (arm64-on-x64 — the stock identify_package macro matches nothing and
-    // "succeeds"). The path resolves relative to the project dir.
-    include: 'electron/nsis-arch-guard.nsh'
+    // Combined arch guard + PATH management. electron-builder's nsis.include
+    // takes a SINGLE file, so both macros live in nsis-include.nsh:
+    //   customInit: arch guard (refuse wrong-arch install)
+    //   customInstall: add $INSTDIR to user PATH (EnVar plugin, idempotent)
+    //   customUnInstall: remove $INSTDIR from user PATH
+    include: 'electron/nsis-include.nsh'
   }
 }
 

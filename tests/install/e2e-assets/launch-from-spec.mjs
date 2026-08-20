@@ -308,7 +308,20 @@ async function main() {
       .click({ timeout: 20_000 })
       .catch((e) => log(`Check now click failed (continuing to wait): ${brief(e)}`));
   }
-  await updateNow.waitFor({ state: 'visible', timeout: 120_000 });
+  try {
+    await updateNow.waitFor({ state: 'visible', timeout: 120_000 });
+  } catch (e) {
+    // bug-011 recon: the About UI flattens every check failure to "couldn't
+    // reach the update server" (about-settings.tsx cantReach), hiding the
+    // actual git stderr that checkUpdates() captured (main.ts status.message).
+    // Pull the full status object over the same IPC the panel uses so the CI
+    // log names the failing git command's real error.
+    const status = await window.evaluate(() =>
+      window.hermesDesktop?.updates?.check?.() ?? Promise.resolve('no updates.check bridge')
+    ).catch((err) => `updates.check failed: ${err?.message || err}`);
+    log(`[update-status] ${JSON.stringify(status)}`);
+    throw e;
+  }
   await updateNow.click();
   log('clicked Update now; polling for result file');
 

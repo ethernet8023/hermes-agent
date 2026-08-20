@@ -1991,6 +1991,245 @@ def _is_fork(origin_url: Optional[str]) -> bool:
             return False
     return True
 
+def _maybe_offer_bundled_migration(
+    git_cmd: list[str],
+    project_root: Path,
+    origin_url: Optional[str],
+    is_fork: bool,
+    *,
+    gateway_mode: bool,
+    assume_yes: bool,
+) -> None:
+    """One-time offer to migrate from a source install to a bundled desktop install.
+
+    Eligibility (all must be true):
+    - install_method is "git" (managed source checkout, not a random repo)
+    - origin points to NousResearch (not a fork)
+    - current branch is main
+    - a desktop app has been built/packaged at least once
+
+    If the tree is dirty or has extra local branches, we still offer but
+    include a note in the prompt. The source checkout is never deleted —
+    the user can switch back by uninstalling the bundled app and re-running
+    install.sh.
+
+    A stamp file (``.hermes/.bundled-migration-prompted``) prevents
+    re-prompting after the first time, regardless of the user's answer.
+    """
+    import json as _json
+
+    # --- Never re-prompt ---
+    try:
+        from hermes_constants import get_hermes_home
+
+        stamp = get_hermes_home() / ".bundled-migration-prompted"
+        if stamp.exists():
+            return
+    except Exception:
+        return
+
+    # --- Must be a managed source checkout ---
+    try:
+        from installation.tree import install_method
+
+        if install_method(project_root) != "git":
+            return
+    except Exception:
+        return
+
+    # --- Must point at the official repo (not a fork) ---
+    if is_fork or not origin_url:
+        return
+
+    # --- Must be on the main branch ---
+    try:
+        branch_result = subprocess.run(
+            git_cmd + ["rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else ""
+    except Exception:
+        return
+    if current_branch != "main":
+        return
+
+    # --- Desktop app must have been built at least once ---
+    desktop_dir = project_root / "apps" / "desktop"
+    has_desktop = False
+    try:
+        has_desktop = _desktop_app_present(desktop_dir)
+    except Exception:
+        pass
+    if not has_desktop:
+        return
+
+    # --- Gather warnings (non-blocking) ---
+    warnings: list[str] = []
+
+    # Check for dirty working tree (after lockfile/eol normalization already ran)
+    try:
+        diff_result = subprocess.run(
+            git_cmd + ["diff", "--name-only"],
+            cwd=project_root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        dirty_files = [f for f in diff_result.stdout.splitlines() if f.strip()] if diff_result.returncode == 0 else []
+    except Exception:
+        dirty_files = []
+    if dirty_files:
+        warnings.append(
+            f"you have {len(dirty_files)} uncommitted change(s) in the source tree"
+        )
+
+    # Check for extra local branches (signal the user has been editing)
+    try:
+        branch_list = subprocess.run(
+            git_cmd + ["branch", "--list", "--format=%(refname:short)"],
+            cwd=project_root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        local_branches = [
+            b.strip() for b in branch_list.stdout.splitlines()
+            if b.strip() and b.strip() != "main"
+        ] if branch_list.returncode == 0 else []
+    except Exception:
+        local_branches = []
+    if local_branches:
+        warnings.append(
+            f"you have {len(local_branches)} extra local branch(es): {', '.join(local_branches[:5])}"
+        )
+
+    # --- Don't prompt in non-interactive contexts ---
+    if gateway_mode or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        if not assume_yes:
+            return
+
+    # --- Build the prompt ---
+    print()
+    print("┌─────────────────────────────────────────────────────────────┐")
+    print("│  Switch to a bundled desktop install?                      │")
+    print("├─────────────────────────────────────────────────────────────┤")
+    print("│  Bundled installs get faster updates (no git pull needed),  │")
+    print("│  ship with browser runtimes and CUA pre-packaged, and       │")
+    print("│  update through the desktop app's built-in updater.        │")
+    print("│                                                             │")
+
+    if warnings:
+        print("│  Note: we noticed " + " and ".join(warnings) + ".    │")
+        print("│  The bundled install won't let you edit the source code.   │")
+        print("│  Your existing source checkout will remain at:              │")
+        print(f"│  {str(project_root):<57} │")
+        print("│  You can switch back any time by uninstalling the bundled   │")
+        print("│  app and re-running install.sh from the website.            │")
+    else:
+        print("│  Your source checkout is clean and on main. The bundled     │")
+        print("│  install replaces the git-based update path with the        │")
+        print("│  desktop app's auto-updater. Your existing source code at:   │")
+        print(f"│  {str(project_root):<57} │")
+        print("│  stays in place and you can switch back any time.           │")
+
+    print("└─────────────────────────────────────────────────────────────┘")
+    print()
+
+    if assume_yes:
+        print("  Auto-accepting (--yes). Starting migration...")
+        _do_bundled_migration(project_root)
+        accepted = True
+    else:
+        answer = input("  Migrate to bundled install? [y/N] ").strip().lower()
+        accepted = answer in ("y", "yes")
+        if accepted:
+            _do_bundled_migration(project_root)
+        else:
+            print("  Skipped — continuing with git-based update.")
+
+    # Stamp regardless of answer so we never re-prompt
+    try:
+        stamp.write_text(
+            _json.dumps({"prompted": True, "accepted": accepted}),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _do_bundled_migration(project_root: Path) -> None:
+    """Download and install the latest bundled desktop app, then exit.
+
+    The source checkout stays in place. PATH wrappers are updated by
+    step_expose_cli on the next boot of the bundled app. The user must
+    restart Hermes after migration — the current process exits.
+    """
+    import platform as _plat
+    import tempfile as _tempfile
+    import urllib.request
+
+    system = _plat.system()
+
+    # Determine the download asset for this platform
+    tag = _github_latest_release_tag()
+    if not tag:
+        print("  ✗ Could not determine the latest release tag from GitHub.")
+        print("    Download manually from: https://github.com/NousResearch/hermes-agent/releases")
+        return
+
+    arch = "arm64" if _plat.machine().lower() in ("arm64", "aarch64") else "x64"
+
+    if system == "Darwin":
+        asset_pattern = f"Hermes-{tag}-mac-{arch}.dmg"
+    elif system == "Windows":
+        asset_pattern = f"Hermes-{tag}-win-{arch}.exe"
+    elif system == "Linux":
+        asset_pattern = f"Hermes-{tag}-linux-{arch}.AppImage"
+    else:
+        print(f"  ✗ Bundled installs are not available for {system}.")
+        return
+
+    download_url = f"https://github.com/NousResearch/hermes-agent/releases/download/{tag}/{asset_pattern}"
+    print(f"  → Downloading {asset_pattern}...")
+    print(f"    {download_url}")
+
+    try:
+        tmp_dir = Path(_tempfile.mkdtemp(prefix="hermes-migration-"))
+        installer_path = tmp_dir / asset_pattern
+        urllib.request.urlretrieve(download_url, installer_path)
+
+        if not installer_path.is_file() or installer_path.stat().st_size < 1_000_000:
+            print("  ✗ Download failed or file too small — the asset may not exist for this platform.")
+            print("    Check: https://github.com/NousResearch/hermes-agent/releases")
+            return
+    except Exception as exc:
+        print(f"  ✗ Download failed: {exc}")
+        print("    Download manually from: https://github.com/NousResearch/hermes-agent/releases")
+        return
+
+    print(f"  ✓ Downloaded ({installer_path.stat().st_size // (1024*1024)} MB)")
+
+    # Launch the installer
+    print("  → Launching installer...")
+    try:
+        if system == "Darwin":
+            subprocess.Popen(["open", str(installer_path)])
+        elif system == "Windows":
+            subprocess.Popen([str(installer_path)], shell=True)
+        elif system == "Linux":
+            installer_path.chmod(0o755)
+            subprocess.Popen([str(installer_path)])
+
+        print()
+        print("  ✓ Installer launched. Complete the installation, then restart Hermes.")
+        print("    Your source code is still at:")
+        print(f"      {project_root}")
+        print("    You can switch back by uninstalling the bundled app and re-running install.sh.")
+        print()
+        print("  Exiting — please restart Hermes from the newly installed app.")
+        sys.exit(0)
+    except Exception as exc:
+        print(f"  ✗ Could not launch installer: {exc}")
+        print(f"    Run it manually: {installer_path}")
+
+
 def _has_upstream_remote(git_cmd: list[str], cwd: Path) -> bool:
     """Check if an 'upstream' remote already exists."""
     try:
@@ -5074,6 +5313,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
         print("⚠ Updating from fork:")
         print(f"  {origin_url}")
         print()
+
+    # Offer migration to a bundled desktop install for eligible source checkouts.
+    # One-time prompt: if the user declines or accepts, a stamp file prevents
+    # re-prompting. Only offered for managed source installs (install_method
+    # == "git") on the main branch of the official repo with a clean tree.
+    _maybe_offer_bundled_migration(
+        git_cmd, _m().PROJECT_ROOT, origin_url, is_fork,
+        gateway_mode=gateway_mode, assume_yes=assume_yes,
+    )
 
     if use_zip_update:
         # ZIP-based update for Windows when git is broken

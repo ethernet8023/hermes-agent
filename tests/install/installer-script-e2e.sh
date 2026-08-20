@@ -407,6 +407,15 @@ case "$UPDATE_METHOD" in
       | ts_prefix > "$LOG_DIR/app-update.log") || rc=$?
     log_group "app update (Playwright) transcript" "$LOG_DIR/app-update.log"
     [ "$rc" -eq 0 ] || fail "app-driven update exited $rc; transcript above"
+    # The in-app update ran npm inside $INSTALL_DIR while the driver's
+    # bounded teardown killed the app (and its backend) around it - run
+    # 32385999825 left node_modules half-written (ENOTEMPTY in the head
+    # smoke's npm ci). The smoke check rebuilds from scratch anyway, so
+    # give it a pristine tree instead of an interrupted one.
+    step "clearing node_modules after driver-killed in-app update"
+    find "$INSTALL_DIR" -maxdepth 3 -name node_modules -type d -prune -print0 2>/dev/null \
+      | xargs -0 rm -rf 2>/dev/null || true
+    ok "node_modules cleared for the head desktop smoke"
     ;;
 esac
 assert_checkout "$HEAD_SHA" HEAD

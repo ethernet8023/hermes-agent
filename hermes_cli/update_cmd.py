@@ -2013,8 +2013,14 @@ def _maybe_offer_bundled_migration(
     the user can switch back by uninstalling the bundled app and re-running
     install.sh.
 
+    Interactive TTYs only: gateway mode, ``--yes``, and non-TTY contexts
+    all skip silently (``--yes`` means "don't block on prompts", not "opt
+    into a different install method" — the desktop bootstrap updater runs
+    ``hermes update --yes`` and must never be hijacked into a migration).
+
     A stamp file (``.hermes/.bundled-migration-prompted``) prevents
     re-prompting after the first time, regardless of the user's answer.
+    Ctrl+C / EOF at the prompt skips WITHOUT stamping (ask again next time).
     """
     import json as _json
 
@@ -2026,6 +2032,16 @@ def _maybe_offer_bundled_migration(
         if stamp.exists():
             return
     except Exception:
+        return
+
+    # --- Interactive terminals only ---
+    # The desktop bootstrap updater runs `hermes update --yes --gateway`
+    # (scripts/desktop-update/posix.sh / windows.ps1) and the gateway /update
+    # command runs `hermes update --gateway`. --yes means "don't block on
+    # prompts", never "opt into a different install method" — auto-accepting
+    # here would hijack every automated update into a migration that exits
+    # the process mid-flight. Offer the migration only to a human at a TTY.
+    if gateway_mode or assume_yes or not (sys.stdin.isatty() and sys.stdout.isatty()):
         return
 
     # --- Must be a managed source checkout ---
@@ -2067,10 +2083,13 @@ def _maybe_offer_bundled_migration(
     # --- Gather warnings (non-blocking) ---
     warnings: list[str] = []
 
-    # Check for dirty working tree (after lockfile/eol normalization already ran)
+    # Check for dirty working tree (after lockfile/eol normalization already
+    # ran). `status --porcelain` matches the update flow's other dirtiness
+    # checks and, unlike `diff --name-only`, also sees staged and untracked
+    # files — the strongest signal the user edits this checkout.
     try:
         diff_result = subprocess.run(
-            git_cmd + ["diff", "--name-only"],
+            git_cmd + ["status", "--porcelain"],
             cwd=project_root,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
@@ -2100,51 +2119,37 @@ def _maybe_offer_bundled_migration(
             f"you have {len(local_branches)} extra local branch(es): {', '.join(local_branches[:5])}"
         )
 
-    # --- Don't prompt in non-interactive contexts ---
-    if gateway_mode or not (sys.stdin.isatty() and sys.stdout.isatty()):
-        if not assume_yes:
-            return
-
     # --- Build the prompt ---
     print()
-    print("┌─────────────────────────────────────────────────────────────┐")
-    print("│  Switch to a bundled desktop install?                      │")
-    print("├─────────────────────────────────────────────────────────────┤")
-    print("│  Bundled installs get faster updates (no git pull needed),  │")
-    print("│  ship with browser runtimes and CUA pre-packaged, and       │")
-    print("│  update through the desktop app's built-in updater.        │")
-    print("│                                                             │")
-
+    print("  Switch to a bundled desktop install?")
+    print("  ────────────────────────────────────")
+    print("  Bundled installs get faster updates (no git pull needed),")
+    print("  ship with browser runtimes and CUA pre-packaged, and")
+    print("  update through the desktop app's built-in updater.")
+    print()
     if warnings:
-        print("│  Note: we noticed " + " and ".join(warnings) + ".    │")
-        print("│  The bundled install won't let you edit the source code.   │")
-        print("│  Your existing source checkout will remain at:              │")
-        print(f"│  {str(project_root):<57} │")
-        print("│  You can switch back any time by uninstalling the bundled   │")
-        print("│  app and re-running install.sh from the website.            │")
-    else:
-        print("│  Your source checkout is clean and on main. The bundled     │")
-        print("│  install replaces the git-based update path with the        │")
-        print("│  desktop app's auto-updater. Your existing source code at:   │")
-        print(f"│  {str(project_root):<57} │")
-        print("│  stays in place and you can switch back any time.           │")
-
-    print("└─────────────────────────────────────────────────────────────┘")
+        print("  Note: we noticed " + " and ".join(warnings) + ".")
+        print("  The bundled install won't let you edit the source code.")
+    print(f"  Your source checkout stays in place at: {project_root}")
+    print("  You can switch back any time by uninstalling the bundled app")
+    print("  and re-running install.sh from the website.")
     print()
 
-    if assume_yes:
-        print("  Auto-accepting (--yes). Starting migration...")
-        _do_bundled_migration(project_root)
-        accepted = True
-    else:
+    try:
         answer = input("  Migrate to bundled install? [y/N] ").strip().lower()
-        accepted = answer in ("y", "yes")
-        if accepted:
-            _do_bundled_migration(project_root)
-        else:
-            print("  Skipped — continuing with git-based update.")
+    except (EOFError, KeyboardInterrupt, UnicodeDecodeError):
+        # Ctrl+C / closed stdin at the prompt: treat as "not now" WITHOUT
+        # stamping, so the user is asked again next update, and let the
+        # update itself continue.
+        print()
+        print("  Skipped — continuing with git-based update.")
+        return
+    accepted = answer in ("y", "yes")
 
-    # Stamp regardless of answer so we never re-prompt
+    # Stamp BEFORE migrating: _do_bundled_migration exits the process on
+    # success (sys.exit(0) after launching the installer), so a stamp
+    # written after the call would never land on the accept path and the
+    # user would be re-prompted forever.
     try:
         stamp.write_text(
             _json.dumps({"prompted": True, "accepted": accepted}),
@@ -2152,6 +2157,64 @@ def _maybe_offer_bundled_migration(
         )
     except OSError:
         pass
+
+    if accepted:
+        _do_bundled_migration(project_root)
+    else:
+        print("  Skipped — continuing with git-based update.")
+
+
+def _bundled_release_asset(tag: str, system: str, machine: str):
+    """Pick the bundled-desktop installer asset for this machine from the
+    GitHub release for ``tag``. Returns ``(name, download_url)`` or ``None``.
+
+    Asset names come from electron-builder's artifactName
+    (``apps/desktop/electron-builder.config.cjs``):
+    ``HermesBundled-<version>-<os>-<arch>.<ext>`` — e.g.
+    ``HermesBundled-0.27.0-mac-arm64.dmg``,
+    ``HermesBundled-0.27.0-linux-x86_64.AppImage``. The version is the
+    package semver, NOT the release tag, and linux x64 spells its arch
+    ``x86_64`` — so the name is matched from the release's real asset
+    list instead of being constructed by hand (which 404s).
+    """
+    import re as _re
+    import urllib.error
+    import urllib.request
+
+    os_ext = {
+        "Darwin": ("mac", "dmg"),
+        "Windows": ("win", "exe"),
+        "Linux": ("linux", "AppImage"),
+    }.get(system)
+    if os_ext is None:
+        return None
+    os_token, ext = os_ext
+
+    is_arm = machine.lower() in ("arm64", "aarch64")
+    if os_token == "linux":
+        arch_token = "arm64" if is_arm else "x86_64"
+    else:
+        arch_token = "arm64" if is_arm else "x64"
+
+    pattern = _re.compile(
+        rf"^HermesBundled-[\w.+-]+-{os_token}-{arch_token}\.{ext}$"
+    )
+    url = f"https://api.github.com/repos/NousResearch/hermes-agent/releases/tags/{tag}"
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/vnd.github+json",
+                      "User-Agent": "hermes-update"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            release = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        logger.debug("GitHub release lookup for %s failed: %s", tag, exc)
+        return None
+    for asset in release.get("assets") or []:
+        name = asset.get("name") or ""
+        if pattern.match(name) and asset.get("browser_download_url"):
+            return name, asset["browser_download_url"]
+    return None
 
 
 def _do_bundled_migration(project_root: Path) -> None:
@@ -2166,6 +2229,9 @@ def _do_bundled_migration(project_root: Path) -> None:
     import urllib.request
 
     system = _plat.system()
+    if system not in ("Darwin", "Windows", "Linux"):
+        print(f"  ✗ Bundled installs are not available for {system}.")
+        return
 
     # Determine the download asset for this platform
     tag = _github_latest_release_tag()
@@ -2174,26 +2240,37 @@ def _do_bundled_migration(project_root: Path) -> None:
         print("    Download manually from: https://github.com/NousResearch/hermes-agent/releases")
         return
 
-    arch = "arm64" if _plat.machine().lower() in ("arm64", "aarch64") else "x64"
-
-    if system == "Darwin":
-        asset_pattern = f"Hermes-{tag}-mac-{arch}.dmg"
-    elif system == "Windows":
-        asset_pattern = f"Hermes-{tag}-win-{arch}.exe"
-    elif system == "Linux":
-        asset_pattern = f"Hermes-{tag}-linux-{arch}.AppImage"
-    else:
-        print(f"  ✗ Bundled installs are not available for {system}.")
+    found = _bundled_release_asset(tag, system, _plat.machine())
+    if not found:
+        print(f"  ✗ No bundled desktop installer found on release {tag} for this platform.")
+        print("    Check: https://github.com/NousResearch/hermes-agent/releases")
         return
+    asset_name, download_url = found
 
-    download_url = f"https://github.com/NousResearch/hermes-agent/releases/download/{tag}/{asset_pattern}"
-    print(f"  → Downloading {asset_pattern}...")
+    print(f"  → Downloading {asset_name}...")
     print(f"    {download_url}")
 
     try:
         tmp_dir = Path(_tempfile.mkdtemp(prefix="hermes-migration-"))
-        installer_path = tmp_dir / asset_pattern
-        urllib.request.urlretrieve(download_url, installer_path)
+        installer_path = tmp_dir / asset_name
+        req = urllib.request.Request(
+            download_url, headers={"User-Agent": "hermes-update"}
+        )
+        done = 0
+        with urllib.request.urlopen(req, timeout=60) as resp, \
+                open(installer_path, "wb") as out:
+            total = int(resp.headers.get("Content-Length") or 0)
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                if total and sys.stdout.isatty():
+                    print(f"\r    {done // (1024*1024)} / {total // (1024*1024)} MB",
+                          end="", flush=True)
+        if total and sys.stdout.isatty():
+            print()
 
         if not installer_path.is_file() or installer_path.stat().st_size < 1_000_000:
             print("  ✗ Download failed or file too small — the asset may not exist for this platform.")
@@ -2212,7 +2289,11 @@ def _do_bundled_migration(project_root: Path) -> None:
         if system == "Darwin":
             subprocess.Popen(["open", str(installer_path)])
         elif system == "Windows":
-            subprocess.Popen([str(installer_path)], shell=True)
+            # Plain Popen launches the .exe directly. The original
+            # `Popen([path], shell=True)` was wrong on two axes: a LIST with
+            # shell=True passes the path as an argument to `cmd /c` (not the
+            # command), and shell=True is needless for an .exe.
+            subprocess.Popen([str(installer_path)])
         elif system == "Linux":
             installer_path.chmod(0o755)
             subprocess.Popen([str(installer_path)])
@@ -5315,9 +5396,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
         print()
 
     # Offer migration to a bundled desktop install for eligible source checkouts.
-    # One-time prompt: if the user declines or accepts, a stamp file prevents
-    # re-prompting. Only offered for managed source installs (install_method
-    # == "git") on the main branch of the official repo with a clean tree.
+    # One-time prompt (stamped after the first answer); interactive TTY runs
+    # only — gateway mode, --yes, and non-TTY contexts skip silently. Only
+    # offered for managed source installs (install_method == "git") on the
+    # main branch of the official repo.
     _maybe_offer_bundled_migration(
         git_cmd, _m().PROJECT_ROOT, origin_url, is_fork,
         gateway_mode=gateway_mode, assume_yes=assume_yes,

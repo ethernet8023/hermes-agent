@@ -3322,7 +3322,20 @@ function Install-CuaDriver {
         # via a background job: the upstream installer serializes with its own
         # lock (600s stale window), so the ceiling sits above that -- matching
         # Hermes' _CUA_INSTALLER_TIMEOUT (660s).
+        #
+        # Telemetry: cua-driver reads CUA_DRIVER_RS_TELEMETRY_ENABLED ("0" =
+        # disabled). Hermes disables telemetry by default (config
+        # computer_use.cua_telemetry defaults False). Pass the env var into the
+        # job so the upstream installer and the installed binary both see it.
+        # Without this the upstream installer's own console may print a
+        # "Sends telemetry..." consent prompt that pops a visible window.
+        #
+        # Window: -WindowStyle Hidden on the job's PowerShell process stops the
+        # console flash from the upstream installer. The job still streams its
+        # output through Receive-Job for error checking.
+        $env:CUA_DRIVER_RS_TELEMETRY_ENABLED = "0"
         $job = Start-Job -ScriptBlock {
+            $env:CUA_DRIVER_RS_TELEMETRY_ENABLED = "0"
             Invoke-RestMethod -UseBasicParsing "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1" | Invoke-Expression
         }
         if (Wait-Job $job -Timeout 660) {

@@ -81,7 +81,27 @@ function log(msg) {
   console.log(`[launch-from-spec] ${msg}`);
 }
 
+// Coarse phase marker for the self-deadline's post-mortem line.
+let currentPhase = 'init';
+/** @param {string} p */
+function phase(p) {
+  currentPhase = p;
+}
+
 async function main() {
+  // Driver self-deadline: SIGKILLed Electron apps leave Playwright driver
+  // connections / inherited pipes holding node's event loop open, so the
+  // process can survive its own completed test (run 32382176435: test green
+  // at +03:58, driver alive 23 more minutes until the leg was cancelled).
+  // Success/failure paths exit explicitly below; this unref'd timer is the
+  // backstop so no unknown state can hold a runner past its budget.
+  const SELF_DEADLINE_MS = 20 * 60 * 1000;
+  const selfDeadline = setTimeout(() => {
+    log(`DRIVER SELF-TIMEOUT after ${SELF_DEADLINE_MS / 60000}min - exiting 124 (phase: ${currentPhase})`);
+    process.exit(124);
+  }, SELF_DEADLINE_MS);
+  selfDeadline.unref();
+
   const { values } = parseArgs({
     options: {
       spec: { type: 'string' },
@@ -120,6 +140,7 @@ async function main() {
     log(`zoom seed failed (continuing at app default): ${e.message}`);
   }
 
+  phase('launch');
   const app = await _electron.launch({
     executablePath: launch.executablePath,
     args: launch.args,
@@ -193,7 +214,7 @@ async function main() {
   if (values['no-update']) {
     log('smoke mode: window proven, closing');
     await app.close().catch(() => {});
-    return;
+    process.exit(0);
   }
 
   if (!values.result && !(values['expect-sha'] && values['repo-dir'])) {
@@ -215,6 +236,7 @@ async function main() {
   // alternate short-timeout dismiss clicks with short-timeout settings
   // clicks until a settings click actually LANDS (Playwright's hit-target
   // check makes a landed click proof the overlay is gone).
+  phase('overlay-loop');
   const later = window.getByRole('button', { name: /choose a provider later|skip/i }).first()
   const settingsButton = window.getByRole('button', { name: /open settings|settings/i }).first()
 
@@ -292,6 +314,7 @@ async function main() {
     throw new Error('onboarding overlay never cleared: Settings not clickable within 180s')
   }
 
+  phase('about-update');
   // Settings is open: About -> Update now.
   await window.getByRole('tab', { name: /about/i }).or(
     window.getByRole('button', { name: /about/i })).first().click();
@@ -333,6 +356,7 @@ async function main() {
     throw e;
   }
   await updateNow.click();
+  phase('update-poll');
   log('clicked Update now; polling for result file');
 
   // The app may relaunch/exit during the update; completion signals are
@@ -374,6 +398,7 @@ async function main() {
   // wedged run 32352893319 for 50 minutes. Record which state the app landed
   // in, close it with a bounded teardown, then do what the overlay asks — the
   // real user journey — and assert the relaunched app runs the updated code.
+  phase('post-update');
   const handoff = await window.evaluate(() => {
     const text = document.body ? document.body.innerText : ''
     const m = text.match(/[^\n]*(update complete|reopen|relaunch)[^\n]*/i)
@@ -399,6 +424,7 @@ async function main() {
   // the renderer's DOM carries the running build's short sha when launched
   // from a git checkout (statusbar/About); require the EXPECTED sha's short
   // form, or at minimum a live UI window, logging what we saw.
+  phase('relaunch');
   log('relaunching the updated app (the "reopen Hermes" step)');
   const relaunch = await _electron.launch({
     executablePath: launch.executablePath,
@@ -443,9 +469,17 @@ async function main() {
   }
   log('relaunch verification complete: updated app boots and presents UI');
   await boundedClose(relaunch, 'relaunch teardown');
+  // Explicit exit: SIGKILLed Electron leaves driver connections holding the
+  // event loop; falling off main() never terminates (run 32382176435).
+  process.exit(0);
 }
 
 const invoked = process.argv[1] && path.resolve(process.argv[1]) === (await import('node:url')).fileURLToPath(import.meta.url);
 if (invoked) {
-  await main();
+  try {
+    await main();
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
+  }
 }

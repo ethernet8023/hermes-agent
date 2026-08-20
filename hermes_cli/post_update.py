@@ -301,14 +301,19 @@ def step_expose_cli() -> dict:
     edits, Windows registry) stays installer-side on purpose — a
     boot-time step must not edit rc files on every update.
 
-    Config-gated by ``cli.expose_on_path`` (default true). Windows is a
-    no-op for now: venv Scripts are already User-PATH-persisted by the
-    installer, and signed-trampoline copying (bundled installs) lands
-    with the desktop payload work.
-    """
-    if sys.platform == "win32":
-        return {"ok": True, "skipped": "windows-installer-owned"}
+    Config-gated by ``cli.expose_on_path`` (default true).
 
+    POSIX source installs: wrappers point at the venv python.
+
+    POSIX bundled installs: wrappers point at the payload's embedded
+    CPython (resolved via manifest.json in the payload dir).
+
+    Windows source installs: venv Scripts are User-PATH-persisted by
+    install.ps1 — this step is a no-op.
+
+    Windows bundled installs: .cmd shims are written to a bin dir inside
+    the install and that dir is added to user PATH via the registry.
+    """
     try:
         from hermes_cli.config import load_config
 
@@ -321,18 +326,55 @@ def step_expose_cli() -> dict:
     from installation.paths import get_install_root
 
     root = get_install_root()
-    venv_python = root / "venv" / "bin" / "python"
     entrypoint = root / "hermes"
-    if not venv_python.is_file() or not entrypoint.is_file():
-        # Sealed/bundled trees have no venv to point wrappers at; their
-        # launchers ship with the payload. Nothing to maintain here.
-        return {"ok": True, "skipped": "no-venv-layout"}
+    is_windows = sys.platform == "win32"
 
+    # Resolve the Python interpreter to use in the wrappers.
+    # Source installs have a venv; bundled installs have a payload CPython
+    # recorded in manifest.json (install root is <payload>/repo).
+    venv_python = root / "venv" / ("Scripts" if is_windows else "bin") / ("python.exe" if is_windows else "python")
+    if venv_python.is_file() and entrypoint.is_file():
+        python_exe = venv_python
+    else:
+        # Bundled/sealed: no venv. Read the payload CPython from manifest.json.
+        payload_dir = root.parent
+        manifest = payload_dir / "manifest.json"
+        if not manifest.is_file():
+            return {"ok": True, "skipped": "no-venv-or-payload"}
+        try:
+            import json as _json
+
+            data = _json.loads(manifest.read_text(encoding="utf-8"))
+            python_rel = data.get("python", "")
+            if not python_rel:
+                return {"ok": True, "skipped": "no-payload-python-in-manifest"}
+            payload_python = payload_dir / python_rel
+        except (OSError, ValueError, KeyError):
+            return {"ok": True, "skipped": "manifest-unreadable"}
+        if not payload_python.is_file() or not entrypoint.is_file():
+            return {"ok": True, "skipped": "payload-python-or-entrypoint-missing"}
+        python_exe = payload_python
+
+    if is_windows:
+        # Source installs: install.ps1 already created <InstallDir>\bin with
+        # hermes.exe and added it to user PATH. Only bundled installs (no
+        # venv) need .cmd shims here.
+        if venv_python == python_exe:
+            return {"ok": True, "skipped": "windows-source-install-installer-owned"}
+        return _write_windows_cmd_shims(root, python_exe, entrypoint)
+
+    return _write_posix_wrappers(root, python_exe, entrypoint)
+
+
+def _write_posix_wrappers(
+    root: Path, python_exe: Path, entrypoint: Path
+) -> dict:
+    """Write bash wrapper scripts to ~/.local/bin (POSIX)."""
     link_dir = Path.home() / ".local" / "bin"
     wrappers = {
-        "hermes": f'exec "{venv_python}" "{entrypoint}" "$@"',
-        "hermes-agent": f'exec "{venv_python}" "{root / "run_agent.py"}" "$@"',
-        "hermes-acp": f'exec "{venv_python}" "{entrypoint}" acp "$@"',
+        "hermes": f'exec "{python_exe}" "{entrypoint}" "$@"',
+        "hermes-agent": f'exec "{python_exe}" "{root / "run_agent.py"}" "$@"',
+        "hermes-acp": f'exec "{python_exe}" "{entrypoint}" acp "$@"',
     }
 
     written: list[str] = []
@@ -379,6 +421,79 @@ def step_expose_cli() -> dict:
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "written": written}
+
+
+def _write_windows_cmd_shims(
+    root: Path, python_exe: Path, entrypoint: Path
+) -> dict:
+    """Write .cmd shim files and add the bin dir to user PATH (Windows).
+
+    install.ps1 creates a ``<InstallDir>\\bin`` directory with copies of
+    ``hermes.exe`` from the venv. For bundled installs there is no venv
+    and no console-script exe, so we write ``.cmd`` shims that invoke the
+    payload Python directly — same shape as the POSIX wrappers.
+
+    PATH is managed via the registry (User scope), matching install.ps1's
+    pattern. Idempotent: only writes when content changes and only adds
+    the bin dir to PATH when it's not already there.
+
+    MSIX installs: the payload lives inside the read-only WindowsApps
+    directory, so writing shims fails. MSIX handles CLI access via an
+    AppExecutionAlias in the manifest (``hermes.exe``), so no shims or
+    PATH edits are needed — skip gracefully.
+    """
+    import winreg
+
+    bin_dir = root.parent / "bin"
+    shims = {
+        "hermes.cmd": f'@"{python_exe}" "{entrypoint}" %*',
+        "hermes-agent.cmd": f'@"{python_exe}" "{root / "run_agent.py"}" %*',
+        "hermes-acp.cmd": f'@"{python_exe}" "{entrypoint}" acp %*',
+    }
+
+    written: list[str] = []
+    try:
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        for name, body in shims.items():
+            target = bin_dir / name
+            try:
+                existing = target.read_text(encoding="utf-8-sig")
+            except (FileNotFoundError, OSError):
+                existing = None
+            if existing == body:
+                continue
+            target.write_text(body, encoding="utf-8")
+            written.append(name)
+    except PermissionError:
+        # MSIX or other read-only payload: the AppExecutionAlias in the
+        # MSIX manifest handles CLI access. Nothing to do here.
+        return {"ok": True, "skipped": "read-only-payload-msix-alias"}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    # Add bin_dir to user PATH if not already present.
+    path_added = False
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE
+        ) as key:
+            try:
+                current, _ = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current = ""
+            current = current or ""
+            bin_str = str(bin_dir)
+            # Case-insensitive check (Windows paths are case-insensitive)
+            existing_items = [p.strip() for p in current.split(";") if p.strip()]
+            if not any(p.lower() == bin_str.lower() for p in existing_items):
+                updated = f"{bin_str};{current}" if current else bin_str
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, updated)
+                path_added = True
+    except OSError as exc:
+        logger.debug("Could not update user PATH: %s", exc)
+        return {"ok": True, "written": written, "path_added": False, "path_error": str(exc)}
+
+    return {"ok": True, "written": written, "path_added": path_added}
 
 
 # ---------------------------------------------------------------------------

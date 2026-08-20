@@ -180,7 +180,7 @@ module.exports = {
     // Copilot hardware key floor anyway.
     minVersion: '10.0.22621.0',
     maxVersionTested: '10.0.26100.0',
-    customExtensionsPath: copilotKeyFragmentPath(),
+    customExtensionsPath: msixExtensionsPath(),
     // Without this the Start tile renders logo-only, no app name.
     showNameOnTiles: true
   },
@@ -242,20 +242,29 @@ function stageMsixAssets() {
 }
 stageMsixAssets()
 
-// ── copilot key provider fragment ───────────────────────────────────────────
+// ── MSIX custom extensions ──────────────────────────────────────────────────
 
-// The uap3:AppExtension fragment that registers the app as a Windows
-// Copilot hardware key provider.
-// The press activates <scheme>://copilot-key/start.
+// Two extension fragments go into the MSIX manifest's <Extensions> block:
+//
+// 1. Copilot hardware key provider (uap3:AppExtension) — the press
+//    activates <scheme>://copilot-key/start.
+//
+// 2. App execution alias (uap5:AppExecutionAlias) — registers
+//    "hermes.exe" as a command the user can type in any terminal. The
+//    alias resolves to the MSIX-packaged app, so `hermes` works from
+//    cmd/PowerShell/WSL without any PATH or registry modification. This
+//    is the MSIX-native equivalent of the .cmd shims that NSIS installs
+//    use: MSIX runs in an AppContainer where HKCU\Environment writes
+//    don't persist, so the registry PATH approach doesn't work. The
+//    execution alias must end with .exe (Windows requirement).
 //
 // Content rules (violations are an opaque makeappx 0x80080204; the full
 // reasons only surface when makeappx runs against a plain directory):
-//   * xmlns:uap3 rides on the fragment root — the stock manifest template
-//     declares no uap3 prefix. A/B-verified fine (namespace placement is
-//     NOT what 0x80080204 was about; msix.minVersion was).
+//   * xmlns:uap3 / xmlns:uap5 / xmlns:desktop4 ride on the fragment root —
+//     the stock manifest template declares no uap3/uap5/desktop4 prefix.
 //   * children of uap3:Properties are UNPREFIXED (xs:any content, per
 //     Microsoft's copilot-key-state sample).
-function copilotKeyFragmentPath() {
+function msixExtensionsPath() {
   const fragment = `<uap3:Extension
     xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
     Category="windows.appExtension">
@@ -272,8 +281,18 @@ function copilotKeyFragmentPath() {
     </uap3:Properties>
   </uap3:AppExtension>
 </uap3:Extension>
+<uap5:Extension
+    xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+    xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+    Category="windows.appExecutionAlias"
+    Executable="app\\${displayName}.exe"
+    EntryPoint="Windows.FullTrustApplication">
+  <uap5:AppExecutionAlias desktop4:Subsystem="console">
+    <uap5:ExecutionAlias Alias="hermes.exe" />
+  </uap5:AppExecutionAlias>
+</uap5:Extension>
 `
-  const rel = path.join('build', 'msix-copilot-key-extensions.xml')
+  const rel = path.join('build', 'msix-extensions.xml')
   const abs = path.join(__dirname, rel)
   fs.mkdirSync(path.dirname(abs), { recursive: true })
   fs.writeFileSync(abs, fragment)

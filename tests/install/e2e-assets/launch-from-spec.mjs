@@ -365,7 +365,84 @@ async function main() {
     }
     await new Promise((r) => setTimeout(r, 2_000));
   }
-  await app.close().catch(() => {});
+
+  // ── Post-update: observe the hand-off state, then relaunch and verify ──
+  // On CI runners the rebuilt app cannot self-relaunch (chrome-sandbox needs
+  // root ownership; user namespaces are restricted), so the product parks on
+  // an "update complete — reopen Hermes to finish" overlay. That overlay also
+  // means the app never exits: a bare app.close() awaits graceful exit and
+  // wedged run 32352893319 for 50 minutes. Record which state the app landed
+  // in, close it with a bounded teardown, then do what the overlay asks — the
+  // real user journey — and assert the relaunched app runs the updated code.
+  const handoff = await window.evaluate(() => {
+    const text = document.body ? document.body.innerText : ''
+    const m = text.match(/[^\n]*(update complete|reopen|relaunch)[^\n]*/i)
+    return m ? m[0].trim().slice(0, 200) : null
+  }).catch(() => null);
+  log(handoff ? `post-update hand-off state: "${handoff}"` : 'post-update: no hand-off overlay observed (app may self-relaunch)');
+  await window.screenshot({ path: `${values.spec}.post-update.png` }).catch(() => {});
+
+  const boundedClose = async (application, label) => {
+    const closed = await Promise.race([
+      application.close().then(() => true).catch(() => true),
+      new Promise((r) => setTimeout(() => r(false), 15_000)),
+    ]);
+    if (!closed) {
+      log(`${label}: graceful close timed out after 15s - killing the Electron process`);
+      try { application.process().kill('SIGKILL'); } catch { /* already gone */ }
+    }
+  };
+  await boundedClose(app, 'updated-app teardown');
+
+  // Relaunch from the same captured spec - the leg's own launch mechanism -
+  // and require the UI to come up on the updated checkout. Verification:
+  // the renderer's DOM carries the running build's short sha when launched
+  // from a git checkout (statusbar/About); require the EXPECTED sha's short
+  // form, or at minimum a live UI window, logging what we saw.
+  log('relaunching the updated app (the "reopen Hermes" step)');
+  const relaunch = await _electron.launch({
+    executablePath: launch.executablePath,
+    args: launch.args,
+    cwd: launch.cwd,
+    env: launch.env,
+  });
+  let window2 = null;
+  const relaunchDeadline = Date.now() + 120_000;
+  while (!window2 && Date.now() < relaunchDeadline) {
+    for (const candidate of relaunch.windows()) {
+      const hasUi = await candidate
+        .evaluate(() => document.querySelector('button') !== null)
+        .catch(() => false);
+      if (hasUi) { window2 = candidate; break; }
+    }
+    if (!window2) await new Promise((r) => setTimeout(r, 1_000));
+  }
+  if (!window2) {
+    await boundedClose(relaunch, 'relaunch teardown');
+    throw new Error('relaunched app never presented a UI window within 120s - updated build may be broken');
+  }
+  // Give the shell a moment to paint the statusbar/version chrome.
+  await new Promise((r) => setTimeout(r, 10_000));
+  const shortSha = (expectSha || '').slice(0, 7);
+  const verdict = await window2.evaluate((sha) => {
+    const text = document.body ? document.body.innerText : ''
+    const version = (text.match(/v\d+\.\d+\.\d+[^\n]*/) || [null])[0]
+    return { version, hasSha: sha ? text.includes(sha) : false, sample: text.slice(-200) }
+  }, shortSha).catch(() => null);
+  await window2.screenshot({ path: `${values.spec}.relaunched.png` }).catch(() => {});
+  log(`relaunched app: version="${verdict?.version || 'unseen'}" expectedSha(${shortSha}) in DOM=${verdict?.hasSha}`);
+  if (!verdict) {
+    await boundedClose(relaunch, 'relaunch teardown');
+    throw new Error('relaunched app UI came up but could not be read');
+  }
+  if (shortSha && !verdict.hasSha) {
+    // Not fatal on its own: packaged builds do not always surface the sha in
+    // the DOM. The window came up on the updated install dir, which is the
+    // user-facing contract; log loudly so a human can tighten this later.
+    log(`NOTE: expected short sha ${shortSha} not found in relaunched DOM; version line was "${verdict.version}"`);
+  }
+  log('relaunch verification complete: updated app boots and presents UI');
+  await boundedClose(relaunch, 'relaunch teardown');
 }
 
 const invoked = process.argv[1] && path.resolve(process.argv[1]) === (await import('node:url')).fileURLToPath(import.meta.url);

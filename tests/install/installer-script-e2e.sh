@@ -407,11 +407,38 @@ case "$UPDATE_METHOD" in
       | ts_prefix > "$LOG_DIR/app-update.log") || rc=$?
     log_group "app update (Playwright) transcript" "$LOG_DIR/app-update.log"
     [ "$rc" -eq 0 ] || fail "app-driven update exited $rc; transcript above"
-    # The in-app update ran npm inside $INSTALL_DIR while the driver's
-    # bounded teardown killed the app (and its backend) around it - run
-    # 32385999825 left node_modules half-written (ENOTEMPTY in the head
-    # smoke's npm ci). The smoke check rebuilds from scratch anyway, so
-    # give it a pristine tree instead of an interrupted one.
+    # The in-app update spawns a DETACHED npm/updater whose parent chain does
+    # not pass through the Electron root, so the driver's descendant sweep
+    # cannot see it (run 32404346722: sweep ran, ENOTEMPTY persisted - the
+    # pre-clean raced a still-writing npm). Deterministic quiesce instead:
+    # find processes whose /proc cwd is inside $INSTALL_DIR, wait for them to
+    # finish (they are the updater's tail), then escalate TERM -> KILL.
+    # /proc-cwd matching is precise to this sandbox; no name patterns.
+    step "quiescing $INSTALL_DIR before the head desktop smoke"
+    procs_in_install_dir() {
+      local pid cwd
+      for pid in /proc/[0-9]*; do
+        cwd="$(readlink "$pid/cwd" 2>/dev/null)" || continue
+        case "$cwd" in "$INSTALL_DIR"*) echo "${pid#/proc/}";; esac
+      done
+    }
+    quiesce_deadline=$((SECONDS + 60))
+    while :; do
+      lingering="$(procs_in_install_dir)"
+      [ -z "$lingering" ] && { ok "install dir quiet"; break; }
+      if [ "$SECONDS" -ge "$quiesce_deadline" ]; then
+        echo "install-dir processes still alive after 60s; terminating: $lingering"
+        kill $lingering 2>/dev/null || true
+        sleep 5
+        lingering="$(procs_in_install_dir)"
+        [ -n "$lingering" ] && kill -9 $lingering 2>/dev/null || true
+        ok "install dir force-quieted"
+        break
+      fi
+      sleep 2
+    done
+    # The smoke check rebuilds from scratch anyway; give it a pristine tree
+    # rather than whatever the interrupted in-app update left behind.
     step "clearing node_modules after driver-killed in-app update"
     find "$INSTALL_DIR" -maxdepth 3 -name node_modules -type d -prune -print0 2>/dev/null \
       | xargs -0 rm -rf 2>/dev/null || true

@@ -408,6 +408,32 @@ async function main() {
   await window.screenshot({ path: `${values.spec}.post-update.png` }).catch(() => {});
 
   const boundedClose = async (application, label) => {
+    const proc = application.process();
+    const rootPid = proc?.pid;
+    // Snapshot descendants BEFORE closing: once the root dies its children
+    // reparent to init and a PPID walk can no longer find them.
+    let doomed = [];
+    if (rootPid && process.platform !== 'win32') {
+      try {
+        const out = execFileSync('ps', ['-eo', 'pid=,ppid='], { encoding: 'utf8' });
+        const children = new Map();
+        for (const line of out.trim().split('\n')) {
+          const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+          if (!children.has(ppid)) children.set(ppid, []);
+          children.get(ppid).push(pid);
+        }
+        const queue = [rootPid];
+        while (queue.length) {
+          const next = queue.shift();
+          for (const child of children.get(next) || []) {
+            doomed.push(child);
+            queue.push(child);
+          }
+        }
+      } catch (e) {
+        log(`${label}: descendant snapshot failed (continuing): ${String(e).slice(0, 120)}`);
+      }
+    }
     const closed = await Promise.race([
       application.close().then(() => true).catch(() => true),
       new Promise((r) => setTimeout(() => r(false), 15_000)),
@@ -417,16 +443,32 @@ async function main() {
       // children the in-app update spawned get a chance to settle instead
       // of leaving node_modules half-written (run 32385999825 ENOTEMPTY).
       log(`${label}: graceful close timed out after 15s - SIGTERM, then SIGKILL if needed`);
-      try { application.process().kill('SIGTERM'); } catch { /* already gone */ }
+      try { proc.kill('SIGTERM'); } catch { /* already gone */ }
       const terminated = await new Promise((r) => {
-        const proc = application.process();
         const timer = setTimeout(() => r(false), 10_000);
         proc.once('exit', () => { clearTimeout(timer); r(true); });
       });
       if (!terminated) {
         log(`${label}: SIGTERM ignored after 10s - SIGKILL`);
-        try { application.process().kill('SIGKILL'); } catch { /* already gone */ }
+        try { proc.kill('SIGKILL'); } catch { /* already gone */ }
       }
+    }
+    // Killing the Electron root does NOT cascade: the app spawns a backend
+    // (`hermes serve` python + node helpers) that survives and keeps writing
+    // under the install dir - run 32398173770's head smoke saw npm's
+    // extraction shredded by exactly that (TAR_ENTRY_ERROR storms, vanished
+    // vite). SIGTERM the snapshot first (orderly backend shutdown), then
+    // SIGKILL stragglers.
+    if (doomed.length) {
+      for (const pid of doomed) {
+        try { process.kill(pid, 'SIGTERM'); } catch { /* raced exit - fine */ }
+      }
+      await new Promise((r) => setTimeout(r, 5_000));
+      let killed = 0;
+      for (const pid of doomed) {
+        try { process.kill(pid, 'SIGKILL'); killed++; } catch { /* exited on TERM */ }
+      }
+      log(`${label}: swept ${doomed.length} descendant process(es) (${killed} needed SIGKILL)`);
     }
   };
   await boundedClose(app, 'updated-app teardown');

@@ -302,14 +302,24 @@ async function main() {
   // the zoom fix let linux legs reach this point (run 32231900743 failed
   // exactly here). Same impatient-user pattern: press Check now, then give
   // the check against the staged repo time to land.
-  if (!(await updateNow.isVisible().catch(() => false))) {
-    log('Update now not visible yet - clicking Check now');
-    await window.getByRole('button', { name: /check now/i }).first()
-      .click({ timeout: 20_000 })
-      .catch((e) => log(`Check now click failed (continuing to wait): ${brief(e)}`));
+  // bug-011 recon, final layer: the boot-time auto-check can fail transiently
+  // (sandbox churn) and the UI latches the error; a single Check-now click
+  // finds the spinner and dies. Run 32346686541 proved a FRESH check succeeds
+  // in ~15s at the exact moment the old one-shot gave up (status behind=1,
+  // correct target sha). So: nudge loop - every 20s, click Check now when
+  // it's a button (not spinner), until Update now shows, 3 min ceiling.
+  const checkNow = window.getByRole('button', { name: /check now/i }).first();
+  const nudgeDeadline = Date.now() + 180_000;
+  let updateVisible = await updateNow.isVisible().catch(() => false);
+  while (!updateVisible && Date.now() < nudgeDeadline) {
+    await checkNow.click({ timeout: 5_000 })
+      .then(() => log('nudged Check now'))
+      .catch(() => {}); // spinner or mid-transition - fine, just wait
+    await window.waitForTimeout(15_000);
+    updateVisible = await updateNow.isVisible().catch(() => false);
   }
   try {
-    await updateNow.waitFor({ state: 'visible', timeout: 120_000 });
+    await updateNow.waitFor({ state: 'visible', timeout: 15_000 });
   } catch (e) {
     // bug-011 recon: the About UI flattens every check failure to "couldn't
     // reach the update server" (about-settings.tsx cantReach), hiding the

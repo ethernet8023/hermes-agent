@@ -2022,8 +2022,6 @@ def _maybe_offer_bundled_migration(
     re-prompting after the first time, regardless of the user's answer.
     Ctrl+C / EOF at the prompt skips WITHOUT stamping (ask again next time).
     """
-    import json as _json
-
     # --- Never re-prompt ---
     try:
         from hermes_constants import get_hermes_home
@@ -2031,7 +2029,8 @@ def _maybe_offer_bundled_migration(
         stamp = get_hermes_home() / ".bundled-migration-prompted"
         if stamp.exists():
             return
-    except Exception:
+    except Exception as exc:
+        logger.debug("bundled-migration offer: stamp check failed: %s", exc)
         return
 
     # --- Interactive terminals only ---
@@ -2050,7 +2049,8 @@ def _maybe_offer_bundled_migration(
 
         if install_method(project_root) != "git":
             return
-    except Exception:
+    except Exception as exc:
+        logger.debug("bundled-migration offer: install_method failed: %s", exc)
         return
 
     # --- Must point at the official repo (not a fork) ---
@@ -2065,7 +2065,8 @@ def _maybe_offer_bundled_migration(
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         current_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else ""
-    except Exception:
+    except Exception as exc:
+        logger.debug("bundled-migration offer: branch detection failed: %s", exc)
         return
     if current_branch != "main":
         return
@@ -2152,7 +2153,7 @@ def _maybe_offer_bundled_migration(
     # user would be re-prompted forever.
     try:
         stamp.write_text(
-            _json.dumps({"prompted": True, "accepted": accepted}),
+            json.dumps({"prompted": True, "accepted": accepted}),
             encoding="utf-8",
         )
     except OSError:
@@ -2250,9 +2251,9 @@ def _do_bundled_migration(project_root: Path) -> None:
     print(f"  → Downloading {asset_name}...")
     print(f"    {download_url}")
 
+    tmp_dir = Path(_tempfile.mkdtemp(prefix="hermes-migration-"))
+    installer_path = tmp_dir / asset_name
     try:
-        tmp_dir = Path(_tempfile.mkdtemp(prefix="hermes-migration-"))
-        installer_path = tmp_dir / asset_name
         req = urllib.request.Request(
             download_url, headers={"User-Agent": "hermes-update"}
         )
@@ -2275,10 +2276,12 @@ def _do_bundled_migration(project_root: Path) -> None:
         if not installer_path.is_file() or installer_path.stat().st_size < 1_000_000:
             print("  ✗ Download failed or file too small — the asset may not exist for this platform.")
             print("    Check: https://github.com/NousResearch/hermes-agent/releases")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
             return
     except Exception as exc:
         print(f"  ✗ Download failed: {exc}")
         print("    Download manually from: https://github.com/NousResearch/hermes-agent/releases")
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return
 
     print(f"  ✓ Downloaded ({installer_path.stat().st_size // (1024*1024)} MB)")

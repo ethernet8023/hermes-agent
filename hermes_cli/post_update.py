@@ -303,8 +303,9 @@ def step_expose_cli() -> dict:
 
     Config-gated by ``cli.expose_on_path`` (default true). Windows is a
     no-op for now: venv Scripts are already User-PATH-persisted by the
-    installer, and signed-trampoline copying (bundled installs) lands
-    with the desktop payload work.
+    installer, and signed-trampoline copying (bundled installs) is not
+    yet implemented for Windows. POSIX bundled installs ARE handled
+    below: wrappers point at the payload's embedded CPython.
     """
     if sys.platform == "win32":
         return {"ok": True, "skipped": "windows-installer-owned"}
@@ -324,9 +325,30 @@ def step_expose_cli() -> dict:
     venv_python = root / "venv" / "bin" / "python"
     entrypoint = root / "hermes"
     if not venv_python.is_file() or not entrypoint.is_file():
-        # Sealed/bundled trees have no venv to point wrappers at; their
-        # launchers ship with the payload. Nothing to maintain here.
-        return {"ok": True, "skipped": "no-venv-layout"}
+        # Sealed/bundled trees have no venv. Try the payload layout: the
+        # install root is <payload>/repo, and the payload's CPython lives
+        # in a sibling directory recorded in manifest.json. Build wrappers
+        # that point at THAT interpreter so `hermes` works from a terminal
+        # even when the desktop app isn't running.
+        payload_dir = root.parent
+        manifest = payload_dir / "manifest.json"
+        if not manifest.is_file():
+            return {"ok": True, "skipped": "no-venv-layout"}
+        try:
+            import json as _json
+            data = _json.loads(manifest.read_text(encoding="utf-8"))
+            python_rel = data.get("python", "")
+            if not python_rel:
+                return {"ok": True, "skipped": "no-payload-python-in-manifest"}
+            payload_python = payload_dir / python_rel
+        except (OSError, ValueError, KeyError):
+            return {"ok": True, "skipped": "manifest-unreadable"}
+        if not payload_python.is_file():
+            return {"ok": True, "skipped": "payload-python-missing"}
+        venv_python = payload_python
+        # The repo root IS the install root for bundled installs; the
+        # hermes entrypoint and run_agent.py live there.
+        # (entrypoint is already root / "hermes" from above)
 
     link_dir = Path.home() / ".local" / "bin"
     wrappers = {

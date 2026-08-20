@@ -413,8 +413,20 @@ async function main() {
       new Promise((r) => setTimeout(() => r(false), 15_000)),
     ]);
     if (!closed) {
-      log(`${label}: graceful close timed out after 15s - killing the Electron process`);
-      try { application.process().kill('SIGKILL'); } catch { /* already gone */ }
+      // SIGTERM first: Electron runs its exit handlers, and any npm/node
+      // children the in-app update spawned get a chance to settle instead
+      // of leaving node_modules half-written (run 32385999825 ENOTEMPTY).
+      log(`${label}: graceful close timed out after 15s - SIGTERM, then SIGKILL if needed`);
+      try { application.process().kill('SIGTERM'); } catch { /* already gone */ }
+      const terminated = await new Promise((r) => {
+        const proc = application.process();
+        const timer = setTimeout(() => r(false), 10_000);
+        proc.once('exit', () => { clearTimeout(timer); r(true); });
+      });
+      if (!terminated) {
+        log(`${label}: SIGTERM ignored after 10s - SIGKILL`);
+        try { application.process().kill('SIGKILL'); } catch { /* already gone */ }
+      }
     }
   };
   await boundedClose(app, 'updated-app teardown');

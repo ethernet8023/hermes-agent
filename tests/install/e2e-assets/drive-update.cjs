@@ -278,6 +278,12 @@ async function main() {
   }
 
   if (!visible) {
+    // bug-011 recon: surface the real git error behind the UI's generic
+    // "couldn't reach the update server" line (see launch-from-spec.mjs).
+    const status = await page.evaluate(() =>
+      window.hermesDesktop?.updates?.check?.() ?? Promise.resolve('no updates.check bridge')
+    ).catch((err) => `updates.check failed: ${err?.message || err}`)
+    log(`[update-status] ${JSON.stringify(status)}`)
     await shot(page, 'ERROR-no-update-now')
     throw new Error('"Update now" never appeared — update check did not report behind > 0')
   }

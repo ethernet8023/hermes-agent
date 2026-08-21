@@ -229,7 +229,9 @@ jobs:
 
   bundled-test:
     name: bundled ${{ matrix.os }}
-    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route)
+    # always(): even if some build legs fail (e.g. win32 chromium 403),
+    # the run workflow handles missing artifacts gracefully.
+    if: always() && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route))
     needs: [pick-releases, bundled-build-prev, bundled-build-head]
     strategy:
       fail-fast: false

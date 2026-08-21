@@ -65,6 +65,8 @@ jobs:
           fetch-depth: 0
 
       # ── Download the PREV-tag bundles ───────────────────────────────
+      # The build workflow names artifacts hermes-bundled-<target>-<label>,
+      # where target is the platform label (win32-x64, darwin-arm64, linux-x64).
       - name: Download prev-tag bundles
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

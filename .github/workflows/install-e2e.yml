@@ -214,16 +214,6 @@ jobs:
     name: Build prev-tag bundles
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route)
     needs: pick-releases
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows
-            target: win32-x64
-          - os: macos
-            target: darwin-arm64
-          - os: linux
-            target: linux-x64
     uses: ./.github/workflows/install-e2e-bundled-build.yml
     with:
       ref: ${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
@@ -232,23 +222,13 @@ jobs:
   bundled-build-head:
     name: Build HEAD bundles
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route)
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows
-            target: win32-x64
-          - os: macos
-            target: darwin-arm64
-          - os: linux
-            target: linux-x64
     uses: ./.github/workflows/install-e2e-bundled-build.yml
     with:
       ref: ${{ github.sha }}
       label: head
 
   bundled-test:
-    name: bundled ${{ matrix.os }} (${{ matrix.prev-tag }})
+    name: bundled ${{ matrix.os }}
     if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route)
     needs: [pick-releases, bundled-build-prev, bundled-build-head]
     strategy:
@@ -256,17 +236,14 @@ jobs:
       matrix:
         include:
           - os: windows
-            target: win32-x64
           - os: macos
-            target: darwin-arm64
           - os: linux
-            target: linux-x64
     uses: ./.github/workflows/install-e2e-bundled-run.yml
     with:
       os: ${{ matrix.os }}
       prev-tag: ${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
       head-sha: ${{ github.sha }}
-      leg-id: bundled-${{ matrix.os }}-${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
+      leg-id: bundled-${{ matrix.os }}
 
   # The leg player: one static HTML for the whole run. Uploaded BEFORE the
   # matrix legs so it exists even when every leg dies; the report job links

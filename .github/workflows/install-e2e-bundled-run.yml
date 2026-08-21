@@ -52,7 +52,7 @@ permissions:
 jobs:
   e2e:
     name: bundled ${{ inputs.os }}
-    runs-on: ${{ inputs.os == 'windows' && 'windows-2025' || inputs.os == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    runs-on: ${{ (inputs.os == 'windows' && 'windows-2025') || (inputs.os == 'macos' && 'macos-15') || 'ubuntu-24.04' }}
     timeout-minutes: 120
     env:
       # Sibling of the checkout, outside the repo so the install never
@@ -92,7 +92,7 @@ jobs:
       #   3. Update: advance main to HEAD, serve the HEAD bundle as the
       #      updater feed, click "Update now" in the running app
       - name: Run bundled install+update E2E
-        shell: ${{ inputs.os == 'windows' && 'powershell' || 'bash' }}
+        shell: bash
         run: |
           set -euo pipefail
           tests/install/bundled-e2e.sh \

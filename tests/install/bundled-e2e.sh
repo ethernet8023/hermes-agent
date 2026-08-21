@@ -13,7 +13,7 @@
 # app's electron-updater finds the update and downloads it.
 #
 # The actual GUI driving (clicking "Update now") reuses the existing
-# drive-update.cjs / launch-from-spec.mjs Playwright drivers from the
+# bundled-drive-update.cjs / launch-from-spec.mjs Playwright drivers from the
 # existing desktop E2E infrastructure, because the update flow is
 # identical once the app is installed — only the install source differs.
 #
@@ -345,12 +345,12 @@ phase_update_windows() {
   (cd "$pw_dir" && "$node_exe" "$npm_cli" install --no-save --no-audit --no-fund "@playwright/test@1.55.0" 2>&1 | tail -5)
 
   # Copy the drive-update driver.
-  cp "$SCRIPT_DIR/e2e-assets/drive-update.cjs" "$pw_dir/" 2>/dev/null || true
+  cp "$SCRIPT_DIR/e2e-assets/bundled-drive-update.cjs" "$pw_dir/" 2>/dev/null || true
 
   # Run the Playwright driver: launches the app, clicks Update now.
   local proof_dir="$WORK_ROOT/proof"
   mkdir -p "$proof_dir"
-  (cd "$pw_dir" && "$node_exe" "$pw_dir/drive-update.cjs" "$desktop_exe" "$proof_dir" 2>&1 | tee -a "$LOG_DIR/update-drive.log")
+  (cd "$pw_dir" && "$node_exe" "$pw_dir/bundled-drive-update.cjs" "$desktop_exe" "$proof_dir" 2>&1 | tee -a "$LOG_DIR/update-drive.log")
 }
 
 # ── macOS: drive the update via Playwright ───────────────────────────
@@ -388,11 +388,11 @@ phase_update_macos() {
   [ -f "$npm_cli" ] || npm_cli="$(which npm 2>/dev/null)"
   (cd "$pw_dir" && "$node_exe" "$npm_cli" install --no-save --no-audit --no-fund "@playwright/test@1.55.0" 2>&1 | tail -5)
 
-  cp "$SCRIPT_DIR/e2e-assets/drive-update.cjs" "$pw_dir/" 2>/dev/null || true
+  cp "$SCRIPT_DIR/e2e-assets/bundled-drive-update.cjs" "$pw_dir/" 2>/dev/null || true
 
   local proof_dir="$WORK_ROOT/proof"
   mkdir -p "$proof_dir"
-  (cd "$pw_dir" && "$node_exe" "$pw_dir/drive-update.cjs" "$app_bin" "$proof_dir" 2>&1 | tee -a "$LOG_DIR/update-drive.log")
+  (cd "$pw_dir" && "$node_exe" "$pw_dir/bundled-drive-update.cjs" "$app_bin" "$proof_dir" 2>&1 | tee -a "$LOG_DIR/update-drive.log")
 }
 
 # ── Linux: drive the update via Playwright ───────────────────────────
@@ -426,12 +426,12 @@ phase_update_linux() {
   [ -f "$npm_cli" ] || npm_cli="$(which npm 2>/dev/null)"
   (cd "$pw_dir" && "$node_exe" "$npm_cli" install --no-save --no-audit --no-fund "@playwright/test@1.55.0" 2>&1 | tail -5)
 
-  cp "$SCRIPT_DIR/e2e-assets/drive-update.cjs" "$pw_dir/" 2>/dev/null || true
+  cp "$SCRIPT_DIR/e2e-assets/bundled-drive-update.cjs" "$pw_dir/" 2>/dev/null || true
 
   local proof_dir="$WORK_ROOT/proof"
   mkdir -p "$proof_dir"
   # AppImages need --no-sandbox on CI runners.
-  (cd "$pw_dir" && "$node_exe" "$pw_dir/drive-update.cjs" "$appimage" "$proof_dir" 2>&1 | tee -a "$LOG_DIR/update-drive.log")
+  (cd "$pw_dir" && "$node_exe" "$pw_dir/bundled-drive-update.cjs" "$appimage" "$proof_dir" 2>&1 | tee -a "$LOG_DIR/update-drive.log")
 }
 
 # ── Dispatch ─────────────────────────────────────────────────────────

@@ -16,6 +16,10 @@ name: install-e2e bundled build
 # the nightly path in the build script accepts it without checking
 # pyproject.toml version agreement.
 #
+# Tags that predate the bundled build infrastructure (no
+# installation/runtime-pins.json) are skipped gracefully — the "prev tag
+# is gonna be weird for now" issue.
+#
 # Call it:
 #
 #   jobs:
@@ -116,8 +120,27 @@ jobs:
           git tag -f "${{ steps.tag.outputs.tag }}" HEAD
           echo "Created synthetic tag ${{ steps.tag.outputs.tag }} at $(git rev-parse HEAD)"
 
+      # ── Guard: skip tags that predate the bundled build infrastructure ─
+      # The bundled build needs installation/runtime-pins.json and
+      # apps/desktop/scripts/stage-agent-payloads.mjs — both are new on the
+      # bundles-restack branch. Older release tags don't have them, so the
+      # build fails at "Resolve runtime pins" with a module-not-found error.
+      # This is the "prev tag is gonna be weird for now" issue: skip those
+      # tags gracefully instead of failing the whole workflow.
+      - name: Check bundled build support
+        id: support
+        shell: bash
+        run: |
+          if [ ! -f "installation/runtime-pins.json" ]; then
+            echo "::notice::This ref does not ship installation/runtime-pins.json — bundled builds are not supported on this tag. Skipping."
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # ── Toolchain pins (same as desktop-bundled-release.yml) ──────────
       - name: Resolve toolchain cache key
+        if: steps.support.outputs.supported == 'true'
         id: toolchain
         shell: bash
         run: |
@@ -131,6 +154,7 @@ jobs:
           ' >> "$GITHUB_OUTPUT"
 
       - name: Resolve runtime pins
+        if: steps.support.outputs.supported == 'true'
         id: pins
         shell: bash
         run: |
@@ -148,15 +172,18 @@ jobs:
           ' >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        if: steps.support.outputs.supported == 'true'
         with:
           node-version: ${{ steps.pins.outputs.node }}
           cache: npm
 
       - name: Install the pinned npm
+        if: steps.support.outputs.supported == 'true'
         shell: bash
         run: npm i -g npm@${{ steps.pins.outputs.npm }}
 
       - name: Ensure Rust toolchain
+        if: steps.support.outputs.supported == 'true'
         shell: bash
         run: |
           if ! command -v cargo >/dev/null 2>&1; then
@@ -166,6 +193,7 @@ jobs:
           rustc --version
 
       - name: Install uv
+        if: steps.support.outputs.supported == 'true'
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # 9.0.0
         with:
           version: ${{ steps.pins.outputs.uv }}
@@ -174,6 +202,7 @@ jobs:
 
       # ── Caches (same as desktop-bundled-release.yml, minus signing) ───
       - name: Cache payload python + site-packages
+        if: steps.support.outputs.supported == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -183,6 +212,7 @@ jobs:
           key: agent-payload-${{ matrix.target.label }}-py${{ steps.pins.outputs.python }}-${{ hashFiles('uv.lock', 'apps/desktop/scripts/stage-agent-payloads.mjs') }}
 
       - name: Cache electron + electron-builder toolchain
+        if: steps.support.outputs.supported == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -191,6 +221,7 @@ jobs:
           key: eb-${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.toolchain.outputs.electron }}-builder-${{ steps.toolchain.outputs.builder }}
 
       - name: Cache node_modules
+        if: steps.support.outputs.supported == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -204,6 +235,7 @@ jobs:
 
       # ── Build + package ───────────────────────────────────────────────
       - name: Build and package
+        if: steps.support.outputs.supported == 'true'
         shell: bash
         timeout-minutes: 85
         env:
@@ -216,7 +248,11 @@ jobs:
       # The E2E legs need the installer files (exe/dmg/AppImage) and the
       # latest*.yml feed (for the updater's version check).  We upload
       # per-platform so each E2E leg downloads only its own platform.
+      # When the tag is unsupported (predates bundled builds), this step
+      # is skipped — no artifact is produced, and the downstream bundled-test
+      # job's download will fail with a clear "artifact not found" error.
       - name: Upload artifacts
+        if: steps.support.outputs.supported == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hermes-bundled-${{ matrix.target.label }}-${{ inputs.label }}

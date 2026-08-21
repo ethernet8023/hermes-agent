@@ -67,21 +67,58 @@ jobs:
       # ── Download the PREV-tag bundles ───────────────────────────────
       # The build workflow names artifacts hermes-bundled-<target>-<label>,
       # where target is the platform label (win32-x64, darwin-arm64, linux-x64).
+      # continue-on-error: the prev tag may not support bundled builds
+      # (predates installation/runtime-pins.json). If the artifact doesn't
+      # exist, the test skips gracefully.
       - name: Download prev-tag bundles
+        id: prev-artifacts
+        continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: hermes-bundled-${{ inputs.os == 'windows' && 'win32-x64' || inputs.os == 'macos' && 'darwin-arm64' || 'linux-x64' }}-prev
           path: ${{ github.workspace }}/bundles/prev
 
+      - name: Check prev-tag artifacts
+        id: has-prev
+        shell: bash
+        run: |
+          if [ ! -d "${{ github.workspace }}/bundles/prev" ] || [ -z "$(ls -A '${{ github.workspace }}/bundles/prev' 2>/dev/null)" ]; then
+            echo "::notice::No prev-tag bundles found — the prev tag likely predates bundled build support. Skipping."
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # ── Download the HEAD bundles ───────────────────────────────────
       - name: Download HEAD bundles
+        id: head-artifacts
+        continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: hermes-bundled-${{ inputs.os == 'windows' && 'win32-x64' || inputs.os == 'macos' && 'darwin-arm64' || 'linux-x64' }}-head
           path: ${{ github.workspace }}/bundles/head
 
+      - name: Check HEAD artifacts
+        id: has-head
+        shell: bash
+        run: |
+          if [ ! -d "${{ github.workspace }}/bundles/head" ] || [ -z "$(ls -A '${{ github.workspace }}/bundles/head' 2>/dev/null)" ]; then
+            echo "::notice::No HEAD bundles found — the HEAD build may have failed. Skipping."
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if bundles missing
+        if: steps.has-prev.outputs.has != 'true' || steps.has-head.outputs.has != 'true'
+        shell: bash
+        run: |
+          echo "Bundles missing — skipping this leg."
+          exit 0
+
       # ── Start screen recording ───────────────────────────────────────
       - name: Start screen recording
+        if: steps.has-prev.outputs.has == 'true' && steps.has-head.outputs.has == 'true'
         uses: ./.github/actions/e2e-screen-record
         with:
           mode: start
@@ -94,6 +131,7 @@ jobs:
       #   3. Update: advance main to HEAD, serve the HEAD bundle as the
       #      updater feed, click "Update now" in the running app
       - name: Run bundled install+update E2E
+        if: steps.has-prev.outputs.has == 'true' && steps.has-head.outputs.has == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -107,14 +145,14 @@ jobs:
           HERMES_E2E_LOG_DIR: ${{ runner.temp }}/e2e-logs
 
       - name: Stop screen recording
-        if: always()
+        if: always() && steps.has-prev.outputs.has == 'true' && steps.has-head.outputs.has == 'true'
         uses: ./.github/actions/e2e-screen-record
         with:
           mode: stop
           output: ${{ runner.temp }}/e2e-logs/recording.mkv
 
       - name: Remux recording for browser playback
-        if: always()
+        if: always() && steps.has-prev.outputs.has == 'true' && steps.has-head.outputs.has == 'true'
         run: |
           set -euo pipefail
           if [ -f "${{ runner.temp }}/e2e-logs/recording.mkv" ]; then
@@ -123,7 +161,7 @@ jobs:
           fi
 
       - name: Upload logs
-        if: always()
+        if: always() && steps.has-prev.outputs.has == 'true' && steps.has-head.outputs.has == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: install-e2e-logs-${{ inputs.leg-id }}

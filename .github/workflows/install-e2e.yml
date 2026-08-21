@@ -60,6 +60,11 @@ on:
         required: false
         type: string
         default: '3'
+      bundled-prev-ref:
+        description: 'Override the ref to build prev-tag bundles at. Default: the newest release tag. Use a commit SHA or branch to test bundled E2E before a release tag exists.'
+        required: false
+        type: string
+        default: ''
   schedule:
     # Every 12 hours, off the hour to avoid the top-of-hour runner crunch.
     - cron: '20 7,19 * * *'
@@ -224,7 +229,11 @@ jobs:
     needs: pick-releases
     uses: ./.github/workflows/install-e2e-bundled-build.yml
     with:
-      ref: ${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
+      # Use the bundled-prev-ref override if provided, otherwise fall back
+      # to the newest picked release tag. The override lets you point at
+      # a commit/branch that has the bundled build infrastructure when no
+      # release tag does yet.
+      ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundled-prev-ref) || fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
       label: prev
 
   bundled-build-head:
@@ -251,7 +260,7 @@ jobs:
     uses: ./.github/workflows/install-e2e-bundled-run.yml
     with:
       os: ${{ matrix.os }}
-      prev-tag: ${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
+      prev-tag: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundled-prev-ref) || fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
       head-sha: ${{ github.sha }}
       leg-id: bundled-${{ matrix.os }}
 

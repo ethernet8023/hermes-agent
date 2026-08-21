@@ -408,7 +408,11 @@ async function main() {
   await window.screenshot({ path: `${values.spec}.post-update.png` }).catch(() => {});
 
   const boundedClose = async (application, label) => {
-    const proc = application.process();
+    // ElectronApplication.process() can THROW on darwin when the app has
+    // already started tearing down (run 32416362715: TypeError reading
+    // '_object' inside playwright-core) - never assume it is callable.
+    let proc = null;
+    try { proc = application.process(); } catch { /* connection gone */ }
     const rootPid = proc?.pid;
     // Snapshot descendants BEFORE closing: once the root dies its children
     // reparent to init and a PPID walk can no longer find them.
@@ -443,14 +447,18 @@ async function main() {
       // children the in-app update spawned get a chance to settle instead
       // of leaving node_modules half-written (run 32385999825 ENOTEMPTY).
       log(`${label}: graceful close timed out after 15s - SIGTERM, then SIGKILL if needed`);
-      try { proc.kill('SIGTERM'); } catch { /* already gone */ }
-      const terminated = await new Promise((r) => {
-        const timer = setTimeout(() => r(false), 10_000);
-        proc.once('exit', () => { clearTimeout(timer); r(true); });
-      });
-      if (!terminated) {
-        log(`${label}: SIGTERM ignored after 10s - SIGKILL`);
-        try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+      if (proc) {
+        try { proc.kill('SIGTERM'); } catch { /* already gone */ }
+        const terminated = await new Promise((r) => {
+          const timer = setTimeout(() => r(false), 10_000);
+          proc.once('exit', () => { clearTimeout(timer); r(true); });
+        });
+        if (!terminated) {
+          log(`${label}: SIGTERM ignored after 10s - SIGKILL`);
+          try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+        }
+      } else {
+        log(`${label}: no process handle to signal - relying on descendant sweep`);
       }
     }
     // Killing the Electron root does NOT cascade: the app spawns a backend

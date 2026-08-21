@@ -47,11 +47,11 @@ on:
   workflow_dispatch:
     inputs:
       route:
-        description: 'Which combinations to run. all = every OS; both/update/installer = the linux legs; windows-desktop = the windows legs.'
+        description: 'Which combinations to run. all = every OS; both/update/installer = the linux legs; windows-desktop = the windows legs; bundled = the bundled desktop install+update legs.'
         required: false
         type: choice
         default: all
-        options: [all, both, update, installer, windows-desktop]
+        options: [all, both, update, installer, windows-desktop, bundled]
       tag-count:
         description: 'How many release tags to sample (newest, oldest, and a spread between).'
         required: false
@@ -194,6 +194,80 @@ jobs:
       tag-has-desktop: ${{ matrix.tag_has_desktop }}
       leg-id: ${{ matrix.leg_id }}
 
+  # ── Bundled desktop install+update legs ─────────────────────────────
+  # These legs test the real electron-updater flow between two BUNDLED
+  # desktop builds: install from a prev-tag bundle, update to HEAD's
+  # bundle.  The bundles are built by install-e2e-bundled-build.yml at
+  # two refs — the prev tag (install source) and HEAD (update target) —
+  # because the user said "you'll have to do it twice": once for the
+  # prev tag, once for HEAD.  Each platform builds independently; the E2E
+  # legs wait for both builds to finish, then download and test.
+  #
+  # "prev tag is gonna be weird for now" — the bundled install path is
+  # new, so older release tags may not ship the bundled installer at all.
+  # The pick-releases job already annotates each tag with whether it
+  # ships apps/desktop (tag_has_desktop); the build job itself will fail
+  # if the tag predates the bundled build infrastructure, and the leg's
+  # `if` gate skips it.  As more releases ship bundled installers, more
+  # legs go green automatically.
+  bundled-build-prev:
+    name: Build prev-tag bundles
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route)
+    needs: pick-releases
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            target: win32-x64
+          - os: macos
+            target: darwin-arm64
+          - os: linux
+            target: linux-x64
+    uses: ./.github/workflows/install-e2e-bundled-build.yml
+    with:
+      ref: ${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
+      label: prev
+
+  bundled-build-head:
+    name: Build HEAD bundles
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            target: win32-x64
+          - os: macos
+            target: darwin-arm64
+          - os: linux
+            target: linux-x64
+    uses: ./.github/workflows/install-e2e-bundled-build.yml
+    with:
+      ref: ${{ github.sha }}
+      label: head
+
+  bundled-test:
+    name: bundled ${{ matrix.os }} (${{ matrix.prev-tag }})
+    if: github.event_name != 'workflow_dispatch' || contains(fromJSON('["all", "bundled"]'), inputs.route)
+    needs: [pick-releases, bundled-build-prev, bundled-build-head]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            target: win32-x64
+          - os: macos
+            target: darwin-arm64
+          - os: linux
+            target: linux-x64
+    uses: ./.github/workflows/install-e2e-bundled-run.yml
+    with:
+      os: ${{ matrix.os }}
+      prev-tag: ${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
+      head-sha: ${{ github.sha }}
+      leg-id: bundled-${{ matrix.os }}-${{ fromJSON(needs.pick-releases.outputs.tags)[0].ref }}
+
   # The leg player: one static HTML for the whole run. Uploaded BEFORE the
   # matrix legs so it exists even when every leg dies; the report job links
   # every ran leg to it with that leg's logs zip as a #zip= hash param
@@ -227,7 +301,7 @@ jobs:
   report:
     name: Result chart
     if: always()
-    needs: [leg-player, pick-releases, linux, windows, macos]
+    needs: [leg-player, pick-releases, linux, windows, macos, bundled-test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -240,7 +314,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "OS jobs: linux ${{ needs.linux.result }}, windows ${{ needs.windows.result }}, macos ${{ needs.macos.result }}"
+            echo "OS jobs: linux ${{ needs.linux.result }}, windows ${{ needs.windows.result }}, macos ${{ needs.macos.result }}, bundled ${{ needs.bundled-test.result }}"
             echo
             # The tag annotations let the chart say WHY a cell skipped
             # (pre-desktop vs declared TODO) instead of a flat "skip".

@@ -55,6 +55,20 @@ The desktop app has two launch paths, so the matrix has two app-update methods. 
 
 - `open-app-update`: the app starts from the OS entry point that the install created. On windows these are the Start Menu and Desktop shortcuts to the installed `Hermes.exe`; the desktop installer always creates them. The installer scripts do not create entry points: their opt-in desktop stage (`--include-desktop` / `-IncludeDesktop`) builds the app inside the checkout but does not register it with the OS. So `open-app-update` legs pair with a `desktop-installer` install.
 - `hermes-desktop-app-update`: the app starts with the `hermes desktop` command. Every install method provides this command, on each OS that ships the desktop app. On linux this is the only app surface: no desktop installer and no packaged desktop artifact exist for linux. The driver captures the product's own launch call (argv, cwd, environment) with `e2e-assets/launch-capture/sitecustomize.py` and re-executes it under Playwright, which owns the app and clicks the update flow.
+- `bundled-app-update`: the app's Update button, same as `open-app-update`, but the update feed is served from a locally built HEAD bundle instead of the GitHub releases feed. This exercises the real electron-updater path between two bundled builds.
+
+## Bundled desktop legs
+
+The `bundled-installer` install method and `bundled-app-update` update method test the fully self-contained bundled desktop installers. Unlike `desktop-installer@latest` (which uses the website's published bootstrap installer), these legs use pre-built bundles from `install-e2e-bundled-build.yml`.
+
+The primary workflow builds bundles at two refs:
+
+1. The prev tag (install source) — `bundled-build-prev` job
+2. HEAD (update target) — `bundled-build-head` job
+
+Each platform (windows, macos, linux) builds independently. The `bundled-test` job downloads both sets of bundles, installs from the prev-tag bundle, then updates to HEAD's bundle through the app's own Update button. The driver (`tests/install/bundled-e2e.sh`) reuses the same Playwright driving infrastructure as the existing desktop E2E legs.
+
+"Prev tag is gonna be weird for now" — older release tags may not ship the bundled build infrastructure. Those legs will fail at the build step; as more releases ship bundled installers, more legs go green automatically.
 
 ## Skips
 

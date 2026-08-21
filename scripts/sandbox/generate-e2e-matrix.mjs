@@ -38,15 +38,21 @@ import { fileURLToPath } from 'node:url';
  * @typedef {'latest'} InstallerVersion
  *   The artifact published on the website right now -- Hermes-Setup.exe has
  *   no versioned archive yet. Widen this union when one exists.
- * @typedef {'installer-script' | 'installer-script+desktop' | 'desktop-installer' | 'packaged-app'} InstallMethod
+ * @typedef {'installer-script' | 'installer-script+desktop' | 'desktop-installer' | 'packaged-app' | 'bundled-installer'} InstallMethod
  *   installer-script is the platform's one-liner (curl | bash on
  *   linux/macos, irm | iex on windows); installer-script+desktop is the
  *   same one-liner with its desktop stage opted in (--include-desktop /
  *   -IncludeDesktop), which also builds the desktop app -- on windows it
  *   registers Start Menu / Desktop shortcuts too, on linux/macos it
  *   builds into the checkout without registering an OS entry point;
- *   packaged-app is declared but not used by any OS spec yet.
- * @typedef {InstallMethod | 'hermes-update' | 'open-app-update' | 'hermes-desktop-app-update'} UpdateMethod
+ *   packaged-app is declared but not used by any OS spec yet;
+ *   bundled-installer installs from a pre-built bundled desktop artifact
+ *   (NSIS .exe on Windows, .dmg on macOS, .AppImage on Linux) instead of
+ *   the website's published bootstrap installer.  The bundles are built
+ *   by install-e2e-bundled-build.yml at the prev tag (install source) and
+ *   at HEAD (update target), so the E2E legs exercise the real
+ *   electron-updater flow between two bundled versions.
+ * @typedef {InstallMethod | 'hermes-update' | 'open-app-update' | 'hermes-desktop-app-update' | 'bundled-app-update'} UpdateMethod
  *   Every install method doubles as an update method (re-run it over the
  *   existing install), plus the updater CLI and the two app-update
  *   variants. The variants differ by launch surface: open-app-update
@@ -57,7 +63,9 @@ import { fileURLToPath } from 'node:url';
  *   desktop-installer install; hermes-desktop-app-update starts the app
  *   via `hermes desktop`, which every install method provides on every
  *   OS that ships the desktop app. Both then update through the app's
- *   own Update button.
+ *   own Update button. bundled-app-update updates through the app's
+ *   Update button too, but the update feed is served from a locally
+ *   built HEAD bundle (not the GitHub releases feed).
  * @typedef {'linux' | 'windows' | 'macos'} Os
  *
  * @typedef {{method: InstallMethod, versions?: InstallerVersion[]}} InstallEntry
@@ -103,6 +111,8 @@ export const SPEC = {
       { method: 'installer-script+desktop' },
       // Website Hermes-Setup.exe, clicked through the GUI.
       { method: 'desktop-installer', versions: ['latest'] },
+      // Pre-built bundled NSIS installer from install-e2e-bundled-build.
+      { method: 'bundled-installer' },
     ],
     update: [
       { method: 'installer-script' },
@@ -115,6 +125,9 @@ export const SPEC = {
       { method: 'open-app-update' },
       // Same button, app launched via `hermes desktop`.
       { method: 'hermes-desktop-app-update' },
+      // Update via the app's Update button, feed served from a locally
+      // built HEAD bundle (exercises the real electron-updater path).
+      { method: 'bundled-app-update' },
     ],
   },
   macos: {
@@ -123,6 +136,8 @@ export const SPEC = {
       { method: 'installer-script+desktop' },
       // The published Hermes-Setup.dmg from the website, mounted and run.
       { method: 'desktop-installer', versions: ['latest'] },
+      // Pre-built bundled DMG from install-e2e-bundled-build.
+      { method: 'bundled-installer' },
     ],
     update: [
       { method: 'installer-script' },
@@ -133,12 +148,17 @@ export const SPEC = {
       // with a desktop-installer install (the published dmg).
       { method: 'open-app-update' },
       { method: 'hermes-desktop-app-update' },
+      // Update via the app's Update button, feed served from a locally
+      // built HEAD bundle (exercises the real electron-updater path).
+      { method: 'bundled-app-update' },
     ],
   },
   linux: {
     install: [
       { method: 'installer-script' },
       { method: 'installer-script+desktop' },
+      // Pre-built bundled AppImage from install-e2e-bundled-build.
+      { method: 'bundled-installer' },
     ],
     update: [
       { method: 'installer-script' },
@@ -149,6 +169,9 @@ export const SPEC = {
       // the source-mode path (build apps/desktop from the checkout, launch
       // electron) and is the one app surface a linux install has.
       { method: 'hermes-desktop-app-update' },
+      // Update via the app's Update button, feed served from a locally
+      // built HEAD bundle (exercises the real electron-updater path).
+      { method: 'bundled-app-update' },
     ],
   },
 };
@@ -228,7 +251,8 @@ export function buildMatrices(envs, tags) {
  */
 export function methodNeedsDesktop(m) {
   return m.startsWith('desktop-installer') || m === 'installer-script+desktop' ||
-    m === 'open-app-update' || m === 'hermes-desktop-app-update';
+    m === 'open-app-update' || m === 'hermes-desktop-app-update' ||
+    m === 'bundled-installer' || m === 'bundled-app-update';
 }
 
 /**

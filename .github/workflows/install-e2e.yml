@@ -42,6 +42,9 @@ name: Install & Update E2E
 # Deliberately NOT on pull_request: a leg takes ~11 minutes of real toolchain
 # installation, and the matrix multiplies that. Updating is release-shaped work,
 # so it is gated on releases and the clock instead.
+#
+# EXCEPTION: a temporary push trigger on the bundled E2E branch so the
+# bundled legs run during development. Remove when merged.
 
 on:
   workflow_dispatch:
@@ -61,6 +64,11 @@ on:
     # Every 12 hours, off the hour to avoid the top-of-hour runner crunch.
     - cron: '20 7,19 * * *'
   push:
+    branches:
+      # Temporary: trigger the bundled E2E on push to this branch.
+      # Only the bundled jobs run on push — the existing linux/windows/macos
+      # legs are gated on schedule/tags/dispatch, not push.
+      - ethie/desktop-update-tests-rebased
     tags:
       # Release tags only: the repo also carries backup/* and one-off tags.
       - 'v[0-9]+.[0-9]+.[0-9]+'

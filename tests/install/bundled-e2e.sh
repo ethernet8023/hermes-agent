@@ -69,7 +69,7 @@ phase_stage() {
   log "STAGE: bare serve repo, main -> $PREV_TAG"
 
   rm -rf "$WORK_ROOT" 2>/dev/null || true
-  mkdir -p "$WORK_ROOT" "$HERMES_HOME"
+  mkdir -p "$WORK_ROOT" "$HERMES_HOME" "$LOG_DIR"
 
   local old_sha
   old_sha="$(git -C "$REPO_ROOT" rev-parse "$PREV_TAG^{commit}")"

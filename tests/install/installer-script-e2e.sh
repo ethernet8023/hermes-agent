@@ -416,11 +416,20 @@ case "$UPDATE_METHOD" in
     # /proc-cwd matching is precise to this sandbox; no name patterns.
     step "quiescing $INSTALL_DIR before the head desktop smoke"
     procs_in_install_dir() {
-      local pid cwd
-      for pid in /proc/[0-9]*; do
-        cwd="$(readlink "$pid/cwd" 2>/dev/null)" || continue
-        case "$cwd" in "$INSTALL_DIR"*) echo "${pid#/proc/}";; esac
-      done
+      # Linux: /proc cwd links (fast, no tools needed). Darwin has no /proc:
+      # lsof restricted to cwd descriptors (-d cwd) so it never walks the
+      # tree's files; +D only anchors the path match. Run 32465205557 proved
+      # the /proc glob is a silent no-op on macOS ("install dir quiet" while
+      # the detached updater npm was still writing).
+      if [ -d /proc ]; then
+        local pid cwd
+        for pid in /proc/[0-9]*; do
+          cwd="$(readlink "$pid/cwd" 2>/dev/null)" || continue
+          case "$cwd" in "$INSTALL_DIR"*) echo "${pid#/proc/}";; esac
+        done
+      else
+        lsof -a -d cwd -F p +D "$INSTALL_DIR" 2>/dev/null | sed -n 's/^p//p'
+      fi
     }
     quiesce_deadline=$((SECONDS + 60))
     while :; do

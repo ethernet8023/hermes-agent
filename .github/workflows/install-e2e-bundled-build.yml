@@ -1,0 +1,268 @@
+name: install-e2e bundled build
+
+# Builds desktop bundled installers at an arbitrary ref (a release tag OR
+# the HEAD commit under test), one job per platform target, and uploads
+# them as workflow artifacts for the bundled E2E legs to download.
+#
+# This is a stripped-down cousin of desktop-bundled-release.yml: no
+# signing, no release upload, no MSIX bundle — just the artifacts the E2E
+# install+update legs need.  It exists because desktop-bundled-release.yml
+# validates tag shape (vX.Y.Z or nightly) and checks out at the tag, but
+# the E2E matrix needs bundles built at HEAD too (which is not a tag).
+#
+# When the ref IS a release tag, we create a lightweight tag pointing at
+# it so build-bundled-desktop.mjs's tag validation passes.  For HEAD, we
+# create a synthetic nightly-shaped tag (v0.99.0-nightly.<timestamp>) so
+# the nightly path in the build script accepts it without checking
+# pyproject.toml version agreement.
+#
+# Tags that predate the bundled build infrastructure (no
+# installation/runtime-pins.json) are skipped gracefully — the "prev tag
+# is gonna be weird for now" issue.
+#
+# Call it:
+#
+#   jobs:
+#     build-head:
+#       uses: ./.github/workflows/install-e2e-bundled-build.yml
+#       with:
+#         ref: ${{ github.sha }}
+#         label: head
+#
+#   build-prev:
+#     uses: ./.github/workflows/install-e2e-bundled-build.yml
+#       with:
+#         ref: v2026.8.13
+#         label: prev
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to build at: a release tag (vX.Y.Z) or a SHA/branch for HEAD.'
+        required: true
+        type: string
+      label:
+        description: 'Label for artifact naming (e.g. "head" or "prev"). Artifacts are named hermes-bundled-<target>-<label>.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-e2e-bundled-build-${{ inputs.ref }}-${{ inputs.label }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target.label }}
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # One runner per (os, arch).  The bundled E2E legs test the
+          # NSIS installer on Windows, the DMG on macOS, and the
+          # AppImage on Linux — so we build exactly those targets.
+          - label: linux-x64
+            runner: ubuntu-24.04
+          - label: darwin-arm64
+            runner: macos-15
+          - label: win32-x64
+            runner: windows-2025
+    env:
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      electron_config_cache: ${{ github.workspace }}/.cache/electron
+    steps:
+      - name: Resolve build tag
+        id: tag
+        shell: bash
+        run: |
+          REF="${{ inputs.ref }}"
+          LABEL="${{ inputs.label }}"
+          # For a release tag ref, use it directly.  For a SHA or branch
+          # (HEAD), mint a synthetic nightly tag so build-bundled-desktop.mjs
+          # accepts it via the nightly path (skips pyproject.toml version
+          # agreement check).
+          case "$REF" in
+            v[0-9]*.[0-9]*.[0-9]*)
+              echo "tag=$REF" >> "$GITHUB_OUTPUT"
+              echo "synthetic=false" >> "$GITHUB_OUTPUT"
+              ;;
+            v[0-9]*.[0-9]*.[0-9]*-nightly.*)
+              echo "tag=$REF" >> "$GITHUB_OUTPUT"
+              echo "synthetic=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # Synthetic nightly tag: v0.99.0-nightly.YYYYMMDDHHMMSS
+              # 0.99 ensures it's above the current stable (0.27) but
+              # below the next release line (0.28 nightlies).
+              TS=$(date -u +%Y%m%d%H%M%S)
+              SYNTH="v0.99.0-nightly.${TS}"
+              echo "tag=$SYNTH" >> "$GITHUB_OUTPUT"
+              echo "synthetic=true" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Create synthetic tag
+        if: steps.tag.outputs.synthetic == 'true'
+        shell: bash
+        run: |
+          git tag -f "${{ steps.tag.outputs.tag }}" HEAD
+          echo "Created synthetic tag ${{ steps.tag.outputs.tag }} at $(git rev-parse HEAD)"
+
+      # ── Guard: skip tags that predate the bundled build infrastructure ─
+      # The bundled build needs installation/runtime-pins.json and
+      # apps/desktop/scripts/stage-agent-payloads.mjs — both are new on the
+      # bundles-restack branch. Older release tags don't have them, so the
+      # build fails at "Resolve runtime pins" with a module-not-found error.
+      # This is the "prev tag is gonna be weird for now" issue: skip those
+      # tags gracefully instead of failing the whole workflow.
+      - name: Check bundled build support
+        id: support
+        shell: bash
+        run: |
+          if [ ! -f "installation/runtime-pins.json" ]; then
+            echo "::notice::This ref does not ship installation/runtime-pins.json — bundled builds are not supported on this tag. Skipping."
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Toolchain pins (same as desktop-bundled-release.yml) ──────────
+      - name: Resolve toolchain cache key
+        if: steps.support.outputs.supported == 'true'
+        id: toolchain
+        shell: bash
+        run: |
+          node -e '
+            const l = require("./package-lock.json")
+            const el = l.packages["apps/desktop/node_modules/electron"].version
+            const eb = l.packages["node_modules/electron-builder"].version
+            if (!el || !eb) process.exit(1)
+            console.log(`electron=${el}`)
+            console.log(`builder=${eb}`)
+          ' >> "$GITHUB_OUTPUT"
+
+      - name: Resolve runtime pins
+        if: steps.support.outputs.supported == 'true'
+        id: pins
+        shell: bash
+        run: |
+          node -e '
+            const p = require("./installation/runtime-pins.json")
+            const node = p.tools.node.version
+            const npm = p.tools.npm.version
+            const uv = p.tools.uv.version
+            const python = p.tools.uv.python
+            if (!node || !npm || !uv || !python) process.exit(1)
+            console.log(`node=${node}`)
+            console.log(`npm=${npm}`)
+            console.log(`uv=${uv}`)
+            console.log(`python=${python}`)
+          ' >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        if: steps.support.outputs.supported == 'true'
+        with:
+          node-version: ${{ steps.pins.outputs.node }}
+          cache: npm
+
+      - name: Install the pinned npm
+        if: steps.support.outputs.supported == 'true'
+        shell: bash
+        run: npm i -g npm@${{ steps.pins.outputs.npm }}
+
+      - name: Ensure Rust toolchain
+        if: steps.support.outputs.supported == 'true'
+        shell: bash
+        run: |
+          if ! command -v cargo >/dev/null 2>&1; then
+            rustup default stable
+          fi
+          cargo --version
+          rustc --version
+
+      - name: Install uv
+        if: steps.support.outputs.supported == 'true'
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # 9.0.0
+        with:
+          version: ${{ steps.pins.outputs.uv }}
+          enable-cache: false
+          python-version: ${{ steps.pins.outputs.python }}
+
+      # ── Caches (same as desktop-bundled-release.yml, minus signing) ───
+      - name: Cache payload python + site-packages
+        if: steps.support.outputs.supported == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apps/desktop/build/agent-payload/python
+            apps/desktop/build/agent-payload/site-packages
+            apps/desktop/build/agent-payload/.stage-cache-key
+          key: agent-payload-${{ matrix.target.label }}-py${{ steps.pins.outputs.python }}-${{ hashFiles('uv.lock', 'apps/desktop/scripts/stage-agent-payloads.mjs') }}
+
+      - name: Cache electron + electron-builder toolchain
+        if: steps.support.outputs.supported == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/electron-builder
+            ${{ github.workspace }}/.cache/electron
+          key: eb-${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.toolchain.outputs.electron }}-builder-${{ steps.toolchain.outputs.builder }}
+
+      - name: Cache node_modules
+        if: steps.support.outputs.supported == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            ui-tui/node_modules
+            ui-tui/packages/*/node_modules
+            web/node_modules
+            tests-js/node_modules
+          key: node-modules-${{ matrix.target.label }}-node-${{ steps.pins.outputs.node }}-npm-${{ steps.pins.outputs.npm }}-${{ hashFiles('package-lock.json') }}
+
+      # ── Build + package ───────────────────────────────────────────────
+      - name: Build and package
+        if: steps.support.outputs.supported == 'true'
+        shell: bash
+        timeout-minutes: 85
+        env:
+          HERMES_DESKTOP_VARIANT: bundled
+          HERMES_PAYLOAD_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          node scripts/build-bundled-desktop.mjs --tag="${{ steps.tag.outputs.tag }}" --variant=bundled
+
+      # ── Upload artifacts for the E2E legs ──────────────────────────────
+      # The E2E legs need the installer files (exe/dmg/AppImage) and the
+      # latest*.yml feed (for the updater's version check).  We upload
+      # per-platform so each E2E leg downloads only its own platform.
+      # When the tag is unsupported (predates bundled builds), this step
+      # is skipped — no artifact is produced, and the downstream bundled-test
+      # job's download will fail with a clear "artifact not found" error.
+      - name: Upload artifacts
+        if: steps.support.outputs.supported == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-bundled-${{ matrix.target.label }}-${{ inputs.label }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+            apps/desktop/release/nightly*.yml
+          retention-days: 7
+          if-no-files-found: error

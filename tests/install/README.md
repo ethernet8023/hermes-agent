@@ -1,0 +1,96 @@
+# Install and Update E2E Tests
+
+These tests answer one question: can a user on a released version get to this commit?
+
+Each test leg installs an old released version, then updates it to HEAD. The install and the update run the real user surfaces. The legs do not use mocks and do not use headless proxies of GUI flows.
+
+## The layers
+
+The test family has four layers. Each layer has one job.
+
+1. `scripts/sandbox/generate-e2e-matrix.mjs` declares the support matrix. It lists every {os, install-method, update-method} pair. It expands the pairs against the sampled release tags. It knows nothing about which pairs CI can run.
+2. `.github/workflows/install-e2e.yml` is the primary workflow. It picks the release tags, runs the generator, and fans out one matrix job per OS. It also writes the plan chart and the result chart on the run summary.
+3. The run workflows own the capability knowledge. `install-e2e-run.yml` serves linux and macos with one OS-agnostic driver. `install-e2e-windows-run.yml` serves windows. A job-level `if:` gate in each run workflow lists the pairs its driver can run. All other pairs skip natively and show as grey.
+4. The drivers do the work. `tests/install/installer-script-e2e.sh` is the POSIX driver. `tests/install/windows-e2e.ps1` is the windows driver; its install phase and update phase dispatch on separate method parameters, so any implemented update method can follow any implemented install method.
+
+To declare a new method, edit the generator. To implement a method, flip the gate in the run workflow and extend a driver.
+
+## The isolation trick
+
+The drivers do not touch the network for git operations. Each driver makes a bare clone of the checkout at `serve.git`. Then it points every git process at this clone. The mechanism is a driver-owned `GIT_CONFIG_GLOBAL` file with `url.<file://serve.git>.insteadOf` rewrites for both canonical repository URLs.
+
+The driver parks the `main` branch of `serve.git` at the old release. The installer runs and lands on the old release. Then the driver moves `main` to HEAD. An update becomes available in the same way that it does for a real user.
+
+The installer script is not downloaded. The install leg runs the copy from the old git ref. This is the copy that a user of that version executed. The update leg runs the copy from HEAD.
+
+## What one leg does
+
+Each leg with the script drivers has these phases:
+
+1. Stage: make the bare clone, park `main` at the old release.
+2. Install: run the old release's own installer script. Make sure that the checkout is at the old commit and that `hermes --version` works.
+3. Desktop smoke: run `hermes desktop --build-only` from the installed CLI. This proves that the installed version can build the desktop app. If the installed version does not have this flag, the phase reports a skip and continues.
+4. Update: move `main` to HEAD. Apply one update method. Make sure that the checkout is at HEAD and that `hermes --version` works.
+5. Desktop smoke again, at HEAD.
+
+The windows GUI driver replaces phases 2 and 4 when the install method is `desktop-installer@latest`. It downloads the published `Hermes-Setup.exe`, clicks through the installer window with AutoHotkey, and clicks "Update now" in the running app with Playwright.
+
+## Old versions
+
+A leg can install a release from months back. The driver must not assume that the old version has today's CLI surface. The rule: probe, do not assume.
+
+- For the installer, read the flag from the old ref's own script text.
+- For the installed CLI, ask the binary with `--help`.
+- If a flag is not found, omit the flag. This is not an error.
+
+## The install methods
+
+- `installer-script`: the platform's one-liner (`curl | bash` on linux and macos, `irm | iex` on windows).
+- `installer-script+desktop`: the same one-liner with its desktop stage opted in (`--include-desktop` / `-IncludeDesktop`). The stage builds the desktop app during the install. On windows it also registers Start Menu and Desktop shortcuts. On linux and macos it builds the app inside the checkout and registers no OS entry point.
+- `desktop-installer@latest`: the published GUI installer (`Hermes-Setup.exe` on windows, `Hermes-Setup.dmg` on macos), driven through the real user flow.
+
+## The two app-update variants
+
+The desktop app has two launch paths, so the matrix has two app-update methods. Both click "Update now" in the running app. They differ in how the app starts:
+
+- `open-app-update`: the app starts from the OS entry point that the install created. On windows these are the Start Menu and Desktop shortcuts to the installed `Hermes.exe`; the desktop installer always creates them. The installer scripts do not create entry points: their opt-in desktop stage (`--include-desktop` / `-IncludeDesktop`) builds the app inside the checkout but does not register it with the OS. So `open-app-update` legs pair with a `desktop-installer` install.
+- `hermes-desktop-app-update`: the app starts with the `hermes desktop` command. Every install method provides this command, on each OS that ships the desktop app. On linux this is the only app surface: no desktop installer and no packaged desktop artifact exist for linux. The driver captures the product's own launch call (argv, cwd, environment) with `e2e-assets/launch-capture/sitecustomize.py` and re-executes it under Playwright, which owns the app and clicks the update flow.
+- `bundled-app-update`: the app's Update button, same as `open-app-update`, but the update feed is served from a locally built HEAD bundle instead of the GitHub releases feed. This exercises the real electron-updater path between two bundled builds.
+
+## Bundled desktop legs
+
+The `bundled-installer` install method and `bundled-app-update` update method test the fully self-contained bundled desktop installers. Unlike `desktop-installer@latest` (which uses the website's published bootstrap installer), these legs use pre-built bundles from `install-e2e-bundled-build.yml`.
+
+The primary workflow builds bundles at two refs:
+
+1. The prev tag (install source) — `bundled-build-prev` job
+2. HEAD (update target) — `bundled-build-head` job
+
+Each platform (windows, macos, linux) builds independently. The `bundled-test` job downloads both sets of bundles, installs from the prev-tag bundle, then updates to HEAD's bundle through the app's own Update button. The driver (`tests/install/bundled-e2e.sh`) reuses the same Playwright driving infrastructure as the existing desktop E2E legs.
+
+"Prev tag is gonna be weird for now" — older release tags may not ship the bundled build infrastructure. Those legs will fail at the build step; as more releases ship bundled installers, more legs go green automatically.
+
+## Skips
+
+A grey leg is normal. There are two causes:
+
+- The method pair has no driver yet. The pair is a declared TODO. The gate in the run workflow lists the pairs that run.
+- The starting release predates the surface under test. Example: a release without `apps/desktop` has no window to launch. The tag annotation `tag_has_desktop` from the primary workflow marks these releases.
+
+The result chart on the run summary shows each leg as passed, failed, or skipped.
+
+## Triggers
+
+The matrix does not run on pull requests. One leg installs real toolchains and takes more than 10 minutes. The triggers are:
+
+- A schedule, every 12 hours. This finds upstream drift.
+- A release tag push. This is the moment the set of start versions changes.
+- Manual dispatch. You can select the route and the tag count:
+
+```
+gh workflow run install-e2e.yml --ref <branch> -f route=both -f tag-count=2
+```
+
+## Artifacts
+
+Each leg uploads its logs as an artifact. Every leg also records the screen for its whole run: the composite action `.github/actions/e2e-screen-record` installs ffmpeg, records with the OS's capture backend (x11grab on linux, gdigrab on windows, avfoundation on macos), and fails the leg if the recording is missing or has zero frames. Linux runners have no display, so the action starts `Xvfb :99` first and exports `DISPLAY` for every later step — the app under test and the recorder share that display. The windows GUI leg also uploads screenshots and the update result file. Get them with `gh run download <run-id>`.

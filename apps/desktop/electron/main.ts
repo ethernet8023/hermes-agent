@@ -15987,6 +15987,7 @@ async function runDesktopUninstall(mode) {
   }
 
   const appPath = resolveRemovableAppPath(process.execPath, process.platform, process.env)
+
   // Only a standard install removes its own bundle. Managed installs hand
   // that to the steward (per nativeRemovalInstructions), so the script never
   // touches the store path / .app / AppImage.

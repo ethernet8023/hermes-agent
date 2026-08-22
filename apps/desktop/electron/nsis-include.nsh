@@ -175,7 +175,21 @@
   ${EndIf}
 !macroend
 
-Function HermesAddPathEntry
+# Both entry points are MACROS, not Functions. The System::Call lines inside
+# HermesReadUserPath must be COMPILED after electron-builder's own
+# !addplugindir has been processed, and the plugin-dir directives land in the
+# generated script AFTER this include file (NsisTarget splices the custom
+# include into the header before its addPluginDir line). NSIS lazily scans
+# ${NSISDIR}\Plugins on the FIRST System::Call it compiles; a Function body is
+# parsed at !include time — before that directive — so the scan happens there,
+# binds System's data handle, and the later !addplugindir rescan of the same
+# directory marks System as "conflicts with a plugin in another directory",
+# killing any subsequent System::Call (app-builder-lib's getProcessInfo.nsh
+# hits it first). Macro bodies are only compiled at !insertmacro time, which
+# for customInstall/customUnInstall is inside the Section — long after every
+# plugin dir is registered. Measured against 27.0.0-alpha.6 +
+# nsis@1.2.1/nsis-bundle-3.12 on a real build: Functions fail, Macros pass.
+!macro HermesAddPathEntry
   Exch $0
   Push $1
   Push $2
@@ -231,9 +245,9 @@ Function HermesAddPathEntry
   Pop $2
   Pop $1
   Pop $0
-FunctionEnd
+!macroend
 
-Function un.HermesRemovePathEntry
+!macro HermesRemovePathEntry
   Exch $0
   Push $1
   Push $2
@@ -304,16 +318,16 @@ Function un.HermesRemovePathEntry
   Pop $2
   Pop $1
   Pop $0
-FunctionEnd
+!macroend
 
 !macro customInstall
   ${If} ${FileExists} "$INSTDIR\resources\agent-payload\bin\hermes.exe"
     Push "$INSTDIR\resources\agent-payload\bin"
-    Call HermesAddPathEntry
+    !insertmacro HermesAddPathEntry
   ${EndIf}
 !macroend
 
 !macro customUnInstall
   Push "$INSTDIR\resources\agent-payload\bin"
-  Call un.HermesRemovePathEntry
+  !insertmacro HermesRemovePathEntry
 !macroend

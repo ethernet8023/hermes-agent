@@ -230,7 +230,7 @@ wake-openwakeword = ["hermes-agent[audio-io]", "openwakeword==0.6.0", "onnxrunti
 # Upstream declares tflite-runtime for Linux only; ai-edge-litert is the
 # macOS equivalent, bridged in tools/wake_word.py.
 wake-tflite = ["ai-edge-litert==2.1.6; platform_system == 'Darwin'"]
-wake-sherpa = ["hermes-agent[audio-io]", "sherpa-onnx==1.13.4", "sentencepiece==0.2.2"]
+wake-sherpa = ["hermes-agent[audio-io]", "sherpa-onnx==1.13.6", "sentencepiece==0.2.2"]
 wake-porcupine = ["hermes-agent[audio-io]", "pvporcupine==4.0.3"]
 wake = [
   "hermes-agent[wake-openwakeword]",
@@ -249,7 +249,7 @@ honcho = ["honcho-ai==2.2.0"]
 # excluded from [all] like honcho/hindsight so a quarantined upstream release
 # can't break fresh installs.
 supermemory = ["supermemory==3.50.0"]
-mem0 = ["mem0ai==2.0.10"]
+mem0 = ["mem0ai==2.0.10; sys_platform != 'win32' or platform_machine != 'ARM64'"]
 # Image resize recovery for the vision tools. Pillow is now a CORE dependency
 # (see the main `dependencies` list above) since the byte/pixel shrink paths are on
 # the default vision-embed path and the mid-session lazy install deadlocked the
@@ -452,7 +452,7 @@ exclude-newer = "14 days"
 # cutoff can still brick installs. Exempting exact pins is pure brick-risk
 # removal at no supply-chain cost. Guarded by
 # tests/test_packaging_metadata.py::test_build_system_requires_exempt_from_exclude_newer.
-exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, h2 = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false, firecrawl-anydoc = "2026-08-05T18:29:24Z" }
+exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, h2 = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false, firecrawl-anydoc = "2026-08-05T18:29:24Z", sherpa-onnx = "2026-08-19T00:00:00Z" }
 
 [tool.setuptools]
 # Top-level single-file modules (not packages). Without this, uv2nix's

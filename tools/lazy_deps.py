@@ -368,7 +368,16 @@ LAZY_DEPS: dict[str, str | LazyDep] = {
     "memory.honcho": "honcho",
     "memory.hindsight": "hindsight",
     "memory.supermemory": "supermemory",
-    "memory.mem0": "mem0",
+    "memory.mem0": LazyDep("mem0", only_targets(
+        {"win32-arm64": UNAVAILABLE},
+        "mem0 reaches grpcio through qdrant-client. grpcio publishes no "
+        "win_arm64 wheel at any version, and its sdist cannot compile "
+        "there: setup.py passes /std:c++17 and /std:c11 together and "
+        "relies on a monkeypatch of Compiler.spawn to strip the wrong one "
+        "per file, but current setuptools calls Compiler.call, so the "
+        "filter never runs and cl fails with D8016. Use another memory "
+        "provider on arm64 Windows.",
+    )),
 
     # ─── Messaging platforms ───────────────────────────────────────────────
     "platform.telegram": "telegram",

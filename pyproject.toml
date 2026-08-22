@@ -230,7 +230,7 @@ wake-openwakeword = ["hermes-agent[audio-io]", "openwakeword==0.6.0", "onnxrunti
 # Upstream declares tflite-runtime for Linux only; ai-edge-litert is the
 # macOS equivalent, bridged in tools/wake_word.py.
 wake-tflite = ["ai-edge-litert==2.1.6; platform_system == 'Darwin'"]
-wake-sherpa = ["hermes-agent[audio-io]", "sherpa-onnx==1.13.4", "sentencepiece==0.2.2"]
+wake-sherpa = ["hermes-agent[audio-io]", "sherpa-onnx==1.13.5", "sentencepiece==0.2.2"]
 wake-porcupine = ["hermes-agent[audio-io]", "pvporcupine==4.0.3"]
 wake = [
   "hermes-agent[wake-openwakeword]",
@@ -452,7 +452,21 @@ exclude-newer = "14 days"
 # cutoff can still brick installs. Exempting exact pins is pure brick-risk
 # removal at no supply-chain cost. Guarded by
 # tests/test_packaging_metadata.py::test_build_system_requires_exempt_from_exclude_newer.
-exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, h2 = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false, firecrawl-anydoc = "2026-08-05T18:29:24Z" }
+#
+# sherpa-onnx: 1.13.5 is the first release with win_arm64 wheels. Below it the
+# win32-arm64 payload build compiles the sdist, and that build fails in cmake
+# on the release runner.
+#
+# The timestamp is end of 2026-08-11 because a release's files upload over
+# HOURS, not at one instant: 1.13.5 spans 07:18Z–09:38Z and its win_arm64
+# wheels land at 07:33Z–07:46Z. A cutoff at the first file's upload time
+# resolves the version but silently drops every wheel published after it —
+# including the one this bump exists to get, which then sends the resolver
+# looking for a sherpa-onnx-core companion that the full wheel set does not
+# need. The next release (1.13.6) is 2026-08-18, so the date admits 1.13.5
+# only. This entry goes inert on 2026-08-25, when the rolling 14-day cutoff
+# passes it; delete it then.
+exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, h2 = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false, firecrawl-anydoc = "2026-08-05T18:29:24Z", sherpa-onnx = "2026-08-12T00:00:00Z" }
 
 [tool.setuptools]
 # Top-level single-file modules (not packages). Without this, uv2nix's

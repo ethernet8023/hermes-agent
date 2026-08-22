@@ -50,7 +50,7 @@ def payload_python_version() -> str:
     The same source stage-agent-payloads.mjs reads, so this check and the
     build can never disagree about which interpreter is being audited.
     """
-    pins = json.loads((REPO_ROOT / "installation" / "runtime-pins.json").read_text())
+    pins = json.loads((REPO_ROOT / "installation" / "runtime-pins.json").read_text(encoding="utf-8-bom"))
     version = pins["tools"]["uv"]["python"]
     if not version:
         raise SystemExit("runtime-pins.json names no payload python version")
@@ -94,7 +94,7 @@ def export(extras: list[str]) -> list[tuple[str, str, str | None]]:
     cmd = ["uv", "export", "--frozen", "--no-emit-project"]
     for extra in extras:
         cmd += ["--extra", extra]
-    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise SystemExit(f"uv export failed:\n{proc.stderr}")
 

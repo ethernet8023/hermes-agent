@@ -269,18 +269,16 @@ function msixExtensionsPath() {
   const aliasNames = ['hermes.exe', 'hermes-agent.exe', 'hermes-acp.exe']
   const aliasFragment = light
     ? ''
-    : `<uap3:Extension
-    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    : `<uap5:Extension
     xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
     xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
     Category="windows.appExecutionAlias"
     Executable="${shimExecutable}"
-    EntryPoint="Windows.FullTrustApplication"
-    desktop4:Subsystem="console">
-  <uap3:AppExecutionAlias desktop4:Subsystem="console">
+    EntryPoint="Windows.FullTrustApplication">
+  <uap5:AppExecutionAlias desktop4:Subsystem="console">
 ${aliasNames.map((alias) => `    <uap5:ExecutionAlias Alias="${alias}" />`).join('\n')}
-  </uap3:AppExecutionAlias>
-</uap3:Extension>
+  </uap5:AppExecutionAlias>
+</uap5:Extension>
 `
   const fragment = `<uap3:Extension
     xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"

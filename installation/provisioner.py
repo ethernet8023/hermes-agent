@@ -1162,6 +1162,16 @@ def _provision_one(
     if is_termux():
         return _provision_termux(tool, facts_dir, facts, path_order)
 
+    # A DECLARED gap ({\"missing\": reason} in the pin table) must be
+    # detected BEFORE anything derives a binary layout from (tool,
+    # target): _binary_rel has no row for a target the pin table refuses,
+    # and raising there would turn a designed absence into a crash
+    # instead of the recorded "unavailable" fact the resolver reads.
+    try:
+        pinned_file(tool, target, pins={tool: entry})
+    except UnavailableOnTarget as exc:
+        return ToolResult(tool, "unavailable", detail=exc.reason)
+
     version = entry["version"]
     rel = _fact_rel(tool, version, target)
     store_entry = store / store_entry_name(tool, version, target)
@@ -1212,11 +1222,6 @@ def _provision_one(
 
     try:
         pin = pinned_file(tool, target, pins={tool: entry})
-    except UnavailableOnTarget as exc:
-        # A DECLARED gap ({"missing": reason} in the pin table): the
-        # capability does not exist here by design. Report the reason,
-        # not a failure — nothing was attempted and nothing is broken.
-        return ToolResult(tool, "unavailable", detail=exc.reason)
     except KeyError as exc:
         return ToolResult(tool, "failed", detail=str(exc))
 

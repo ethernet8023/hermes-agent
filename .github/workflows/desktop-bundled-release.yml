@@ -723,7 +723,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [bundled, light]
+        # light is disabled in the build matrix above (2ebd15ea53) — no
+        # hermes-light-win32-* artifacts exist to bundle, and the download
+        # step silently matches zero. Keep the two matrices in sync.
+        variant: [bundled]
     env:
       HERMES_PAYLOAD_TAG: ${{ inputs.tag || github.ref_name }}
       # Tool pins (dependency pinning policy: CI-only tools pin exact).

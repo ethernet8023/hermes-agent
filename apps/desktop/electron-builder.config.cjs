@@ -180,6 +180,14 @@ module.exports = {
     minVersion: '10.0.22621.0',
     maxVersionTested: '10.0.26100.0',
     customExtensionsPath: msixExtensionsPath(),
+    // The stock app-builder-lib manifest template's IgnorableNamespaces
+    // covers only "uap10 desktop6". Our execution-alias extension is a
+    // uap5:Extension carrying desktop4:Subsystem, and makeappx refuses any
+    // namespace it finds that the Package root neither declares nor lists
+    // as ignorable (0x80080204, reported with no detail). This manifest is
+    // the stock template plus uap5 + desktop4 in both places; keep in sync
+    // with templates/msix/appxmanifest.xml when electron-builder bumps.
+    customManifestPath: 'assets/msix-manifest.xml',
     // Without this the Start tile renders logo-only, no app name.
     showNameOnTiles: true
   },

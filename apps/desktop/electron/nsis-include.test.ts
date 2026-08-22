@@ -39,6 +39,7 @@ interface MakensisTool {
 
 interface NsisToolset {
   getMakeNsisPath: (nsis: unknown, resourcesDir: string) => Promise<MakensisTool>
+  getNsisPluginsPath: (nsis: unknown, resourcesDir: string) => Promise<string>
 }
 
 // app-builder-lib's "exports" map does not publish the toolsets subpath, so
@@ -51,10 +52,29 @@ function loadNsisToolset(): NsisToolset {
   return require(path.join(path.dirname(entry), 'toolsets', 'nsis.js')) as NsisToolset
 }
 
+// The generator's own include directory (app-builder-lib/templates/nsis/include),
+// resolved off the package entry the same way the toolset is.
+function templatesIncludeDir(): string {
+  const entry: string = require.resolve('app-builder-lib')
+
+  return path.join(path.dirname(entry), '..', 'templates', 'nsis', 'include')
+}
+
 // The harness stands in for app-builder-lib's generated installer script: it
 // inserts customInit into .onInit, customInstall into the install section and
 // customUnInstall into the uninstall section, which is the only contract our
 // include has with the generator.
+//
+// It also reproduces the generator's HEADER, and that part is load-bearing.
+// computeCommonInstallerScriptHeader() emits `!addplugindir` and the
+// `!include` of this file as two concurrent tasks, and the include wins the
+// race, so the real build compiles our file BEFORE the plugin directory is
+// registered. A harness without those lines cannot see the failure that
+// shape causes: any plugin our include uses at include time binds to
+// ${NSISDIR}'s default plugin dir, `!addplugindir` registers the same plugin
+// under a second path, and the next use of it — getProcessInfo.nsh, included
+// here for exactly that reason — aborts with "conflicts with a plugin in
+// another directory". That is the win32 release-lane break this guards.
 const HARNESS = `Unicode true
 Name "HermesNsisIncludeCompileCheck"
 OutFile "harness.exe"
@@ -62,6 +82,9 @@ InstallDir "$TEMP\\HermesNsisIncludeCompileCheck"
 RequestExecutionLevel user
 
 !include "nsis-include.nsh"
+!addplugindir /x86-unicode "__PLUGIN_DIR__"
+!addincludedir "__INCLUDE_DIR__"
+!include "getProcessInfo.nsh"
 
 Page instfiles
 UninstPage instfiles
@@ -76,6 +99,7 @@ SectionEnd
 
 Function .onInit
   !insertmacro customInit
+  !insertmacro FUNC_GETPROCESSINFO
 FunctionEnd
 `
 
@@ -95,6 +119,15 @@ async function resolveMakensis(): Promise<MakensisTool | null> {
 
     throw error
   }
+}
+
+// The unicode plugin directory of the same bundle the build uses. Resolved
+// through the toolset rather than hardcoded, so it follows a bundle bump.
+async function resolvePluginDir(): Promise<string> {
+  const toolset: NsisToolset = loadNsisToolset()
+  const root: string = await toolset.getNsisPluginsPath(undefined, electronDir)
+
+  return path.join(root, 'x86-unicode')
 }
 
 async function compile(
@@ -126,7 +159,18 @@ describe('nsis-include.nsh compiles with the electron-builder NSIS toolset', () 
     makensis = await resolveMakensis()
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hermes-nsis-'))
     await fs.copyFile(includePath, path.join(workDir, 'nsis-include.nsh'))
-    await fs.writeFile(path.join(workDir, 'harness.nsi'), HARNESS, 'utf8')
+
+    // Only reachable once the toolset resolved; without it there is nothing
+    // to compile against anyway and every case below skips.
+    const harness: string =
+      makensis == null
+        ? HARNESS
+        : HARNESS.replace('__PLUGIN_DIR__', (await resolvePluginDir()).replace(/\\/g, '\\\\')).replace(
+            '__INCLUDE_DIR__',
+            templatesIncludeDir().replace(/\\/g, '\\\\')
+          )
+
+    await fs.writeFile(path.join(workDir, 'harness.nsi'), harness, 'utf8')
   }, 600_000)
 
   // Both single-arch shapes: each one takes a different branch of the arch
@@ -149,10 +193,26 @@ describe('nsis-include.nsh compiles with the electron-builder NSIS toolset', () 
       // A missing plugin is the specific failure this test was written for,
       // and makensis reports it in the body rather than only via exit code.
       expect(output).not.toMatch(/Plugin not found/i)
+      // The second one: a plugin used before the generator's !addplugindir
+      // ends up registered twice and the next use of it aborts the compile.
+      expect(output).not.toMatch(/conflicts with a plugin in another directory/i)
       expect(output, `makensis failed:\n${output}`).not.toMatch(/aborting creation process/i)
       expect(result.code).toBe(0)
     }, 300_000)
   }
+
+  it('keeps every plugin call inside a macro', async () => {
+    const source: string = await fs.readFile(includePath, 'utf8')
+
+    // A top-level Function's body compiles where this file is !include-d,
+    // which the generator does BEFORE it emits !addplugindir — that ordering
+    // is what produces the "conflicts with a plugin in another directory"
+    // abort. Macro bodies compile at insertion instead, which is after the
+    // whole generated header. The compile cases above are the real guard;
+    // this names the rule so a future edit does not reintroduce the shape
+    // and then puzzle over the error.
+    expect(source).not.toMatch(/^Function\s/m)
+  })
 
   it('edits PATH without depending on an NSIS plugin', async () => {
     const source: string = await fs.readFile(includePath, 'utf8')

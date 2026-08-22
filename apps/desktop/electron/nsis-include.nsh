@@ -95,6 +95,25 @@
 # (ERROR_MORE_DATA), which lets us refuse to touch a PATH we cannot read
 # whole. The registry type is round-tripped for the same reason: rewriting a
 # REG_SZ PATH as REG_EXPAND_SZ would change how a literal '%' in it behaves.
+#
+# EVERY System::Call here sits inside a !macro that only customInstall and
+# customUnInstall insert. None may move into a top-level Function, because a
+# Function body is compiled where the file is !include-d, and that is before
+# electron-builder's own `!addplugindir` line.
+#
+# The generator emits that line and the !include of this file as two
+# CONCURRENT AsyncTaskManager tasks (NsisTarget.computeCommonInstallerScriptHeader),
+# each appending when it resolves: the plugin path awaits a toolset resolve,
+# the include awaits a stat, so the include reliably lands first. A plugin
+# used before !addplugindir binds to ${NSISDIR}'s default plugin directory;
+# !addplugindir then registers the SAME plugin under a second path, and the
+# next use of it — app-builder-lib's own getProcessInfo.nsh — aborts the
+# compile with "Plugin command System::Call conflicts with a plugin in
+# another directory!". Keeping the calls inside macros defers them past the
+# whole generated header, so the order stops mattering.
+#
+# The macros take a LABEL because an inlined macro repeats its code at every
+# insertion point, and NSIS labels must be unique per function.
 
 !include "LogicLib.nsh"
 !include "WinMessages.nsh"
@@ -175,7 +194,7 @@
   ${EndIf}
 !macroend
 
-Function HermesAddPathEntry
+!macro HermesAddPathEntry LABEL
   Exch $0
   Push $1
   Push $2
@@ -189,14 +208,14 @@ Function HermesAddPathEntry
   !insertmacro HermesReadUserPath
   ${If} $3 <> 0
     DetailPrint "Left PATH alone: it is longer than this installer can read safely"
-    Goto hermes_add_done
+    Goto hermes_add_done_${LABEL}
   ${EndIf}
 
   StrCpy $4 ";$1;"
   StrCpy $5 ";$0;"
-  !insertmacro HermesFindPathEntry add
+  !insertmacro HermesFindPathEntry add_${LABEL}
   ${If} $7 <> -1
-    Goto hermes_add_done
+    Goto hermes_add_done_${LABEL}
   ${EndIf}
 
   # +1 for the joining semicolon.
@@ -206,7 +225,7 @@ Function HermesAddPathEntry
   IntOp $4 $4 + 1
   ${If} $4 >= ${NSIS_MAX_STRLEN}
     DetailPrint "Left PATH alone: adding the Hermes CLI would overflow it"
-    Goto hermes_add_done
+    Goto hermes_add_done_${LABEL}
   ${EndIf}
 
   ${If} $1 == ""
@@ -221,7 +240,7 @@ Function HermesAddPathEntry
   DetailPrint "Adding the Hermes CLI to PATH: $0"
   !insertmacro HermesWriteUserPath
 
-  hermes_add_done:
+  hermes_add_done_${LABEL}:
   Pop $8
   Pop $7
   Pop $6
@@ -231,9 +250,9 @@ Function HermesAddPathEntry
   Pop $2
   Pop $1
   Pop $0
-FunctionEnd
+!macroend
 
-Function un.HermesRemovePathEntry
+!macro HermesRemovePathEntry LABEL
   Exch $0
   Push $1
   Push $2
@@ -247,10 +266,10 @@ Function un.HermesRemovePathEntry
 
   !insertmacro HermesReadUserPath
   ${If} $3 <> 0
-    Goto hermes_del_done
+    Goto hermes_del_done_${LABEL}
   ${EndIf}
   ${If} $1 == ""
-    Goto hermes_del_done
+    Goto hermes_del_done_${LABEL}
   ${EndIf}
 
   StrCpy $4 ";$1;"
@@ -259,8 +278,8 @@ Function un.HermesRemovePathEntry
 
   # Splice out every occurrence, keeping the needle's trailing semicolon as
   # the joiner between the surrounding entries.
-  hermes_del_next:
-    !insertmacro HermesFindPathEntry del
+  hermes_del_next_${LABEL}:
+    !insertmacro HermesFindPathEntry del_${LABEL}
     ${If} $7 <> -1
       StrCpy $9 1
       StrCpy $8 $4 $7
@@ -268,32 +287,32 @@ Function un.HermesRemovePathEntry
       IntOp $7 $7 - 1
       StrCpy $4 $4 "" $7
       StrCpy $4 "$8$4"
-      Goto hermes_del_next
+      Goto hermes_del_next_${LABEL}
     ${EndIf}
 
   ${If} $9 = 0
-    Goto hermes_del_done
+    Goto hermes_del_done_${LABEL}
   ${EndIf}
 
-  # Drop the sentinel semicolons this function added.
-  hermes_del_lstrip:
+  # Drop the sentinel semicolons this macro added.
+  hermes_del_lstrip_${LABEL}:
     StrCpy $5 $4 1
     ${If} $5 == ";"
       StrCpy $4 $4 "" 1
-      Goto hermes_del_lstrip
+      Goto hermes_del_lstrip_${LABEL}
     ${EndIf}
-  hermes_del_rstrip:
+  hermes_del_rstrip_${LABEL}:
     StrCpy $5 $4 1 -1
     ${If} $5 == ";"
       StrCpy $4 $4 -1
-      Goto hermes_del_rstrip
+      Goto hermes_del_rstrip_${LABEL}
     ${EndIf}
 
   StrCpy $1 $4
   DetailPrint "Removing the Hermes CLI from PATH: $0"
   !insertmacro HermesWriteUserPath
 
-  hermes_del_done:
+  hermes_del_done_${LABEL}:
   Pop $9
   Pop $8
   Pop $7
@@ -304,16 +323,16 @@ Function un.HermesRemovePathEntry
   Pop $2
   Pop $1
   Pop $0
-FunctionEnd
+!macroend
 
 !macro customInstall
   ${If} ${FileExists} "$INSTDIR\resources\agent-payload\bin\hermes.exe"
     Push "$INSTDIR\resources\agent-payload\bin"
-    Call HermesAddPathEntry
+    !insertmacro HermesAddPathEntry install
   ${EndIf}
 !macroend
 
 !macro customUnInstall
   Push "$INSTDIR\resources\agent-payload\bin"
-  Call un.HermesRemovePathEntry
+  !insertmacro HermesRemovePathEntry uninstall
 !macroend

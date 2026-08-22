@@ -368,6 +368,13 @@ LAZY_DEPS: dict[str, str | LazyDep] = {
     "memory.honcho": "honcho",
     "memory.hindsight": "hindsight",
     "memory.supermemory": "supermemory",
+    # mem0 is NOT target-gated here even though its transitive grpcio cannot
+    # build on win32-arm64 (no win_arm64 wheel in any release; sdist dies with
+    # cl D8016 — grpc/grpc#39362). The exclusion lives on the mem0ai pin's
+    # environment marker inside pyproject.toml's mem0 extra: markers are what
+    # uv export writes into requirements-payload.txt and what pip honors per
+    # target, so the whole grpcio closure drops out of the arm64 export at
+    # the source instead of being refused after the fact.
     "memory.mem0": "mem0",
 
     # ─── Messaging platforms ───────────────────────────────────────────────

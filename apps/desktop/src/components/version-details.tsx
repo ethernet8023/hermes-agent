@@ -21,6 +21,7 @@ function runtimeSourceLabel(source: RuntimeSource): string {
 export function VersionDetails({ version }: { version: DesktopVersionInfo }) {
   const { t } = useI18n()
   const u = t.updates
+
   const source =
     version.source === 'ci' ? 'CI' : version.source ? version.source[0].toUpperCase() + version.source.slice(1) : null
 

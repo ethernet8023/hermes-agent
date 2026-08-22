@@ -94,6 +94,7 @@ test('findEmbeddedPython joins the recorded path and verifies the binary exists'
 // ─── updateChannelFromConfig ───────────────────────────────────────
 
 const ID = 'a4f3b2c1d0e9f8a7'
+
 const record = (channel: string, id: string = ID) =>
   `update:\n  installs:\n    ${id}:\n      path: /home/u/.hermes/hermes-agent\n      channel: ${channel}\n`
 

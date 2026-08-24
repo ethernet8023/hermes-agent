@@ -57,7 +57,14 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
                         "command": sys.executable,
                         "args": [str(server)],
                     }
-                }
+                },
+                # The interactive default bound is 1.5s; on slow CI runners a
+                # cold python + mcp-SDK import for the probe server can exceed
+                # it, so discovery misses the tool snapshot and the assertion
+                # flakes. A generous bound keeps the test deterministic —
+                # wait_for_mcp_discovery returns the instant discovery
+                # finishes, so fast runs pay no extra time.
+                "mcp_discovery_timeout": 60,
             }
         ),
         encoding="utf-8",

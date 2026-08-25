@@ -43,32 +43,15 @@ def mock_args():
 # ---------------------------------------------------------------------------
 # Managed-uv compatibility for tests that patch shutil.which
 # ---------------------------------------------------------------------------
-# The production code now uses ``ensure_uv()`` / ``update_managed_uv()``
-# instead of ``shutil.which("uv")``.  Many tests in this file patch
-# ``shutil.which`` to control whether uv is "available" — these autouse
-# fixtures make the managed_uv functions delegate to the patched
-# ``shutil.which`` so the existing test setup keeps working without
-# per-test changes.
+# The production code resolves uv through ``pm.uv()`` instead of
+# ``shutil.which("uv")``.  Many tests in this file patch ``shutil.which``
+# to control whether uv is "available" — this autouse fixture makes
+# pm.uv delegate to the patched ``shutil.which`` so the existing test
+# setup keeps working without per-test changes.
 @pytest.fixture(autouse=True)
-def _patch_managed_uv(request):
-    """Make managed_uv helpers follow shutil.which mocking in tests."""
-    import shutil
-
-    # resolve_uv delegates to shutil.which("uv") so that test patches
-    # on shutil.which flow through naturally.
-    def _fake_resolve_uv():
-        return shutil.which("uv")
-
-    def _fake_ensure_uv(**_kwargs):
-        return shutil.which("uv")
-
-    def _fake_update_managed_uv(**_kwargs):
-        return None  # never actually self-update in tests
-
-    with patch("hermes_cli.managed_uv.resolve_uv", side_effect=_fake_resolve_uv), \
-         patch("hermes_cli.managed_uv.ensure_uv", side_effect=_fake_ensure_uv), \
-         patch("hermes_cli.managed_uv.update_managed_uv", side_effect=_fake_update_managed_uv):
-        yield
+def _patch_managed_uv(request, patch_pm_uv_to_shutil_which):
+    """Make pm.uv follow shutil.which mocking in tests."""
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -169,53 +152,6 @@ class TestCmdUpdateNpmLockfileCache:
         assert cache_roots == [shared_root, shared_root]
 
 
-class TestCmdUpdateTermuxUvBootstrap:
-    """Regression tests for Termux-specific uv bootstrap behavior."""
-
-    @patch("shutil.which", return_value=None)
-    @patch("subprocess.run")
-    def test_termux_uv_bootstrap_uses_binary_only_install(
-        self, mock_run, _mock_which, monkeypatch
-    ):
-        from hermes_cli import main as hm
-
-        mock_run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="")
-        monkeypatch.setattr(hm, "_is_termux_env", lambda env=None: True)
-
-        uv_bin = hm._ensure_uv_for_termux(["/termux/python", "-m", "pip"])
-
-        assert uv_bin is None
-        assert mock_run.call_count == 1
-        assert mock_run.call_args.args[0] == [
-            "/termux/python",
-            "-m",
-            "pip",
-            "install",
-            "uv",
-            "--only-binary",
-            ":all:",
-        ]
-        assert mock_run.call_args.kwargs["cwd"] == PROJECT_ROOT
-        assert mock_run.call_args.kwargs["check"] is False
-
-    @patch("subprocess.run")
-    def test_termux_reuses_existing_path_uv_without_pip(self, mock_run, monkeypatch):
-        """A uv already on PATH (e.g. ``pkg install uv``) is reused before pip runs."""
-        from hermes_cli import main as hm
-
-        pkg_uv = "/data/data/com.termux/files/usr/bin/uv"
-        monkeypatch.setattr(hm, "_is_termux_env", lambda env=None: True)
-        # Production resolve_uv only checks $HERMES_HOME/bin/uv; model an empty
-        # managed dir so the PATH probe is what surfaces the packaged uv.
-        monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: None)
-        monkeypatch.setattr("shutil.which", lambda name: pkg_uv if name == "uv" else None)
-
-        uv_bin = hm._ensure_uv_for_termux(["/termux/python", "-m", "pip"])
-
-        assert uv_bin == pkg_uv
-        mock_run.assert_not_called()
-
-
 class TestUpdateManagedPythonEnvIsolation:
     """Regression for the uv-env isolation fix (third-party UV_PYTHON_INSTALL_DIR
     must not hijack the update's pip install).
@@ -227,7 +163,7 @@ class TestUpdateManagedPythonEnvIsolation:
     """
 
     def test_managed_env_drops_third_party_uv_install_dir(self):
-        from hermes_cli.managed_uv import managed_python_env
+        from pm.packages import uv_env as managed_python_env
 
         poisoned = {
             "UV_PYTHON_INSTALL_DIR": r"C:\WorkBuddy\python",
@@ -257,7 +193,7 @@ class TestUpdateManagedPythonEnvIsolation:
         """The update's final uv_env must carry VIRTUAL_ENV=this venv while the
         managed store path is still the UV_PYTHON_INSTALL_DIR."""
         from hermes_cli import main as hm
-        from hermes_cli.managed_uv import managed_python_env
+        from pm.packages import uv_env as managed_python_env
 
         uv_env = managed_python_env()
         uv_env["VIRTUAL_ENV"] = str(PROJECT_ROOT / "venv")
@@ -875,35 +811,6 @@ class TestCmdUpdateZipBranchRefusal:
         assert "Downloading latest version" not in out
 
 
-def test_is_termux_env_true_for_termux_prefix():
-    from hermes_cli import main as hm
-
-    assert hm._is_termux_env({"PREFIX": "/data/data/com.termux/files/usr"}) is True
-
-
-def test_load_installable_optional_extras_supports_termux_group(tmp_path, monkeypatch):
-    from hermes_cli import main as hm
-
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        """
-[project]
-name = "x"
-version = "0.0.0"
-
-[project.optional-dependencies]
-all = ["x[mcp]"]
-termux-all = ["x[termux]", "x[mcp]"]
-mcp = ["mcp>=1"]
-termux = ["rich>=14"]
-""".strip()
-    )
-    monkeypatch.setattr(hm, "PROJECT_ROOT", tmp_path)
-
-    assert hm._load_installable_optional_extras(group="all") == ["mcp"]
-    assert hm._load_installable_optional_extras(group="termux-all") == ["termux", "mcp"]
-
-
 class TestNodeRuntimeNpmResolution:
     """Regression tests for #30271 — WSL must not run Windows npm against the
     Linux checkout, and a failed Node refresh must not report success."""
@@ -1083,8 +990,7 @@ class TestNodeRuntimeNpmResolution:
             patch("hermes_cli.config.load_config", return_value={}),
             patch("subprocess.run", side_effect=fail_git_fetch),
             patch("urllib.request.urlretrieve", side_effect=write_source_zip),
-            patch("hermes_cli.managed_uv.ensure_uv", return_value="uv"),
-            patch("hermes_cli.managed_uv.update_managed_uv"),
+            patch("pm.uv", return_value=("uv", dict(os.environ))),
             patch(
                 "tools.skills_sync.sync_skills",
                 return_value={

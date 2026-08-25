@@ -348,8 +348,8 @@ def _find_cli() -> Optional[List[str]]:
 def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
     """Install the browser-use CLI persistently via ``uv tool install``.
 
-    Resolution order for uv: Hermes' managed uv (bootstrapped on demand via
-    ``hermes_cli.managed_uv.ensure_uv``) → uv on PATH. The binary is linked
+    Resolution order for uv: Hermes' managed uv (realized on demand via
+    ``pm.uv``) → uv on PATH. The binary is linked
     into ``$HERMES_HOME/bin`` (``UV_TOOL_BIN_DIR``) so ``_find_cli()``
     resolves it for every profile without touching the user's PATH.
 
@@ -367,12 +367,15 @@ def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
             return True, f"browser-use CLI already installed ({managed})"
 
     uv_bin: Optional[str] = None
+    env = dict(os.environ)
     try:
-        from hermes_cli.managed_uv import ensure_uv
+        import pm
 
-        uv_bin = str(ensure_uv() or "") or None
+        uv_bin, pm_env = pm.uv()
+        if uv_bin:
+            env = pm_env
     except Exception as e:
-        logger.debug("Managed uv bootstrap unavailable: %s", e)
+        logger.debug("Managed uv unavailable: %s", e)
     if not uv_bin:
         uv_bin = shutil.which("uv")
     if not uv_bin:
@@ -381,7 +384,6 @@ def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
             "(https://docs.astral.sh/uv/) and run `uv tool install browser-use`."
         )
 
-    env = dict(os.environ)
     env["UV_NO_CONFIG"] = "1"
     if bin_dir:
         try:

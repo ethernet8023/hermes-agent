@@ -2693,8 +2693,8 @@ class CuaDriverBackend(ComputerUseBackend):
         # (default on); when it's disabled or fails, ensure() raises
         # FeatureUnavailable carrying an actionable `uv pip install mcp==…`
         # hint, which surfaces via the backend-unavailable path in tool.py.
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("tool.computer_use", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("computer-use")
         # A just-installed package may not be importable until the import
         # machinery's caches are refreshed within this process.
         import importlib

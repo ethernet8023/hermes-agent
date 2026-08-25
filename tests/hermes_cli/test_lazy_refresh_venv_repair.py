@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,125 +14,6 @@ import pytest
 
 
 
-
-
-def test_detect_returns_none_when_probe_subprocess_fails(tmp_path, monkeypatch):
-    python = tmp_path / "python"
-    python.write_text("", encoding="utf-8")
-    monkeypatch.setattr(
-        m, "_resolve_install_target_python", lambda *a, **k: python
-    )
-    monkeypatch.setattr(
-        m.subprocess,
-        "run",
-        MagicMock(side_effect=OSError("exec failed")),
-    )
-    assert m._detect_broken_lazy_refresh_imports(["uv", "pip"]) is None
-
-
-
-
-def test_repair_runs_force_reinstall_with_pyproject_pins(
-    tmp_path, monkeypatch
-):
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(
-        textwrap.dedent(
-            """\
-            [project]
-            name = "fake"
-            version = "0.0.0"
-            dependencies = [
-              "pyyaml==6.0.3",
-              "click==8.2.1",
-            ]
-        """
-        )
-    )
-    monkeypatch.setattr(m, "PROJECT_ROOT", tmp_path)
-
-    calls: list[list[str]] = []
-
-    def fake_install(cmd, **kwargs):
-        calls.append(cmd)
-
-    detect_calls = {"count": 0}
-
-    def fake_detect(prefix, *, env=None):
-        detect_calls["count"] += 1
-        return []
-
-    monkeypatch.setattr(m, "_run_package_only_install", fake_install)
-    monkeypatch.setattr(m, "_detect_broken_lazy_refresh_imports", fake_detect)
-
-    ok = m._repair_broken_lazy_refresh_imports(
-        ["uv", "pip"],
-        ["PyYAML", "click"],
-        env={"VIRTUAL_ENV": str(tmp_path)},
-    )
-    assert ok is True
-    assert calls == [
-        [
-            "uv",
-            "pip",
-            "install",
-            "--force-reinstall",
-            "pyyaml==6.0.3",
-            "click==8.2.1",
-        ]
-    ]
-    assert detect_calls["count"] == 1
-
-
-def test_refresh_repairs_venv_after_lazy_failure(tmp_path, monkeypatch, capsys):
-    import tools.lazy_deps as lazy_deps_mod
-
-    monkeypatch.setattr(lazy_deps_mod, "active_features", lambda: ["platform.matrix"])
-    monkeypatch.setattr(
-        lazy_deps_mod,
-        "refresh_active_features",
-        lambda **kw: {"platform.matrix": "failed: pip install failed"},
-    )
-
-    repair_calls: list[list[str]] = []
-
-    def fake_repair(prefix, packages, *, env=None):
-        repair_calls.append(packages)
-        return True
-
-    monkeypatch.setattr(m, "_detect_broken_lazy_refresh_imports", lambda *a, **k: ["PyYAML"])
-    monkeypatch.setattr(m, "_repair_broken_lazy_refresh_imports", fake_repair)
-
-    ok = m._refresh_active_lazy_features(["uv", "pip"], env={"VIRTUAL_ENV": str(tmp_path)})
-    out = capsys.readouterr().out
-
-    assert ok is True
-    assert repair_calls == [["PyYAML"]]
-    assert "Venv repair succeeded" in out
-    assert "import probes" in out
-    assert "Backends keep their previously-installed version" not in out
-
-
-def test_refresh_uses_pre_rebuild_snapshot_when_provided(monkeypatch):
-    """Replacement runtimes must not re-detect features after packages vanish."""
-    import tools.lazy_deps as lazy_deps_mod
-
-    monkeypatch.setattr(
-        lazy_deps_mod,
-        "active_features",
-        lambda: pytest.fail("post-rebuild detection must not run"),
-    )
-    restored = []
-    monkeypatch.setattr(
-        lazy_deps_mod,
-        "restore_features",
-        lambda features: restored.append(features) or {"platform.telegram": "restored"},
-    )
-
-    assert m._refresh_active_lazy_features(
-        ["uv", "pip"], features=["platform.telegram"]
-    ) is True
-    assert restored == [["platform.telegram"]]
 
 
 def test_capture_active_tool_dependencies_uses_tools_status_probes(monkeypatch):
@@ -150,7 +32,7 @@ def test_restore_active_tool_dependencies_uses_static_allowlist(monkeypatch):
     calls = []
     monkeypatch.setattr(
         m,
-        "_run_package_only_install",
+        "_run_install_with_heartbeat",
         lambda cmd, *, env=None: calls.append((cmd, env)),
     )
 
@@ -168,7 +50,7 @@ def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
     tmp_path, monkeypatch
 ):
     """The updater must carry pre-rebuild state into its repair refresh."""
-    from hermes_cli import managed_uv, update_cmd
+    from hermes_cli import update_cmd
 
     (tmp_path / ".git").mkdir()
     snapshot = ["platform.telegram"]
@@ -186,9 +68,8 @@ def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
             return SimpleNamespace(returncode=0, stdout="0\n", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    def fake_refresh(prefix, *, env=None, features=None):
-        refresh_calls.append((prefix, env, features))
-        return True
+    def fake_sync(extras=None, *, explicit=False):
+        refresh_calls.append((sorted(extras or []), explicit))
 
     def fake_restore(dependencies, prefix, *, env=None):
         restore_calls.append((dependencies, prefix, env))
@@ -215,11 +96,19 @@ def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
     monkeypatch.setattr(
         m, "_install_python_dependencies_with_optional_fallback", lambda *a, **k: None
     )
-    monkeypatch.setattr(m, "_refresh_active_lazy_features", fake_refresh)
     monkeypatch.setattr(m, "_restore_active_tool_dependencies", fake_restore)
     monkeypatch.setattr(m.subprocess, "run", fake_run)
-    monkeypatch.setattr(managed_uv, "update_managed_uv", lambda **kwargs: None)
-    monkeypatch.setattr(managed_uv, "ensure_uv", lambda **kwargs: "uv")
+    import pm
+    from pm.packages import uv_env as _uv_env
+
+    def fake_uv(**kw):
+        env = _uv_env()
+        if kw.get("venv"):
+            env["VIRTUAL_ENV"] = str(kw["venv"])
+        return "uv", env
+
+    monkeypatch.setattr(pm, "uv", fake_uv)
+    monkeypatch.setattr(pm, "sync_venv", fake_sync)
 
     args = SimpleNamespace(
         yes=True,
@@ -232,20 +121,14 @@ def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
     with pytest.raises(RestoreReached):
         m._cmd_update_impl(args, gateway_mode=False)
 
-    # The repair env is now built via managed_python_env (#83914): third-party
-    # UV vars are stripped, managed pins set, then VIRTUAL_ENV re-pointed at
-    # the install's venv. Assert the CONTRACT, not the raw environ copy.
-    from hermes_cli.managed_uv import managed_python_env
+    # The repair phase is one explicit pm sync carrying the pre-rebuild
+    # extras snapshot; tool-dep restore still runs against the managed env
+    # (#83914: UV vars stripped, VIRTUAL_ENV pointed at the install's venv).
+    from pm.packages import uv_env as managed_python_env
 
     expected_env = managed_python_env()
     expected_env["VIRTUAL_ENV"] = str(tmp_path / "venv")
-    assert refresh_calls == [
-        (
-            ["uv", "pip"],
-            expected_env,
-            snapshot,
-        )
-    ]
+    assert refresh_calls == [(sorted(["all", *snapshot]), True)]
     assert restore_calls == [
         (
             tool_snapshot,

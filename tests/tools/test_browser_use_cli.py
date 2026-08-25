@@ -983,9 +983,8 @@ class TestInstallCli:
         monkeypatch.setattr(bu_cli.shutil, "which", lambda name, path=None: cli if name == "browser-use" and path is None else None)
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: None
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (None, {}))
         ok, msg = bu_cli.install_cli()
         # No uv available in this fixture, so the attempted managed install
         # fails — the point is that the PATH copy did not short-circuit.
@@ -1009,9 +1008,8 @@ class TestInstallCli:
         monkeypatch.setenv("PATH", str(tmp_path / "empty"))
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: None
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (None, {}))
         ok, msg = bu_cli.install_cli()
         assert ok is False
         assert "uv" in msg
@@ -1037,9 +1035,8 @@ class TestInstallCli:
         uv.chmod(uv.stat().st_mode | stat.S_IXUSR)
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: str(uv)
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (str(uv), dict(os.environ)))
         ok, msg = bu_cli.install_cli()
         assert ok is True, msg
         assert (bin_dir / "browser-use").exists()
@@ -1053,9 +1050,8 @@ class TestInstallCli:
         uv.chmod(uv.stat().st_mode | stat.S_IXUSR)
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: str(uv)
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (str(uv), dict(os.environ)))
         ok, msg = bu_cli.install_cli()
         assert ok is False
         assert "no network" in msg

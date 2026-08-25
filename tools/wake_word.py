@@ -533,9 +533,9 @@ class _OpenWakeWordEngine(_Engine):
     frame_length = 1280
 
     def __init__(self, cfg: Dict[str, Any]):
-        from tools import lazy_deps
+        import pm
 
-        lazy_deps.ensure("wake.openwakeword", prompt=False)
+        pm.ensure_import("wake")
 
         import openwakeword
         from openwakeword.model import Model
@@ -560,7 +560,8 @@ class _OpenWakeWordEngine(_Engine):
             # Same lazy-install contract as every other backend; the platform
             # gate lives here because dep specs can't carry PEP 508 markers.
             try:
-                lazy_deps.ensure("wake.openwakeword.tflite", prompt=False)
+                import pm
+                pm.ensure_import("wake-tflite")
             except Exception as e:
                 logger.debug("wake word: tflite runtime install failed: %s", e)
             if not ensure_tflite_runtime():
@@ -669,9 +670,9 @@ class _SherpaKwsEngine(_Engine):
     frame_length = 1280
 
     def __init__(self, cfg: Dict[str, Any]):
-        from tools import lazy_deps
+        import pm
 
-        lazy_deps.ensure("wake.sherpa", prompt=False)
+        pm.ensure_import("wake")
 
         import sherpa_onnx
         from sherpa_onnx import text2token
@@ -780,9 +781,9 @@ class _PorcupineEngine(_Engine):
     """Picovoice Porcupine — premium, on-device, needs an access key."""
 
     def __init__(self, cfg: Dict[str, Any]):
-        from tools import lazy_deps
+        import pm
 
-        lazy_deps.ensure("wake.porcupine", prompt=False)
+        pm.ensure_import("wake")
 
         import pvporcupine
 
@@ -859,7 +860,7 @@ def _tts_ready() -> bool:
     TTS the reply is silent and the loop is pointless.
 
     PROBE, not an installer: ``check_tts_requirements`` lazily pip-installs the
-    provider SDK via ``_import_*`` → ``lazy_deps.ensure`` — running that inside
+    provider SDK via ``_import_*`` → ``pm.ensure_import`` — running that inside
     a status poll froze wake.status for the length of a pip install (and a
     failed install marked the wake word unavailable, unmounting the desktop
     ear). When the provider's deps aren't installed yet, "installable at first
@@ -873,18 +874,19 @@ def _tts_ready() -> bool:
         return False
 
     _LAZY_TTS_FEATURES = {
-        "edge": "tts.edge",
-        "elevenlabs": "tts.elevenlabs",
-        "mistral": "tts.mistral",
+        "edge": "edge-tts",
+        "elevenlabs": "tts-premium",
+        "mistral": "mistral",
     }
     feature = _LAZY_TTS_FEATURES.get(provider)
     if feature is not None:
         try:
-            from tools import lazy_deps
+            import pm
+            from pm.ensure import lazy_installs_allowed
 
-            if not lazy_deps.is_available(feature):
+            if not pm.available(feature):
                 # Not installed: ready iff it can install at first speak.
-                return lazy_deps._allow_lazy_installs()
+                return lazy_installs_allowed()
         except Exception:
             return False
 
@@ -900,21 +902,22 @@ def check_wake_word_requirements(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     """Report whether wake-word detection can run, with a remediation hint."""
     cfg = cfg if cfg is not None else load_wake_word_config()
     provider = _provider(cfg)
-    from tools import lazy_deps
+    import pm
+    from pm.ensure import lazy_installs_allowed
 
     if provider == "porcupine":
-        feature = "wake.porcupine"
+        feature = "wake"
     elif provider in ("sherpa", "sherpa-onnx", "kws", "open"):
-        feature = "wake.sherpa"
+        feature = "wake"
     else:
-        feature = "wake.openwakeword"
-    deps_ok = lazy_deps.is_available(feature)
-    lazy_ok = lazy_deps._allow_lazy_installs()
+        feature = "wake"
+    deps_ok = pm.available(feature)
+    lazy_ok = lazy_installs_allowed()
     # The audio probe imports sounddevice + numpy — two of the very packages
     # the lazy installer would fetch — so it can only be trusted once the
     # feature's deps are installed. On a fresh install (deps missing, lazy
     # installs allowed) we defer the mic check: the engine constructors call
-    # ``lazy_deps.ensure()`` and the stream-open surfaces any real audio
+    # ``pm.ensure_import()`` and the stream-open surfaces any real audio
     # problem. Gating ``available`` on the probe here made the lazy-install
     # path unreachable (the probe always failed before ensure() could run).
     audio_ok = _audio_available() if deps_ok else False
@@ -932,13 +935,13 @@ def check_wake_word_requirements(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     if provider not in ("porcupine", "sherpa", "sherpa-onnx", "kws", "open"):
         framework = resolve_inference_framework(cfg)
         if framework == "tflite":
-            tflite_ok = ensure_tflite_runtime() or lazy_deps.is_available("wake.openwakeword.tflite") or lazy_ok
+            tflite_ok = ensure_tflite_runtime() or pm.available("wake-tflite") or lazy_ok
 
     if provider == "porcupine" and not (os.getenv("PORCUPINE_ACCESS_KEY") or "").strip():
         key_ok = False
         hint = "Set PORCUPINE_ACCESS_KEY (free key at https://console.picovoice.ai)."
     elif not deps_ok and not lazy_ok:
-        hint = lazy_deps.feature_install_command(feature) or ""
+        hint = f"uv sync --frozen --extra {feature}"
     elif not tflite_ok:
         hint = "The wake word needs the tflite runtime on this Mac: pip install ai-edge-litert"
     elif deps_ok and not audio_ok and resolve_capture_mode(cfg) == "local":

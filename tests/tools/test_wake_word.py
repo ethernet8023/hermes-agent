@@ -16,6 +16,10 @@ from pathlib import Path
 
 import pytest
 
+import pm
+import importlib
+
+pm_ensure = importlib.import_module("pm.ensure")
 import tools.wake_word as ww
 
 
@@ -100,7 +104,7 @@ def _voice_loop_ready(monkeypatch, stt=True, tts=True):
 def test_requirements_openwakeword_available(monkeypatch):
     _voice_loop_ready(monkeypatch)
     monkeypatch.setattr(ww, "_audio_available", lambda: True)
-    monkeypatch.setattr("tools.lazy_deps.is_available", lambda f: True)
+    monkeypatch.setattr(pm, "available", lambda f: True)
     r = ww.check_wake_word_requirements(
         {"provider": "openwakeword", "phrase": "hey hermes"}
     )
@@ -112,7 +116,7 @@ def test_requirements_openwakeword_available(monkeypatch):
 def test_tts_ready_is_a_probe_never_an_installer(monkeypatch):
     """_tts_ready must NOT trigger lazy pip installs from a status poll.
 
-    Regression: check_tts_requirements → _import_edge_tts → lazy_deps.ensure
+    Regression: check_tts_requirements → _import_edge_tts → pm.ensure_import
     ran pip inside wake.status; a slow/failed install froze the poll and
     unmounted the desktop ear. Uninstalled-but-lazy-installable counts as
     ready WITHOUT calling ensure/check.
@@ -132,23 +136,23 @@ def test_tts_ready_is_a_probe_never_an_installer(monkeypatch):
     monkeypatch.setitem(sys.modules, "tools.tts_tool", fake_tts)
 
     # Deps missing + lazy installs allowed → ready (installs at first speak).
-    monkeypatch.setattr("tools.lazy_deps.is_available", lambda f: False)
-    monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
+    monkeypatch.setattr(pm, "available", lambda f: False)
+    monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: True)
     assert ww._tts_ready() is True
 
     # Deps missing + lazy installs disabled → not ready.
-    monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: False)
+    monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: False)
     assert ww._tts_ready() is False
 
     # Deps present → falls through to the real requirements check.
     fake_tts.check_tts_requirements = lambda: True
-    monkeypatch.setattr("tools.lazy_deps.is_available", lambda f: True)
+    monkeypatch.setattr(pm, "available", lambda f: True)
     assert ww._tts_ready() is True
 
 
 def test_requirements_fresh_install_lazy_allowed(monkeypatch):
     """Deps missing + lazy installs allowed → available, so /wake on can
-    reach the engine constructor's ``lazy_deps.ensure()`` call.
+    reach the engine constructor's ``pm.ensure_import()`` call.
 
     Regression: the audio probe imports sounddevice/numpy — packages the
     lazy installer would fetch — so gating ``available`` on it made the
@@ -160,8 +164,8 @@ def test_requirements_fresh_install_lazy_allowed(monkeypatch):
 
     _voice_loop_ready(monkeypatch)
     monkeypatch.setattr(ww, "_audio_available", _boom)
-    monkeypatch.setattr("tools.lazy_deps.is_available", lambda f: False)
-    monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
+    monkeypatch.setattr(pm, "available", lambda f: False)
+    monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: True)
     r = ww.check_wake_word_requirements({"provider": "openwakeword"})
     assert r["available"] is True
     assert r["deps_available"] is False
@@ -174,8 +178,8 @@ def test_requirements_deps_present_but_no_audio_hint(monkeypatch):
     _voice_loop_ready(monkeypatch)
     monkeypatch.setattr(ww, "_audio_available", lambda: False)
     monkeypatch.setattr(ww, "_local_input_device_ready", lambda: False)
-    monkeypatch.setattr("tools.lazy_deps.is_available", lambda f: True)
-    monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
+    monkeypatch.setattr(pm, "available", lambda f: True)
+    monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: True)
     r = ww.check_wake_word_requirements({"provider": "openwakeword", "capture": "local"})
     assert r["available"] is False
     assert "audio device" in r["hint"] or "microphone" in r["hint"].lower()
@@ -211,7 +215,7 @@ def _install_fake_openwakeword(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "openwakeword", oww)
     monkeypatch.setitem(sys.modules, "openwakeword.model", model_mod)
-    monkeypatch.setattr("tools.lazy_deps.ensure", lambda *a, **k: None)
+    monkeypatch.setattr(pm, "ensure_import", lambda *a, **k: None)
     return calls
 
 
@@ -317,7 +321,7 @@ def _openwakeword_engine_with_scores(monkeypatch, cfg_wake, scores):
     model_mod.Model = _ScriptedModel
     monkeypatch.setitem(sys.modules, "openwakeword", oww)
     monkeypatch.setitem(sys.modules, "openwakeword.model", model_mod)
-    monkeypatch.setattr("tools.lazy_deps.ensure", lambda *a, **k: None)
+    monkeypatch.setattr(pm, "ensure_import", lambda *a, **k: None)
     monkeypatch.setattr(ww, "ensure_tflite_runtime", lambda: True)
     return ww._OpenWakeWordEngine({"provider": "openwakeword", **cfg_wake})
 
@@ -371,7 +375,7 @@ def _install_fake_sherpa(monkeypatch, tmp_path):
     sherpa.KeywordSpotter = _FakeSpotter
     sherpa.text2token = _fake_text2token
     monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)
-    monkeypatch.setattr("tools.lazy_deps.ensure", lambda *a, **k: None)
+    monkeypatch.setattr(pm, "ensure_import", lambda *a, **k: None)
 
     # numpy is an optional voice-extra dep, lazy-installed at runtime — CI's
     # hermetic slices don't have it. process() only calls asarray(...)/32768,
@@ -722,24 +726,8 @@ def test_requirements_client_capture_without_local_mic(monkeypatch):
     monkeypatch.setattr(ww, "_local_input_device_ready", lambda: False)
     monkeypatch.setattr(ww, "_stt_ready", lambda: True)
     monkeypatch.setattr(ww, "_tts_ready", lambda: True)
-
-    class _LD:
-        @staticmethod
-        def is_available(feature):
-            return True
-
-        @staticmethod
-        def _allow_lazy_installs():
-            return False
-
-        @staticmethod
-        def feature_install_command(feature):
-            return ""
-
-    monkeypatch.setattr(ww, "lazy_deps", _LD, raising=False)
-    import tools.lazy_deps as real_ld
-    monkeypatch.setattr("tools.lazy_deps.is_available", lambda f: True)
-    monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: False)
+    monkeypatch.setattr(pm, "available", lambda f: True)
+    monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: False)
 
     reqs = ww.check_wake_word_requirements({"capture": "client", "provider": "openwakeword"})
     assert reqs["available"] is True

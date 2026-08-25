@@ -1661,19 +1661,20 @@ def setup_terminal_backend(config: dict):
             print_info("Installing vercel SDK...")
             import subprocess
 
-            # Managed uv first: $HERMES_HOME/bin is never on PATH, so a bare
-            # which() misses the uv Hermes installed. Bootstrapping one is
+            # Managed uv first: the store is never on PATH, so a bare
+            # which() misses the uv Hermes installed. Realizing one is
             # welcome here — this is the interactive setup wizard, already
             # mid-install, and the alternative tier is a pip that a `uv venv`
             # venv may not even have.
-            from hermes_cli.managed_uv import ensure_uv
+            import pm
 
-            uv_bin = ensure_uv()
+            uv_bin, uv_env = pm.uv()
             if uv_bin:
                 result = subprocess.run(
                     [uv_bin, "pip", "install", "--python", sys.executable, "vercel"],
                     capture_output=True,
                     text=True,
+                    env=uv_env,
                 )
             else:
                 result = subprocess.run(

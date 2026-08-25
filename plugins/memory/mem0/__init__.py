@@ -271,8 +271,8 @@ class Mem0MemoryProvider(MemoryProvider):
         # target. On failure we fall through so the import inside the backend
         # produces the canonical error, captured below.
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("memory.mem0", prompt=False)
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("mem0")
         except ImportError:
             pass
         except Exception:

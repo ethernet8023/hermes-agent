@@ -1856,6 +1856,33 @@ def skill_view(
                     exc_info=True,
                 )
 
+        # ── pm tool deps (`deps: [ffmpeg]` frontmatter) ──────────────
+        # Loading the skill IS the activation moment: ensure each declared
+        # pm package now so the skill's commands work when the model runs
+        # them. Failure never blocks the skill content — the note carries
+        # the remedy.
+        deps_note = None
+        declared_deps = frontmatter.get("deps") or []
+        if isinstance(declared_deps, str):
+            declared_deps = [declared_deps]
+        if isinstance(declared_deps, list) and declared_deps:
+            failed_deps = []
+            for dep in [str(d).strip() for d in declared_deps if str(d).strip()]:
+                try:
+                    import pm
+
+                    pm.ensure(dep)
+                except Exception as exc:
+                    failed_deps.append(f"{dep}: {exc}")
+            if failed_deps:
+                deps_note = (
+                    "Tool dependencies could not be installed — "
+                    + "; ".join(failed_deps)
+                    + ". Run `hermes pm install " 
+                    + " ".join(str(d) for d in declared_deps)
+                    + "` and reload."
+                )
+
         result = {
             "success": True,
             "name": skill_name,
@@ -1888,6 +1915,8 @@ def skill_view(
         setup_help = next((e["help"] for e in required_env_vars if e.get("help")), None)
         if setup_help:
             result["setup_help"] = setup_help
+        if deps_note:
+            result["deps_note"] = deps_note
 
         if capture_result["gateway_setup_hint"]:
             result["gateway_setup_hint"] = capture_result["gateway_setup_hint"]

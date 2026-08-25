@@ -12,7 +12,8 @@ code has two failure modes:
   keep resolving it across reboots.
 
 The fix per call site is one of ``find_node_executable()``,
-``iter_hermes_node_dirs()``, ``resolve_uv()``, or ``ensure_uv()``. This test is
+``iter_hermes_node_dirs()``, ``pm.run()``, ``pm.ensure()``, or (transitional)
+``pm.uv()``. This test is
 the ratchet that stops a new bare lookup from being added back.
 
 Reading source is normally banned (see AGENTS.md). It is the right tool here and
@@ -63,20 +64,12 @@ _ALLOWED: dict[tuple[str, str], str] = {
         "can only run what is on that subshell's PATH, which local.py populates "
         "with the managed dirs — so PATH is the correct question to ask here."
     ),
-    ("hermes_cli/update_cmd.py", "uv"): (
-        "Termux fallback: a pkg-installed uv lands on PATH but not in the "
-        "managed bin dir, and it is checked only after resolve_uv() misses."
-    ),
     ("hermes_cli/update_cmd.py", "npm"): (
         "WSL diagnostic: deliberately inspects what PATH resolves so it can "
         "warn that the only reachable npm is the Windows one."
     ),
-    ("tools/lazy_deps.py", "uv"): (
-        "Fallback after resolve_uv(), plus the except-branch for the "
-        "hermes_cli import guard."
-    ),
     ("tools/browser_use_cli.py", "uv"): (
-        "install_cli()'s fallback after ensure_uv() misses — a user-installed "
+        "install_cli()'s fallback after pm.uv() misses — a user-installed "
         "uv on PATH is a legitimate last rung before giving up with install "
         "guidance."
     ),
@@ -186,7 +179,7 @@ def test_no_unreviewed_bare_managed_runtime_lookups():
         "arbitrary process's PATH, so this resolves a system copy — or nothing "
         "— on an install that has a managed one.\n"
         "Use instead:\n"
-        "  uv       -> managed_uv.resolve_uv() (lookup) or ensure_uv() (may install)\n"
+        "  uv       -> pm.uv(realize=False) (lookup) or pm.uv() (may realize)\n"
         "  node/npm -> hermes_constants.find_node_executable()\n"
         "  PATH env -> hermes_constants.iter_hermes_node_dirs()\n"
         "If PATH really is the right question, add the site to _ALLOWED with a "
@@ -223,8 +216,8 @@ def test_managed_node_helpers_exist(helper):
 
 
 def test_managed_uv_helpers_exist():
-    from hermes_cli.managed_uv import ensure_uv, managed_uv_path, resolve_uv
+    from pm import ensure, run, uv
 
-    assert callable(resolve_uv)
-    assert callable(ensure_uv)
-    assert managed_uv_path().parent.name == "bin"
+    assert callable(uv)
+    assert callable(ensure)
+    assert callable(run)

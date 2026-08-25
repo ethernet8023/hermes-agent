@@ -336,7 +336,7 @@ def check_telegram_requirements() -> bool:
     """Check if Telegram dependencies are available.
 
     If python-telegram-bot is missing, attempts to lazy-install it via
-    ``tools.lazy_deps.ensure("platform.telegram")``. After a successful
+    ``pm.ensure_import("messaging")``. After a successful
     install, re-imports the SDK and flips ``TELEGRAM_AVAILABLE`` to True
     so the adapter's class-level type aliases get rebound.
     """
@@ -347,8 +347,8 @@ def check_telegram_requirements() -> bool:
     if TELEGRAM_AVAILABLE:
         return True
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("platform.telegram", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("messaging")
     except Exception:
         return False
     try:

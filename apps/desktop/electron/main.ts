@@ -45,7 +45,8 @@ import {
 } from './backend-claim'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
-import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
+import { buildDesktopBackendEnv, normalizeHermesHomeRoot } from './backend-env'
+import { adoptPayloadVenv, resolvePayload } from './payload-backend'
 import {
   isReauthRequiredError,
   makeNousCloudBackendDownError,
@@ -362,7 +363,6 @@ import { hiddenWindowsChildOptions } from './windows-child-options'
 import {
   buildPathExtCandidates,
   chooseUpdaterArgs,
-  getVenvSitePackagesEntries,
   resolveVenvHermesCommand
 } from './windows-hermes-path'
 import { connectWindowsRemote, detectRemotePlatform, helper } from './windows-remote-lifecycle'
@@ -741,10 +741,11 @@ function resolveHermesHome() {
 
 const HERMES_HOME = resolveHermesHome()
 
-function pathWithHermesManagedNode(...entries) {
-  const managed = hermesManagedNodePathEntries(HERMES_HOME).filter(directoryExists)
-
-  return [...managed, ...entries, process.env.PATH].filter(Boolean).join(path.delimiter)
+// The spawned `hermes update` / updater children compose managed-tool env
+// (node, git, uv) in-process via pm. Electron only prepends the explicit
+// entries the caller names (the venv bin for the hermes shim itself).
+function pathWithVenvBin(...entries) {
+  return [...entries, process.env.PATH].filter(Boolean).join(path.delimiter)
 }
 
 // ACTIVE_HERMES_ROOT — the canonical mutable Hermes install. Same path
@@ -2189,9 +2190,7 @@ function unwrapWindowsVenvHermesCommand(command, backendArgs) {
     directoryExists,
     canImportHermesCli,
     getVenvPython,
-    getVenvSitePackagesEntries,
     buildDesktopBackendEnv,
-    hermesHome: HERMES_HOME,
     resolvePath: (...segments) => path.resolve(...segments),
     dirname: p => path.dirname(p),
     basename: p => path.basename(p),
@@ -3528,6 +3527,14 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
     throw new Error('An update is already in progress.')
   }
 
+  // A bundled install ships its whole runtime as a sealed payload — there
+  // is no checkout to pull or venv to sync. New app release IS the update.
+  if (resolvePayload(process.resourcesPath, { fileExists, directoryExists, isWindows: IS_WINDOWS })) {
+    emitUpdateProgress({ stage: 'manual', message: 'bundled install: update by installing the new app release', percent: null })
+
+    return { ok: true, manual: true, bundled: true }
+  }
+
   updateInFlight = true
 
   try {
@@ -3735,7 +3742,7 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
           ...process.env,
           HERMES_HOME,
           HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
-          PATH: pathWithHermesManagedNode(venvBin)
+          PATH: pathWithVenvBin(venvBin)
         },
         detached: true,
         stdio: 'ignore'
@@ -3761,7 +3768,7 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
         env: {
           ...process.env,
           HERMES_HOME,
-          PATH: pathWithHermesManagedNode(venvBin)
+          PATH: pathWithVenvBin(venvBin)
         },
         detached: true,
         stdio: 'ignore'
@@ -3896,7 +3903,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
     env: {
       ...process.env,
       HERMES_HOME,
-      PATH: pathWithHermesManagedNode(venvBin)
+      PATH: pathWithVenvBin(venvBin)
     },
     detached: true,
     stdio: 'ignore'
@@ -4126,7 +4133,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
       ...process.env,
       HERMES_HOME,
       HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
-      PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
+      PATH: pathWithVenvBin(path.join(updateRoot, 'venv', 'bin'))
     },
     detached: true,
     stdio: 'ignore'
@@ -4459,11 +4466,8 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     return null
   }
 
-  // The venv whose interpreter we selected is the venv whose site-packages
-  // belong on PYTHONPATH — findPythonForRoot may have picked `.venv` over
-  // `venv`, and mixing the two crashes the backend on its first native
-  // import (see venvRootForPython). Fall back to root/venv only for a
-  // system python, where the historical layout is the best guess.
+  // The venv interpreter self-locates (pyvenv.cfg) and `cwd: root` puts the
+  // checkout first on sys.path for `-m hermes_cli.main`. No PYTHONPATH.
   const venvRoot = venvRootForPython(python, root) ?? path.join(root, 'venv')
   const venvPython = getVenvPython(venvRoot)
   const command = IS_WINDOWS && fileExists(venvPython) ? venvPython : python
@@ -4473,11 +4477,7 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     label,
     command,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
-    env: buildDesktopBackendEnv({
-      hermesHome: HERMES_HOME,
-      pythonPathEntries: [root, ...getVenvSitePackagesEntries(venvRoot)],
-      venvRoot
-    }),
+    env: buildDesktopBackendEnv(),
     root,
     bootstrap: Boolean(options.bootstrap),
     shell: false
@@ -4497,11 +4497,7 @@ function createActiveBackend(backendArgs) {
     label: `Hermes at ${ACTIVE_HERMES_ROOT}`,
     command,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
-    env: buildDesktopBackendEnv({
-      hermesHome: HERMES_HOME,
-      pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(VENV_ROOT)],
-      venvRoot: VENV_ROOT
-    }),
+    env: buildDesktopBackendEnv(),
     root: ACTIVE_HERMES_ROOT,
     bootstrap: true,
     shell: false
@@ -4509,6 +4505,35 @@ function createActiveBackend(backendArgs) {
 }
 
 function resolveHermesBackend(backendArgs) {
+  // 0. Shipped payload — a bundled install carries the whole runtime under
+  //    resources/agent-payload (staged by `hermes pm bundle`). The venv's
+  //    interpreter self-locates once adoptPayloadVenv() has pointed it at
+  //    the shipped base python; HERMES_RUNTIME_DIR aims pm at the payload
+  //    store. Nothing installs on the user machine.
+  const payload = resolvePayload(process.resourcesPath, {
+    fileExists,
+    directoryExists,
+    isWindows: IS_WINDOWS
+  })
+
+  if (payload && adoptPayloadVenv(payload, { isWindows: IS_WINDOWS, log: rememberLog })) {
+    if (bootstrapRepairRequested) {
+      // A bundled payload is immutable — repair means "reinstall the app".
+      rememberLog('[payload] repair requested on a bundled install; the payload is read-only — ignoring')
+    }
+
+    return {
+      kind: 'python',
+      label: `bundled payload at ${payload.root}`,
+      command: payload.venvPython,
+      args: ['-m', 'hermes_cli.main', ...backendArgs],
+      env: { ...buildDesktopBackendEnv(), HERMES_RUNTIME_DIR: payload.toolsDir },
+      root: payload.repoDir,
+      bootstrap: false,
+      shell: false
+    }
+  }
+
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)

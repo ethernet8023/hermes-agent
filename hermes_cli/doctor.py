@@ -254,7 +254,6 @@ def _termux_browser_setup_steps(node_installed: bool) -> list[str]:
 
 def _termux_install_all_fallback_notes() -> list[str]:
     return [
-        "Termux install profile: use .[termux-all] for broad compatibility (installer default on Termux).",
         "Matrix E2EE extra is excluded on Termux (python-olm currently fails to build).",
         "Local faster-whisper extra is excluded on Termux (ctranslate2/av build path unavailable).",
         "STT fallback: use Groq Whisper (set GROQ_API_KEY) or OpenAI Whisper (set VOICE_TOOLS_OPENAI_KEY).",

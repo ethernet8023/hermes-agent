@@ -5216,7 +5216,7 @@ def _maybe_autoinstall_chromium() -> bool:
     if _running_in_docker():
         return False
 
-    from tools.lazy_deps import _allow_lazy_installs
+    from pm.ensure import lazy_installs_allowed as _allow_lazy_installs
     if not _allow_lazy_installs():
         return False
 

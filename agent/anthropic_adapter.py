@@ -58,8 +58,8 @@ def _get_anthropic_sdk():
     global _anthropic_sdk
     if _anthropic_sdk is ...:
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("provider.anthropic", prompt=False)
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("anthropic")
         except ImportError:
             pass
         except Exception:

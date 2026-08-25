@@ -868,6 +868,32 @@ def find_node_executable_on_path(command: str) -> str | None:
     return None
 
 
+def _pm_node_executable(command: str) -> str | None:
+    """The pm store's node, when installed. node is a real runtime
+    dependency (the TUI is a node process); npm is deliberately NOT
+    resolved here — it is pm-internal, and its remaining callers (web/
+    desktop build machinery) stay on the legacy tree until the
+    node_modules package kind absorbs them."""
+    try:
+        import pm
+
+        if str(command) != "node" or not pm.is_installed("node"):
+            return None
+        from pm.ensure import _facts, _store
+        from pm.registry import get_package
+        from pm.store import current_target
+
+        fact = _facts().get("node")
+        if fact is None:
+            return None
+        binary = get_package("node").binary(_store().entry(fact["entry"]), current_target())
+        if binary is not None and binary.is_file():
+            return str(binary)
+    except Exception:
+        pass
+    return None
+
+
 def find_node_executable(command: str) -> str | None:
     """Resolve a Node.js command, preferring healthy Hermes-managed installs.
 
@@ -876,6 +902,9 @@ def find_node_executable(command: str) -> str | None:
     tree exists but cannot be healed, returns ``None`` instead of falling back
     to system npm on PATH.
     """
+    pm_managed = _pm_node_executable(command)
+    if pm_managed:
+        return pm_managed
     managed = find_hermes_node_executable(command)
     if managed:
         return managed

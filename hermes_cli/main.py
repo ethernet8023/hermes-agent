@@ -5073,7 +5073,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_park_stashed_changes",
         "_ensure_acp_launcher",
         "_ensure_fhs_path_guard",
-        "_ensure_uv_for_termux",
         "_finish_dashboard_update_cleanup",
         "_fleet_probe_expected_runtimes",
         "_for_each_systemd_gateway_unit",
@@ -5086,9 +5085,7 @@ _LAZY_COMMAND_EXPORTS = {
         "_gateway_prompt",
         "_get_origin_url",
         "_has_upstream_remote",
-        "_install_psutil_android_compat",
         "_invalidate_update_cache",
-        "_is_android_python",
         "_is_fork",
         "_leftover_pausable_gateway_pids",
         "_log_only_write",
@@ -5130,7 +5127,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_sync_with_upstream_if_needed",
         "_update_node_dependencies",
         "_update_via_zip",
-        "_upgrade_pip_before_lazy_refresh",
         "_validate_critical_files_syntax",
         "_validate_critical_modules_import",
         "_venv_core_imports_healthy",
@@ -8676,8 +8672,7 @@ def _respawn_dashboard_processes(commands: list[list[str]]) -> list[list[str]]:
 def _load_installable_optional_extras(group: str = "all") -> list[str]:
     """Return optional extras referenced by a dependency group.
 
-    ``group`` is usually ``all`` (desktop/server broad install) or
-    ``termux-all`` (Termux-compatible broad install).
+    ``group`` is usually ``all`` (the broad install profile).
     """
     try:
         import tomllib
@@ -8851,35 +8846,25 @@ def _recover_from_interrupted_install() -> None:
 
 
 def _recover_lazy_refresh_marker_locked() -> None:
-    """Heal ``.lazy-refresh-incomplete`` via confirmed import-probe repair."""
+    """Heal ``.lazy-refresh-incomplete``: the venv stamp is the authority,
+    so recovery is one pm sync against uv.lock + the enabled extras."""
     print(
         "⚠ A previous lazy-backend refresh may have left the venv unhealthy — "
-        "running import-based package repair..."
+        "re-syncing against uv.lock..."
     )
-    install_prefix, install_env = _default_venv_install_target()
-    status = _repair_venv_via_import_probes(install_prefix, env=install_env)
-    if status in ("healthy", "repaired"):
+    try:
+        import pm
+
+        pm.sync_venv(explicit=True)
         _clear_lazy_refresh_incomplete_marker()
-        print("✓ Lazy-refresh venv recovery confirmed — install is healthy again.")
-        return
-    if status == "indeterminate":
+        print("✓ Venv re-synced — install is healthy again.")
+    except Exception as exc:
+        logger.debug("Lazy-refresh recovery failed: %s", exc)
         print(
-            "  ⚠ Import probes unavailable — cannot confirm venv health. "
-            "Leaving `.lazy-refresh-incomplete` for the next launch."
+            "  ⚠ Venv re-sync failed. Leaving `.lazy-refresh-incomplete` "
+            "for the next launch."
         )
-    else:
-        print(
-            "  ⚠ Lazy-refresh package repair incomplete. "
-            "Leaving `.lazy-refresh-incomplete` for the next launch."
-        )
-        print("  Recover manually with:")
-        all_specs = _lazy_refresh_repair_specs(
-            sorted(set(_LAZY_REFRESH_REPAIR_PACKAGES.values()))
-        )
-        print(
-            f"    {' '.join(install_prefix)} install --force-reinstall "
-            + " ".join(shlex.quote(s) for s in all_specs)
-        )
+        print("  Recover manually with: hermes pm install")
 
 
 def _recover_core_update_marker_locked() -> None:
@@ -8899,24 +8884,16 @@ def _recover_core_update_marker_locked() -> None:
     # still be replaced. Package-only import repair may help as first aid but
     # must NEVER clear this core marker on its own (#58004 review).
     self_locked = _windows_running_hermes_launcher_locked()
-    if self_locked:
-        install_prefix, install_env = _default_venv_install_target()
-        print(
-            "  → Running from hermes.exe; applying package-only first aid, "
-            "then quarantined full reinstall (core marker stays until that "
-            "succeeds)..."
-        )
-        _repair_venv_via_import_probes(install_prefix, env=install_env)
 
     try:
         from hermes_cli import _install_repair as _ir
 
-        # ensure_uv bootstraps the installer itself when missing (the early
-        # pass's stdlib-only lookup cannot); keeping it here means the late
-        # path still self-heals a venv whose uv vanished mid-update.
-        from hermes_cli.managed_uv import ensure_uv
+        # pm realizes uv when missing (the early pass's stdlib-only
+        # lookup cannot); keeping it here means the late path still
+        # self-heals a venv whose uv vanished mid-update.
+        import pm
 
-        ensure_uv()
+        pm.uv()
 
         # Delegate the install itself to the shared stdlib executor so both
         # this late path and the pre-import early pass run exactly the same
@@ -9109,20 +9086,15 @@ def _reexec_dependency_sync_off_windows_shim() -> bool:
 def _default_venv_install_target() -> tuple[list[str], dict[str, str] | None]:
     """Return ``(install_cmd_prefix, env)`` for the project venv when possible."""
     try:
-        from hermes_cli.managed_uv import ensure_uv
-
-        uv_bin = ensure_uv()
-    except Exception:
-        uv_bin = None
-    if uv_bin:
+        import pm
         from hermes_constants import project_venv_dir
 
         venv_dir = project_venv_dir(PROJECT_ROOT) or PROJECT_ROOT / "venv"
-        env = {**os.environ, "VIRTUAL_ENV": str(venv_dir)}
-        if _is_termux_env(env):
-            env.pop("PYTHONPATH", None)
-            env.pop("PYTHONHOME", None)
-        return [uv_bin, "pip"], env
+        uv_bin, uv_env = pm.uv(venv=venv_dir)
+    except Exception:
+        uv_bin, uv_env = None, None
+    if uv_bin:
+        return [uv_bin, "pip"], uv_env
     return [sys.executable, "-m", "pip"], None
 
 
@@ -9539,222 +9511,6 @@ def _cleanup_quarantined_exes(scripts_dir: Path | None = None) -> None:
             pass  # still locked or in use — try again next run
 
 
-# Import probes for venv corruption after a failed lazy ``uv pip install``.
-# Metadata can look fine while ``.py`` files were removed mid-install (#57828).
-# Canonical tables live in the stdlib-only ``_early_recovery`` module (which
-# also probes/repairs BEFORE this module's third-party imports can run) so the
-# early and full recovery layers can never drift apart.
-_LAZY_REFRESH_IMPORT_PROBES: tuple[tuple[str, str], ...] = (
-    _early_recovery_mod.LAZY_REFRESH_IMPORT_PROBES
-)
-
-_LAZY_REFRESH_REPAIR_PACKAGES: dict[str, str] = (
-    _early_recovery_mod.LAZY_REFRESH_REPAIR_PACKAGES
-)
-
-
-def _run_package_only_install(
-    cmd: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Run a package-only pip/uv install without quarantining entry-point shims.
-
-    ``pip install --upgrade pip`` and ``--force-reinstall <pkg>`` do not
-    rewrite ``hermes.exe``. The editable-install quarantine path would rename
-    shims without uv recreating them on Windows (#57828).
-    """
-    _run_install_with_heartbeat(cmd, env=env)
-
-
-def _lazy_refresh_repair_specs(packages: list[str]) -> list[str]:
-    """Map repair package names to their declared pin specs in pyproject.toml."""
-    try:
-        import tomllib  # Python 3.11+
-    except ImportError:  # pragma: no cover
-        return packages
-
-    pyproject = PROJECT_ROOT / "pyproject.toml"
-    if not pyproject.is_file():
-        return packages
-
-    try:
-        with open(pyproject, "rb") as f:
-            raw_deps = tomllib.load(f).get("project", {}).get("dependencies", []) or []
-    except Exception as exc:
-        logger.debug("lazy refresh repair spec lookup failed: %s", exc)
-        return packages
-
-    name_to_spec: dict[str, str] = {}
-    try:
-        from packaging.requirements import Requirement  # type: ignore
-
-        for spec in raw_deps:
-            try:
-                req = Requirement(spec)
-                name_to_spec[req.name.lower()] = spec.split(";", 1)[0].strip()
-            except Exception:
-                continue
-    except Exception:
-        for spec in raw_deps:
-            head = spec.split(";", 1)[0].strip()
-            bare = head
-            for op in ("==", ">=", "<=", "~=", ">", "<", "!="):
-                if op in bare:
-                    bare = bare.split(op, 1)[0]
-                    break
-            key = bare.strip().split("[", 1)[0].strip().lower()
-            if key:
-                name_to_spec[key] = head
-
-    return [name_to_spec.get(pkg.lower(), pkg) for pkg in packages]
-
-
-def _detect_broken_lazy_refresh_imports(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> list[str] | None:
-    """Probe lazy-refresh packages via real imports.
-
-    Returns:
-      - ``[]`` when probes ran and every package imported cleanly
-      - ``[dist, ...]`` when probes ran and some packages failed
-      - ``None`` when the probe could not run (missing venv Python, subprocess
-        failure, non-zero probe exit) — this is *indeterminate*, not healthy
-    """
-    venv_python = _resolve_install_target_python(install_cmd_prefix, env)
-    if venv_python is None:
-        return None
-
-    probe_lines = "\n".join(
-        f"    ({mod!r}, {attr!r})," for mod, attr in _LAZY_REFRESH_IMPORT_PROBES
-    )
-    check_script = (
-        "import os\n"
-        "import sys\n"
-        "probes = [\n"
-        f"{probe_lines}\n"
-        "]\n"
-        "broken = []\n"
-        "for mod, attr in probes:\n"
-        "    try:\n"
-        "        imported = __import__(mod)\n"
-        "        if not hasattr(imported, attr):\n"
-        "            broken.append(mod)\n"
-        "        elif mod == 'certifi':\n"
-        "            # The module can import cleanly while cacert.pem is\n"
-        "            # missing/corrupt (brew Python upgrade, interrupted venv\n"
-        "            # rebuild) - every TLS call then fails (#29866).\n"
-        "            bundle = imported.where()\n"
-        "            if not os.path.isfile(bundle) or os.path.getsize(bundle) < 1024:\n"
-        "                broken.append(mod)\n"
-        "    except Exception:\n"
-        "        broken.append(mod)\n"
-        "print('\\n'.join(broken))\n"
-    )
-    try:
-        result = subprocess.run(
-            [str(venv_python), "-c", check_script],
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            check=False,
-            env=env,
-        )
-    except Exception as exc:
-        logger.debug("lazy refresh import probe failed: %s", exc)
-        return None
-
-    if result.returncode != 0:
-        logger.debug(
-            "lazy refresh import probe exited %s: %s",
-            result.returncode,
-            (result.stderr or "")[:200],
-        )
-        return None
-
-    broken_modules = [
-        line.strip() for line in result.stdout.splitlines() if line.strip()
-    ]
-    packages: list[str] = []
-    seen: set[str] = set()
-    for mod in broken_modules:
-        pkg = _LAZY_REFRESH_REPAIR_PACKAGES.get(mod)
-        if pkg and pkg not in seen:
-            seen.add(pkg)
-            packages.append(pkg)
-    return packages
-
-
-def _repair_broken_lazy_refresh_imports(
-    install_cmd_prefix: list[str],
-    packages: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> bool:
-    """Force-reinstall ``packages`` and re-probe imports. Never raises."""
-    if not packages:
-        return True
-
-    specs = _lazy_refresh_repair_specs(packages)
-    try:
-        _run_package_only_install(
-            install_cmd_prefix + ["install", "--force-reinstall", *specs],
-            env=env,
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.warning("lazy refresh venv repair failed: %s", exc)
-        return False
-
-    after = _detect_broken_lazy_refresh_imports(install_cmd_prefix, env=env)
-    # Indeterminate re-probe is not confirmed success.
-    return after == []
-
-
-def _repair_venv_via_import_probes(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> str:
-    """Probe imports and force-reinstall any broken lazy-refresh packages.
-
-    Uses real ``import`` checks (not distribution metadata) so a venv where
-    METADATA remains but ``.py`` files were wiped mid-install is still
-    detected (#57828). Package-only reinstall — never rewrites ``hermes.exe``.
-
-    Never raises. Returns one of:
-      - ``"healthy"`` — probes ran and found nothing broken
-      - ``"repaired"`` — probes found breakage and force-reinstall confirmed clean
-      - ``"failed"`` — probes found breakage and repair did not confirm clean
-      - ``"indeterminate"`` — probes could not run; do NOT treat as healthy
-    """
-    broken = _detect_broken_lazy_refresh_imports(install_cmd_prefix, env=env)
-    if broken is None:
-        print(
-            "  ⚠ Import probes unavailable — cannot confirm venv package health."
-        )
-        return "indeterminate"
-    if not broken:
-        return "healthy"
-    print(
-        "  → Detected corrupted venv packages via import probes: "
-        f"{', '.join(broken)}; repairing..."
-    )
-    if _repair_broken_lazy_refresh_imports(
-        install_cmd_prefix, broken, env=env
-    ):
-        print("  ✓ Venv repair succeeded")
-        return "repaired"
-    manual = " ".join(
-        shlex.quote(s) for s in _lazy_refresh_repair_specs(broken)
-    )
-    print("  ⚠ Venv repair incomplete. Run manually, then `hermes update`:")
-    print(
-        f"    {' '.join(install_cmd_prefix)} install --force-reinstall {manual}"
-    )
-    return "failed"
-
-
 def _is_uv_command(install_cmd_prefix: list[str]) -> bool:
     """True when the install command is a uv/uvx invocation.
 
@@ -9817,8 +9573,7 @@ def _install_python_dependencies_with_optional_fallback(
 ) -> None:
     """Install base deps plus as many optional extras as the environment supports.
 
-    By default this targets ``.[all]``; Termux callers can pass
-    ``group='termux-all'`` to use the curated Android-compatible profile.
+    By default this targets ``.[all]``.
 
     On Windows, pre-renames live ``hermes.exe`` / ``hermes-gateway.exe`` shims
     in the venv Scripts dir before each install attempt so uv can write fresh
@@ -12101,7 +11856,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "pm", "portal", "profile",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -12892,6 +12647,29 @@ def main():
         return
     if _try_fast_chat_launch():
         return
+
+    # pm owns its own tiny argparse tree; dispatch before the heavy parser.
+    if sys.argv[1:2] == ["pm"]:
+        from pm.cli import main as pm_main
+
+        sys.exit(pm_main(sys.argv[2:]))
+
+    # The startup check: O(1) stamp comparisons, no network, no installs.
+    # One loud line when the install is damaged; never blocks the command.
+    try:
+        import pm
+
+        pm.adopt()
+        problems = pm.check()
+        if problems:
+            print(
+                f"⚠ install out of sync ({'; '.join(problems)}) — run `hermes pm install`",
+                file=sys.stderr,
+            )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug("pm startup check failed", exc_info=True)
 
     from hermes_cli._parser import build_top_level_parser
 

@@ -110,10 +110,8 @@ from tools.xai_http import hermes_xai_user_agent
 def _import_edge_tts():
     """Lazy import edge_tts. Returns the module or raises ImportError."""
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("tts.edge", prompt=False)
-    except ImportError:
-        pass
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("edge-tts")
     except Exception:
         pass
     import edge_tts
@@ -122,17 +120,17 @@ def _import_edge_tts():
 def _import_elevenlabs():
     """Lazy import ElevenLabs client. Returns the class or raises ImportError.
 
-    Calls :func:`tools.lazy_deps.ensure` first so the SDK gets installed on
+    Calls :func:`pm.ensure_import` first so the SDK gets installed on
     demand if the user picked ElevenLabs as their TTS provider but never ran
     the post-setup hook (e.g. enabled it by editing config.yaml directly).
     Raises ``ImportError`` on lazy-install failure so existing callers'
     error-handling paths keep working.
     """
     try:
-        from tools.lazy_deps import FeatureUnavailable, ensure
-        ensure("tts.elevenlabs", prompt=False)
+        from pm import InstallError as FeatureUnavailable, ensure_import as ensure
+        ensure("tts-premium")
     except ImportError:
-        # lazy_deps module itself missing — fall through to the raw import
+        # pm module itself missing — fall through to the raw import
         # so older code paths still get a clean ImportError.
         pass
     except Exception:
@@ -166,16 +164,14 @@ def _import_openai_client():
 def _import_mistral_client():
     """Lazy import Mistral client. Returns the class or raises ImportError.
 
-    Calls :func:`tools.lazy_deps.ensure` first so the ``mistralai`` SDK gets
+    Calls :func:`pm.ensure_import` first so the ``mistralai`` SDK gets
     installed on demand if the user picked Mistral as their STT/TTS provider
     but never ran the post-setup hook (e.g. enabled it by editing config.yaml
     directly). Mirrors the ElevenLabs lazy-import path.
     """
     try:
-        from tools.lazy_deps import ensure
-        ensure("tts.mistral", prompt=False)
-    except ImportError:
-        pass
+        from pm import ensure_import as ensure
+        ensure("mistral")
     except Exception:
         pass
     from mistralai.client import Mistral

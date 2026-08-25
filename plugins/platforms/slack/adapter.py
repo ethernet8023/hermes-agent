@@ -325,7 +325,7 @@ class _NativeTaskCardStream:
 def check_slack_requirements() -> bool:
     """Check if Slack dependencies are available.
 
-    Lazy-installs slack-bolt/slack-sdk via ``tools.lazy_deps.ensure("platform.slack")``
+    Lazy-installs slack-bolt/slack-sdk via ``pm.ensure_import("slack")``
     on first call if not present. Rebinds all module-level globals on success.
     """
     if SLACK_AVAILABLE:
@@ -345,9 +345,9 @@ def check_slack_requirements() -> bool:
             "SLACK_AVAILABLE": True,
         }
 
-    from tools.lazy_deps import ensure_and_bind
+    from pm.extras import ensure_and_bind
 
-    return ensure_and_bind("platform.slack", _import, globals(), prompt=False)
+    return ensure_and_bind("slack", _import, globals())
 
 
 def _collect_slack_block_mentions(blocks: list) -> list:

@@ -236,8 +236,8 @@ RUN cd plugins/platforms/photon/sidecar && \
 # plus gateway messaging adapters that should work in the published image
 # without a first-boot lazy install.  We do NOT use `--all-extras`:
 # that would pull in `[rl]` (atroposlib + tinker + torch + wandb from
-# git), `[yc-bench]` (another git dep), and `[termux-all]` (Android
-# redundancy), none of which belong in the published container.
+# git) and `[yc-bench]` (another git dep), neither of which belongs in
+# the published container.
 #
 # Provider packages (anthropic, bedrock, azure-identity) are included
 # so Docker users can use these providers without requiring runtime

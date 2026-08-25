@@ -83,10 +83,8 @@ def _delete_direct_snapshot(task_id: str, snapshot_id: str | None = None) -> Non
 def _ensure_modal_sdk() -> None:
     """Lazy-install modal on demand. Idempotent — fast no-op once installed."""
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("terminal.modal", prompt=False)
-    except ImportError:
-        pass
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("modal")
     except Exception as e:
         raise ImportError(str(e))
 

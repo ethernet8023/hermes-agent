@@ -58,7 +58,7 @@ def _m():
 _UPDATE_RUNTIME_RELOAD_MODULES = (
     "hermes_constants",
     "tools.environments.local",
-    "tools.lazy_deps",
+    "pm.extras",
 )
 
 #: Package prefixes whose cached modules become stale the moment the checkout
@@ -329,45 +329,6 @@ _INSTALL_DEFINING_FILES = (
     "MANIFEST.in",
     "uv.lock",
 )
-
-def _editable_install_is_current(git_cmd, cwd, pre_pull_sha: str | None) -> bool:
-    """True when the pulled commits cannot have invalidated the editable install.
-
-    ``uv pip install -e .`` never audits an editable target — it reinstalls on
-    every invocation, and every reinstall rewrites the console-script shims.
-    On Windows that rewrite is the only reason the running ``hermes.exe`` has
-    to be quarantined, and a quarantine that loses its race is the whole
-    ``os error 32`` family. Not reinstalling when the reinstall provably
-    cannot change anything removes that risk outright for the common update,
-    rather than trying to make the rename win more often.
-
-    Skipping is safe because Hermes pins its editable finder to a *static*
-    module list (``[tool.setuptools] py-modules`` plus
-    ``packages.find.include``). The one source-only change that would stale
-    that finder is a new top-level module or package, and it cannot land
-    without a ``pyproject.toml`` diff. Dependencies and ``[project.scripts]``
-    live there too. New submodules inside an already-mapped package resolve
-    through the real package directory and need no reinstall.
-
-    Fails closed: an unresolvable pre-pull SHA (shallow checkout, ZIP swap)
-    or a failed ``git diff`` returns False and the install runs as before.
-    """
-    if not pre_pull_sha:
-        return False
-    try:
-        result = subprocess.run(
-            git_cmd
-            + ["diff", "--name-only", f"{pre_pull_sha}..HEAD", "--"]
-            + list(_INSTALL_DEFINING_FILES),
-            cwd=cwd,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
-    except OSError:
-        return False
-    if result.returncode != 0:
-        return False
-    return not result.stdout.strip()
 
 def _validate_critical_files_syntax(root) -> tuple[bool, str | None, str | None]:
     """Compile each file in ``_UPDATE_CRITICAL_FILES`` to catch SyntaxErrors.
@@ -1716,55 +1677,21 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
     _m()._abort_dependency_sync_if_self_locked()
     print("→ Updating Python dependencies...")
 
-    from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+    import pm
 
-    # Keep managed uv current — runs `uv self update` if we already have one.
-    update_managed_uv()
+    try:
+        pm.sync_venv(["all"], explicit=True)
+    except _shim_quarantine_error_type() as _sqe:
+        # #87331: this runs inside the ZIP-fallback error handler, so the
+        # boundary except clause in cmd_update cannot catch it — refuse
+        # here with the same defer-via-marker contract.
+        _refuse_update_for_contended_shims(_sqe)
+    except pm.InstallError as _sync_err:
+        print(f"  ✗ {_sync_err}")
+        print("  Re-run `hermes update` (or `hermes pm install`) once resolved.")
 
-    uv_bin = ensure_uv()
-
-    pip_cmd = [_m().sys.executable, "-m", "pip"]
-    if not uv_bin:
-        uv_bin = _ensure_uv_for_termux(pip_cmd)
-    if uv_bin:
-        # Same third-party UV-env isolation as the main update path (#83914):
-        # a user-level UV_PYTHON_INSTALL_DIR / UV_PYTHON from unrelated
-        # software must not steer which interpreter uv resolves here.
-        from hermes_cli.managed_uv import managed_python_env
-
-        uv_env = managed_python_env()
-        uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-        if _m()._is_termux_env(uv_env):
-            uv_env.pop("PYTHONPATH", None)
-            uv_env.pop("PYTHONHOME", None)
-        try:
-            _m()._install_python_dependencies_with_optional_fallback([uv_bin, "pip"], env=uv_env)
-        except _shim_quarantine_error_type() as _sqe:
-            # #87331: this runs inside the ZIP-fallback error handler, so the
-            # boundary except clause in cmd_update cannot catch it — refuse
-            # here with the same defer-via-marker contract.
-            _refuse_update_for_contended_shims(_sqe)
-    else:
-        # Use sys.executable to explicitly call the venv's pip module,
-        # avoiding PEP 668 'externally-managed-environment' errors on Debian/Ubuntu.
-        # Some environments lose pip inside the venv; bootstrap it back with
-        # ensurepip before trying the editable install.
-        try:
-            subprocess.run(
-                pip_cmd + ["--version"],
-                cwd=_m().PROJECT_ROOT,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            subprocess.run(
-                [_m().sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
-                cwd=_m().PROJECT_ROOT,
-                check=True,
-            )
-        _m()._install_python_dependencies_with_optional_fallback(pip_cmd)
-
-    install_prefix = [uv_bin, "pip"] if uv_bin else pip_cmd
+    uv_bin, uv_env = pm.uv(venv=_m().PROJECT_ROOT / "venv")
+    install_prefix = [uv_bin, "pip"] if uv_bin else [_m().sys.executable, "-m", "pip"]
     install_env = uv_env if uv_bin else None
     _m()._restore_active_tool_dependencies(
         active_tool_dependencies,
@@ -2578,34 +2505,15 @@ def _format_concurrent_instances_message(
     lines.append("  confirmed those processes will not write to the venv.")
     return "\n".join(lines)
 
-def _upgrade_pip_before_lazy_refresh(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Upgrade pip before lazy-backend refreshes.
-
-    Older pip (e.g. 24.0 on Python 3.11) can fail setuptools-backed source
-    builds during lazy installs and leave a partially-written venv (#57828).
-    Never raises.
-    """
-    try:
-        _m()._run_package_only_install(
-            install_cmd_prefix + ["install", "--upgrade", "pip"],
-            env=env,
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.debug("pip upgrade before lazy refresh failed: %s", exc)
-
 
 def _capture_active_lazy_features() -> list[str]:
-    """Snapshot active lazy backends before a managed runtime is replaced."""
+    """Snapshot the venv's enabled extras before a managed runtime is replaced."""
     try:
-        from tools import lazy_deps
+        import pm
 
-        return lazy_deps.active_features()
+        return pm.enabled_extras()
     except Exception as exc:
-        logger.debug("Could not snapshot active lazy features: %s", exc)
+        logger.debug("Could not snapshot enabled extras: %s", exc)
         return []
 
 
@@ -2680,7 +2588,7 @@ def _restore_active_tool_dependencies(
     failed: list[tuple[str, str]] = []
     for name, install_args in missing:
         try:
-            _m()._run_package_only_install(
+            _m()._run_install_with_heartbeat(
                 install_cmd_prefix + ["install", *install_args, "--quiet"],
                 env=env,
             )
@@ -2699,116 +2607,23 @@ def _restore_active_tool_dependencies(
         print(f"  ⚠ {name} failed to restore: {reason}")
 
 
-def _refresh_active_lazy_features(
-    install_cmd_prefix: list[str] | None = None,
-    *,
-    env: dict[str, str] | None = None,
-    features: list[str] | None = None,
-) -> bool:
-    """Refresh lazy-installed backends after a code update.
+def _refresh_active_lazy_features(features: list[str] | None = None) -> bool:
+    """Re-sync the venv's enabled extras against the (possibly new) uv.lock.
 
-    When pyproject.toml's ``[all]`` extra was slimmed down (May 2026), most
-    optional backends moved to ``tools/lazy_deps.py`` and only install on
-    first use. ``hermes update`` runs ``uv pip install -e .[all]`` which
-    leaves those packages untouched — so if we bump a pin in
-    :data:`LAZY_DEPS` (CVE response, transitive bug fix), users who already
-    activated the backend keep the stale version forever.
-
-    This function asks lazy_deps which features the user has previously
-    activated and reinstalls them under the current pins. Features the
-    user never enabled stay quiet — no churn for cold backends.
-
-    Returns True when the venv is safe to use (refresh succeeded, or no
-    active lazy backends, or post-failure import repair succeeded). Returns
-    False when a failed lazy install left broken core imports that automatic
-    repair could not fix (#57828).
-
-    Never raises. A failure here must not block the rest of the update.
+    Extras live in the installed-state file and uv.lock owns every pin, so
+    a post-update refresh is one sync_venv() call: it re-installs exactly
+    the locked versions of everything enabled. Never raises.
     """
     try:
-        from tools import lazy_deps
+        from pm.ensure import sync_venv
+
+        sync_venv(features, explicit=True)
+        return True
     except Exception as exc:
-        logger.debug("Lazy refresh skipped (import failed): %s", exc)
-        return True
-
-    if features is None:
-        try:
-            active = lazy_deps.active_features()
-        except Exception as exc:
-            logger.debug("Lazy refresh skipped (active_features failed): %s", exc)
-            return True
-    else:
-        active = features
-
-    if not active:
-        return True
-
-    print()
-    print(f"→ Refreshing {len(active)} active lazy backend(s)...")
-
-    unexpected_failure = False
-    try:
-        if features is None:
-            results = lazy_deps.refresh_active_features(prompt=False)
-        else:
-            results = lazy_deps.restore_features(active)
-    except Exception as exc:
-        # refresh_active_features is documented as never-raise, but defend
-        # the update flow against future regressions.
-        print(f"  ⚠ Lazy refresh failed unexpectedly: {exc}")
-        results = {}
-        unexpected_failure = True
-
-    refreshed = [f for f, s in results.items() if s in {"refreshed", "restored"}]
-    current = [f for f, s in results.items() if s == "current"]
-    failed = [(f, s) for f, s in results.items() if s.startswith("failed:")]
-    skipped = [(f, s) for f, s in results.items() if s.startswith("skipped:")]
-
-    if refreshed:
-        print(f"  ↑ {len(refreshed)} refreshed: {', '.join(refreshed)}")
-    if current:
-        print(f"  ✓ {len(current)} already current")
-    if skipped:
-        # Most common reason: security.allow_lazy_installs=false. Show one
-        # line so the user knows why; not an error.
-        names = ", ".join(f for f, _ in skipped)
-        reason = skipped[0][1].split(": ", 1)[-1]
-        print(f"  · {len(skipped)} skipped ({reason}): {names}")
-
-    if not failed and not unexpected_failure:
-        return True
-
-    for feature, status in failed:
-        reason = status.split(": ", 1)[-1]
-        # Clip noisy pip stderr to keep update output legible.
-        if len(reason) > 200:
-            reason = reason[:200] + "..."
-        print(f"  ⚠ {feature} failed to refresh: {reason}")
-
-    if install_cmd_prefix is None:
-        print("  ⚠ Lazy refresh failed; rerun `hermes update` once resolved.")
+        print(f"  ⚠ Extra re-sync failed: {exc}")
+        print("  Rerun `hermes update` (or `hermes pm install`) once resolved.")
         return False
 
-    # Immediate import-based recovery — metadata-only verifiers miss the case
-    # where DISTRIBUTION-INFO remains but import files were wiped (#57828).
-    # Unavailable probes are indeterminate, not healthy — keep the lazy marker.
-    status = _m()._repair_venv_via_import_probes(install_cmd_prefix, env=env)
-    if status == "repaired":
-        print(
-            "  Lazy backend(s) keep their previous version until refresh succeeds."
-        )
-        return True
-    if status == "healthy":
-        print(
-            "  Lazy backend(s) keep their previous version; probed packages look intact."
-        )
-        print("  Rerun `hermes update` once the upstream issue is resolved.")
-        return True
-    if status == "indeterminate":
-        print(
-            "  ⚠ Leaving `.lazy-refresh-incomplete` until import probes can confirm health."
-        )
-    return False
 
 def _refresh_active_memory_provider_dependencies() -> None:
     """Refresh pip dependencies for the configured external memory provider.
@@ -2857,80 +2672,6 @@ def _refresh_active_memory_provider_dependencies() -> None:
         _install_dependencies(provider, force=True)
     except Exception as exc:
         print(f"  ⚠ {provider} dependencies failed to refresh: {exc}")
-
-def _is_android_python() -> bool:
-    return _m().sys.platform == "android"
-
-def _install_psutil_android_compat(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Install psutil on Android by patching upstream platform detection.
-
-    psutil's setup currently gates Linux sources behind
-    ``sys.platform.startswith('linux')``. On Termux Python reports
-    ``sys.platform == 'android'``, so setup aborts with
-    "platform android is not supported" despite compiling fine when using the
-    Linux source path.
-
-    We patch only the extracted build tree used for this install attempt;
-    nothing is persisted in the repository.
-
-    Stopgap: remove this once https://github.com/giampaolo/psutil/pull/2762
-    merges and ships in a release. The standalone installer script uses the
-    same shared helper and should be removed together.
-    """
-    import tempfile
-    import urllib.request
-    from hermes_cli.psutil_android import PSUTIL_URL, prepare_patched_psutil_sdist
-
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        archive = tmp_path / "psutil.tar.gz"
-        urllib.request.urlretrieve(PSUTIL_URL, archive)
-        src_root = prepare_patched_psutil_sdist(archive, tmp_path)
-
-        _m()._run_install_with_heartbeat(
-            install_cmd_prefix + ["install", "--no-build-isolation", str(src_root)],
-            env=env,
-        )
-
-def _ensure_uv_for_termux(pip_cmd: list[str]) -> str | None:
-    """Best-effort uv bootstrap on Termux for faster update installs.
-
-    The normal path (``ensure_uv()`` in managed_uv) installs the managed
-    standalone uv into ``$HERMES_HOME/bin/uv``, but on Termux the official
-    installer may not work (glibc vs bionic).  Prefer a uv already on PATH
-    (e.g. ``pkg install uv``); only if there is none do we fall back to a
-    wheel-only ``pip install uv`` so we never source-build the Rust crate.
-    """
-    from hermes_cli.managed_uv import resolve_uv
-
-    existing = resolve_uv()
-    if existing:
-        return existing
-    if not _m()._is_termux_env():
-        return None
-    # A Termux-packaged uv lands on PATH but not in the managed bin dir, so
-    # resolve_uv() misses it. Use it before pip, which has no Android wheel and
-    # would otherwise build uv from source on a low-memory device.
-    system_uv = shutil.which("uv")
-    if system_uv:
-        return system_uv
-    try:
-        print("  → Termux detected: trying to install uv for faster dependency updates...")
-        result = subprocess.run(
-            pip_cmd + ["install", "uv", "--only-binary", ":all:"],
-            cwd=_m().PROJECT_ROOT,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-    except Exception:
-        pass
-    # After pip install, check managed path first, then PATH
-    return resolve_uv() or shutil.which("uv")
 
 def _npm_manifest_paths() -> tuple[Path, ...]:
     """Manifests whose changes must defeat the update-skip.
@@ -6392,19 +6133,16 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     check=False,
                 )
 
-            # "No new commits" does not mean the managed interpreter is safe.
-            # uv can retain the same CPython patch while python-build-standalone
-            # refreshes the embedded SQLite underneath it. Keep the existing
-            # update-boundary hook active on this retry path too.
-            from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+            # "No new commits" does not mean the venv is safe: pm owns the uv
+            # pin now — a pin bump realizes a NEW entry on the next ensure.
+            # The update command is the one caller that must SEE realization
+            # failures, so use the raising API, not the None-swallowing uv().
+            import pm
 
-            runtime_repairs = []
-            update_managed_uv(repair_observer=runtime_repairs.append)
-            ensure_uv(repair_observer=runtime_repairs.append)
-            runtime_repaired = next(
-                (result for result in runtime_repairs if result.repaired),
-                None,
-            )
+            try:
+                pm.ensure("uv")
+            except pm.InstallError as e:
+                print(f"⚠ Managed uv unavailable: {e}")
 
             # A current checkout does NOT imply a healthy install: a previous
             # dependency sync may have failed partway (classic on Windows,
@@ -6432,9 +6170,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # too — same mapped-extension hazard as the update sync.
                 _m()._abort_dependency_sync_if_self_locked(_windows_gateway_resume)
                 _write_update_incomplete_marker()
-                from hermes_cli.managed_uv import ensure_uv
+                import pm
 
-                repair_uv = ensure_uv()
+                repair_uv, repair_env = pm.uv(venv=_m().PROJECT_ROOT / "venv")
                 # A managed install whose venv is gone entirely (interrupted
                 # repair after the old venv was moved aside) needs the venv
                 # recreated before dependencies can be installed into it.
@@ -6450,34 +6188,17 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         cwd=_m().PROJECT_ROOT,
                         check=False,
                     )
+                try:
+                    pm.sync_venv(["all"] + list(active_lazy_features or []), explicit=True)
+                except pm.InstallError as _sync_err:
+                    print(f"  ✗ {_sync_err}")
                 if repair_uv:
-                    # Isolated from third-party UV env vars (#83914), same as
-                    # the main-path and git-path dependency syncs.
-                    from hermes_cli.managed_uv import managed_python_env
-
-                    repair_env = managed_python_env()
-                    repair_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-                    _m()._install_python_dependencies_with_optional_fallback(
-                        [repair_uv, "pip"], env=repair_env, group="all"
-                    )
-                    _m()._refresh_active_lazy_features(
-                        [repair_uv, "pip"],
-                        env=repair_env,
-                        features=active_lazy_features,
-                    )
                     _m()._restore_active_tool_dependencies(
                         active_tool_dependencies,
                         [repair_uv, "pip"],
                         env=repair_env,
                     )
                 else:
-                    _m()._install_python_dependencies_with_optional_fallback(
-                        [sys.executable, "-m", "pip"], group="all"
-                    )
-                    _m()._refresh_active_lazy_features(
-                        [sys.executable, "-m", "pip"],
-                        features=active_lazy_features,
-                    )
                     _m()._restore_active_tool_dependencies(
                         active_tool_dependencies,
                         [sys.executable, "-m", "pip"],
@@ -6492,16 +6213,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     print("  Close all Hermes windows/gateways and re-run: hermes update")
             else:
                 _repair_node_deps_on_current_checkout(_print_update_completion)
-            if runtime_repaired is not None and not _m()._is_windows():
-                print()
-                print(
-                    "⚠ Restart required to finish the managed Python runtime repair."
-                )
-                print(
-                    "  Any running Hermes gateways, Desktop backends, or other "
-                    "long-lived processes still use the previous runtime."
-                )
-                print("  Restart each of them to pick up the repaired runtime.")
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
             return
 
@@ -6774,84 +6485,25 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # via ``_recover_from_interrupted_install``. Cleared after the core
         # ``.[all]`` install completes — lazy refresh uses a separate marker.
         _write_update_incomplete_marker()
-        deps_current = _editable_install_is_current(
-            git_cmd, _m().PROJECT_ROOT, pre_pull_sha
-        )
-        if deps_current:
-            print("→ Python dependencies unchanged — skipping reinstall")
-        else:
-            print("→ Updating Python dependencies...")
-        from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+        print("→ Syncing Python dependencies...")
+        import pm
 
-        # Keep managed uv current — runs `uv self update` if we already have one.
-        update_managed_uv()
+        try:
+            pm.sync_venv(["all"], explicit=True)
+            deps_synced = True
+        except pm.InstallError as _sync_err:
+            deps_synced = False
+            print(f"  ✗ {_sync_err}")
+            print("  Re-run `hermes update` (or `hermes pm install`) once resolved.")
 
-        uv_bin = ensure_uv()
-
+        uv_bin, uv_env = pm.uv(venv=_m().PROJECT_ROOT / "venv")
         pip_cmd = [sys.executable, "-m", "pip"]
-        if not uv_bin:
-            uv_bin = _ensure_uv_for_termux(pip_cmd)
-        install_group = "all"
-
-        if uv_bin:
-            # Use official managed_python_env() isolation so third-party
-            # UV_PYTHON_INSTALL_DIR (e.g. WorkBuddy) cannot hijack uv; then
-            # point VIRTUAL_ENV at this install's venv.
-            from hermes_cli.managed_uv import managed_python_env
-
-            uv_env = managed_python_env()
-            uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-            if _m()._is_termux_env(uv_env):
-                uv_env.pop("PYTHONPATH", None)
-                uv_env.pop("PYTHONHOME", None)
-                install_group = "termux-all"
-                print("  → Termux detected: using uv + curated termux-all optional profile...")
-            if not deps_current:
-                if _m()._is_termux_env(uv_env) and _is_android_python():
-                    print("  → Termux/Android detected: prebuilding psutil with Linux source path compatibility...")
-                    _install_psutil_android_compat([uv_bin, "pip"], env=uv_env)
-                _m()._install_python_dependencies_with_optional_fallback(
-                    [uv_bin, "pip"], env=uv_env, group=install_group
-                )
-        else:
-            # Use sys.executable to explicitly call the venv's pip module,
-            # avoiding PEP 668 'externally-managed-environment' errors on Debian/Ubuntu.
-            # Some environments lose pip inside the venv; bootstrap it back with
-            # ensurepip before trying the editable install.
-            pip_cmd = [sys.executable, "-m", "pip"]
-            try:
-                subprocess.run(
-                    pip_cmd + ["--version"],
-                    cwd=_m().PROJECT_ROOT,
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError:
-                subprocess.run(
-                    [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
-                    cwd=_m().PROJECT_ROOT,
-                    check=True,
-                )
-            if _m()._is_termux_env():
-                install_group = "termux-all"
-                print("  → Termux detected: using curated termux-all optional profile...")
-            if not deps_current:
-                if _m()._is_termux_env() and _is_android_python():
-                    print("  → Termux/Android detected: prebuilding psutil with Linux source path compatibility...")
-                    _install_psutil_android_compat(pip_cmd)
-                _m()._install_python_dependencies_with_optional_fallback(pip_cmd, group=install_group)
-
         install_prefix = [uv_bin, "pip"] if uv_bin else pip_cmd
         lazy_env = uv_env if uv_bin else None
 
-        if deps_current:
-            # The verification normally runs inside the install we just
-            # skipped. Run it here so a wrong skip self-heals into a real
-            # install (both verifiers reinstall what they find missing)
-            # instead of leaving a venv nobody checked.
-            _m()._verify_core_dependencies_installed(
-                install_prefix, env=lazy_env, group=install_group
-            )
+        if deps_synced:
+            # Console-script shims aren't covered by the sync stamp — verify
+            # them so a venv whose Scripts/ was clobbered self-heals.
             _m()._verify_console_scripts_installed(install_prefix, env=lazy_env)
 
         # Core ``.[all]`` install finished. Clear the generic core breadcrumb
@@ -6863,7 +6515,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # The update process is still the old Python interpreter process. Run
         # one final cache/module refresh immediately before lazy backend
         # refresh, which imports newly-pulled modules that may depend on fresh
-        # symbols in hermes_constants or lazy_deps. The dependency install
+        # symbols in hermes_constants or pm. The dependency install
         # above may also have regenerated bytecode from build-cache copies —
         # this second sweep catches those stragglers (#60242, #65240).
         removed = _m()._clear_bytecode_cache(_m().PROJECT_ROOT)
@@ -6875,18 +6527,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
         _m()._refresh_bootstrap_cache_scripts(branch)
         _m()._reload_updated_runtime_modules()
 
-        # Upgrade pip before lazy refreshes — stale pip can fail source builds
-        # and leave partially-written packages (#57828).
         _write_lazy_refresh_incomplete_marker()
-        _m()._upgrade_pip_before_lazy_refresh(install_prefix, env=lazy_env)
-
-        # Lazy refresh can corrupt the venv when a backend install fails.
-        # Clear the lazy marker only when refresh/repair is confirmed healthy.
-        lazy_ok = _m()._refresh_active_lazy_features(
-            install_prefix,
-            env=lazy_env,
-            features=active_lazy_features,
-        )
+        lazy_ok = _m()._refresh_active_lazy_features(active_lazy_features)
         if lazy_ok:
             _m()._clear_lazy_refresh_incomplete_marker()
         else:

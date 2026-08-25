@@ -6222,11 +6222,11 @@ def run_conversation(
                             force=True,
                         )
                         agent._vprint(
-                            f"{agent.log_prefix}      • Corporate TLS-inspecting proxy? Point Python at its CA bundle:",
+                            f"{agent.log_prefix}      • Corporate TLS-inspecting proxy? Install its root certificate",
                             force=True,
                         )
                         agent._vprint(
-                            f"{agent.log_prefix}        export SSL_CERT_FILE=/path/to/corp-ca.pem  (also REQUESTS_CA_BUNDLE)",
+                            f"{agent.log_prefix}        in the OS certificate store — Hermes trusts what the machine trusts.",
                             force=True,
                         )
                         agent._vprint(

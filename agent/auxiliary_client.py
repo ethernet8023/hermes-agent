@@ -192,9 +192,8 @@ def _resolve_aux_verify(base_url: Optional[str]) -> Any:
 
     Mirrors the main client's TLS resolution so auxiliary calls (compression,
     vision, web_extract, title generation, etc.) honor per-provider
-    ``ssl_ca_cert`` / ``ssl_verify`` config and the ``HERMES_CA_BUNDLE`` /
-    ``SSL_CERT_FILE`` env conventions. Best-effort: any failure falls back to
-    the httpx/certifi default (``True``).
+    ``ssl_ca_cert`` / ``ssl_verify`` config, and otherwise verify against the
+    OS trust store. Best-effort: any failure falls back to ``True``.
     """
     try:
         from agent.ssl_verify import resolve_httpx_verify

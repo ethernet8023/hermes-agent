@@ -825,28 +825,27 @@ class TestWebServerEndpoints:
 
 
 
-    def test_post_memory_provider_setup_routes_pip_through_lazy_deps(self, monkeypatch):
-        """NS-605: dashboard pip installs must use the environment-aware
-        lazy_deps pipeline (durable-target redirect on immutable hosted
-        images), never a direct `pip install --python sys.executable`."""
+    def test_post_memory_provider_setup_routes_pip_through_pm(self, monkeypatch):
+        """NS-605 lineage: dashboard pip installs must route through pm
+        (venv sync of the owning extra), never a direct
+        `pip install --python sys.executable`."""
         import subprocess as _subprocess
 
         import hermes_cli.web_server as web_server
-        from tools import lazy_deps as ld
+        import pm.extras as pm_extras
 
         # honcho declares pip_dependencies: [honcho-ai]; force it missing.
         monkeypatch.setattr(web_server, "_dependency_importable", lambda dep: False)
 
         installed = []
 
-        def fake_install_specs(specs, *, timeout=300):
+        def fake_install_specs(specs, timeout=300):
             installed.append(tuple(specs))
-            return ld.InstallSpecsResult(
-                ok=True, command="uv pip install --target /opt/data/lazy-packages honcho-ai",
-                stdout="ok", stderr="",
+            return pm_extras.SpecInstallResult(
+                True, command="uv sync --extra honcho", stdout="ok",
             )
 
-        monkeypatch.setattr(ld, "install_specs", fake_install_specs)
+        monkeypatch.setattr(pm_extras, "install_extra_for_specs", fake_install_specs)
 
         # Any direct pip/uv subprocess from the memory-provider pip path is
         # a regression; external-dep checks may still run subprocess, so only
@@ -866,7 +865,7 @@ class TestWebServerEndpoints:
         data = resp.json()
         pip_rows = [row for row in data["results"] if row["kind"] == "pip"]
         assert pip_rows and pip_rows[0]["status"] == "installed"
-        assert "--target /opt/data/lazy-packages" in pip_rows[0]["command"]
+        assert "uv sync --extra honcho" == pip_rows[0]["command"]
         assert installed == [("honcho-ai",)]
 
 

@@ -2,7 +2,7 @@
 
 Subclasses :class:`agent.web_search_provider.WebSearchProvider`. Uses the
 official Exa SDK (``exa-py``) which is lazy-loaded via
-:func:`tools.lazy_deps.ensure` so that cold-start CLI users don't pay the
+:func:`pm.ensure_import` so that cold-start CLI users don't pay the
 SDK import cost when Exa isn't configured.
 
 Config keys this provider responds to::
@@ -61,12 +61,12 @@ def _get_exa_client() -> Any:
         )
 
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
+        from pm import ensure_import as _lazy_ensure
 
-        _lazy_ensure("search.exa", prompt=False)
+        _lazy_ensure("exa")
     except ImportError:
         pass
-    except Exception as exc:  # noqa: BLE001 — lazy_deps surfaces install hints
+    except Exception as exc:  # noqa: BLE001 — pm surfaces install hints
         raise ImportError(str(exc))
 
     from exa_py import Exa  # noqa: WPS433 — deliberately lazy

@@ -124,8 +124,8 @@ def _assert_cloud_client_lazy_installed_before_import(tmp_path, monkeypatch, mod
     provider = _provider_for_mode(tmp_path, monkeypatch, mode)
     ensure_calls = []
 
-    def fake_ensure(feature, prompt=True):
-        ensure_calls.append((feature, prompt))
+    def fake_ensure(extra):
+        ensure_calls.append(extra)
 
     class FakeHindsight:
         def __init__(self, **kwargs):
@@ -135,17 +135,17 @@ def _assert_cloud_client_lazy_installed_before_import(tmp_path, monkeypatch, mod
 
     def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name == "hindsight_client":
-            if ensure_calls != [("memory.hindsight", False)]:
+            if ensure_calls != ["hindsight"]:
                 raise ModuleNotFoundError("No module named 'hindsight_client'")
             return SimpleNamespace(Hindsight=FakeHindsight)
         return real_import(name, globals, locals, fromlist, level)
 
-    monkeypatch.setattr("tools.lazy_deps.ensure", fake_ensure)
+    monkeypatch.setattr("pm.ensure_import", fake_ensure)
     monkeypatch.setattr(builtins, "__import__", guarded_import)
 
     client = provider._get_client()
 
-    assert ensure_calls == [("memory.hindsight", False)]
+    assert ensure_calls == ["hindsight"]
     assert isinstance(client, FakeHindsight)
     assert client.kwargs == {
         "base_url": "http://localhost:9999",
@@ -1556,11 +1556,11 @@ class TestPostSetupEnvEncoding:
         monkeypatch.setattr("hermes_cli.memory_setup._curses_select",
                             lambda *a, **kw: 0)  # cloud mode
         monkeypatch.setattr("hermes_cli.config.save_config", lambda c: None)
-        # Skip the dependency install (now routed through lazy_deps, NS-605).
-        import tools.lazy_deps as lazy_deps_mod
+        # Skip the dependency install (now routed through pm.extras, NS-605).
+        import pm.extras as pm_extras
         monkeypatch.setattr(
-            lazy_deps_mod, "install_specs",
-            lambda *a, **kw: lazy_deps_mod.InstallSpecsResult(ok=True),
+            pm_extras, "install_extra_for_specs",
+            lambda *a, **kw: pm_extras.SpecInstallResult(True),
         )
         # First line: API key prompt (readline). Second line: API URL (input).
         monkeypatch.setattr(sys, "stdin", io.StringIO("sk-new\n\n"))
@@ -1585,14 +1585,14 @@ class TestPostSetupEnvEncoding:
 
 class TestClientAutoUpgradeRoutesThroughLazyDeps:
     """The initialize()-time hindsight-client auto-upgrade must go through
-    lazy_deps.install_specs() (environment-aware, durable-target on sealed
-    hosted venvs) — never a direct `uv pip install --python sys.executable`
-    subprocess, which fails with EROFS/EACCES on immutable images (NS-605)."""
+    pm.extras.install_extra_for_specs() (environment-aware) — never a direct
+    `uv pip install --python sys.executable` subprocess, which fails with
+    EROFS/EACCES on immutable images (NS-605)."""
 
     def _init_with_outdated_client(self, tmp_path, monkeypatch, outcome):
         import importlib.metadata as md
         import subprocess as subprocess_mod
-        import tools.lazy_deps as lazy_deps_mod
+        import pm.extras as pm_extras
 
         config_path = tmp_path / "hindsight" / "config.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1606,7 +1606,7 @@ class TestClientAutoUpgradeRoutesThroughLazyDeps:
 
         calls = []
         monkeypatch.setattr(
-            lazy_deps_mod, "install_specs",
+            pm_extras, "install_extra_for_specs",
             lambda specs, **kw: calls.append(tuple(specs)) or outcome,
         )
 
@@ -1621,10 +1621,10 @@ class TestClientAutoUpgradeRoutesThroughLazyDeps:
 
     def test_upgrade_uses_install_specs_not_subprocess(self, tmp_path, monkeypatch):
         from plugins.memory.hindsight import _MIN_CLIENT_VERSION
-        from tools.lazy_deps import InstallSpecsResult
+        from pm.extras import SpecInstallResult
 
         calls = self._init_with_outdated_client(
-            tmp_path, monkeypatch, InstallSpecsResult(ok=True)
+            tmp_path, monkeypatch, SpecInstallResult(True)
         )
         assert calls == [(f"hindsight-client>={_MIN_CLIENT_VERSION}",)]
 
@@ -1632,13 +1632,13 @@ class TestClientAutoUpgradeRoutesThroughLazyDeps:
         self, tmp_path, monkeypatch, caplog
     ):
         import logging
-        from tools.lazy_deps import InstallSpecsResult
+        from pm.extras import SpecInstallResult
 
         with caplog.at_level(logging.WARNING):
             calls = self._init_with_outdated_client(
                 tmp_path, monkeypatch,
-                InstallSpecsResult(ok=False, blocked=True,
-                                   reason="runtime installs are disabled on this deployment"),
+                SpecInstallResult(False,
+                                  reason="runtime installs are disabled on this deployment"),
             )
         assert len(calls) == 1  # attempted exactly once, init still completed
         assert any("runtime installs are disabled" in r.getMessage()

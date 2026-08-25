@@ -1585,58 +1585,8 @@ install_deps() {
     fi
 
     if [ "$DISTRO" = "termux" ]; then
-        if [ "$USE_VENV" = true ]; then
-            export VIRTUAL_ENV="$INSTALL_DIR/venv"
-            PIP_PYTHON="$INSTALL_DIR/venv/bin/python"
-        else
-            PIP_PYTHON="$PYTHON_PATH"
-        fi
-
-        if [ -z "${ANDROID_API_LEVEL:-}" ]; then
-            ANDROID_API_LEVEL="$(getprop ro.build.version.sdk 2>/dev/null || true)"
-            if [ -z "$ANDROID_API_LEVEL" ]; then
-                ANDROID_API_LEVEL=24
-            fi
-            export ANDROID_API_LEVEL
-            log_info "Using ANDROID_API_LEVEL=$ANDROID_API_LEVEL for Android wheel builds"
-        fi
-
-        "$PIP_PYTHON" -m pip install --upgrade pip setuptools wheel >/dev/null
-
-        # On Android, psutil's setup.py rejects sys.platform == 'android' before
-        # it ever invokes the C build, so the next pip install would fail at
-        # "platform android is not supported".  Prebuild psutil from the official
-        # sdist with a one-line marker patch (Linux source path is fine on
-        # Android).  Stopgap until psutil#2762 ships upstream.
-        if "$PIP_PYTHON" -c 'import sys; raise SystemExit(0 if sys.platform == "android" else 1)' 2>/dev/null; then
-            log_info "Android Python detected: prebuilding psutil compatibility shim..."
-            if ! "$PIP_PYTHON" "$INSTALL_DIR/scripts/install_psutil_android.py" --pip "$PIP_PYTHON -m pip"; then
-                log_warn "psutil Android prebuild failed — package install will likely fail next."
-                log_info "Workaround: manually rerun 'python scripts/install_psutil_android.py' once your toolchain is set up."
-            fi
-        fi
-
-        # Try the broad Termux profile first (best-effort "install all" for Android),
-        # then fall back to the conservative Termux baseline, then base package.
-        if ! "$PIP_PYTHON" -m pip install -e '.[termux-all]' -c constraints-termux.txt; then
-            log_warn "Termux broad profile (.[termux-all]) failed, trying baseline Termux profile..."
-            if ! "$PIP_PYTHON" -m pip install -e '.[termux]' -c constraints-termux.txt; then
-                log_warn "Termux baseline profile (.[termux]) failed, trying base install..."
-                if ! "$PIP_PYTHON" -m pip install -e '.' -c constraints-termux.txt; then
-                    log_error "Package installation failed on Termux."
-                    log_info "Ensure these packages are installed: pkg install clang rust make pkg-config libffi openssl ca-certificates curl"
-                    log_info "Then re-run: cd $INSTALL_DIR && python -m pip install -e '.[termux-all]' -c constraints-termux.txt"
-                    exit 1
-                fi
-            fi
-        fi
-
-        log_success "Main package installed"
-        log_info "Termux note: matrix e2ee and local faster-whisper extras are excluded from .[termux-all] due to upstream Android wheel/toolchain blockers."
-        log_info "Termux note: browser/WhatsApp tooling is not installed by default; see the Termux guide for optional follow-up steps."
-
-        log_success "All dependencies installed"
-        return 0
+        log_error "Termux is no longer a supported install target."
+        exit 1
     fi
 
     if [ "$USE_VENV" = true ]; then
@@ -1843,11 +1793,7 @@ setup_path() {
     if [ ! -x "$HERMES_BIN" ] || { [ "$USE_VENV" = true ] && [ ! -f "$HERMES_ENTRYPOINT" ]; }; then
         log_warn "Hermes launcher prerequisites not found"
         log_info "This usually means the Python package install didn't complete successfully."
-        if [ "$DISTRO" = "termux" ]; then
-            log_info "Try: cd $INSTALL_DIR && python -m pip install -e '.[termux-all]' -c constraints-termux.txt"
-        else
-            log_info "Try: cd $INSTALL_DIR && uv pip install -e '.[all]'"
-        fi
+        log_info "Try: cd $INSTALL_DIR && uv pip install -e '.[all]'"
         return 0
     fi
 

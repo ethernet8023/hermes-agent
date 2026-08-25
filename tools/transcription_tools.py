@@ -343,12 +343,11 @@ def _try_lazy_install_stt() -> bool:
     the provider can use it immediately without a process restart.
     """
     try:
-        from tools.lazy_deps import ensure
-        # prompt=False: never raise a blocking input() prompt mid-session.
+        from pm import ensure_import as ensure
         # Under the interactive CLI prompt_toolkit owns stdin, so a bare
         # input() deadlocks the terminal (#40490). The install is already
         # gated by security.allow_lazy_installs, so reaching here is opt-in.
-        ensure("stt.faster_whisper", prompt=False)
+        ensure("voice")
         # Re-check dynamically after install
         import importlib.util as _iu
         if _iu.find_spec("faster_whisper"):
@@ -1570,8 +1569,8 @@ def _prepare_audio_for_transcription(
         # pilk is a tiny silk-v3 codec binding — lazy-install it on first
         # .silk voice note instead of bloating the base install.
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("stt.silk", prompt=False)
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("silk")
         except Exception:
             pass
         if not _safe_find_spec("pilk"):
@@ -2393,8 +2392,8 @@ def _transcribe_mistral(
 
     try:
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("stt.mistral", prompt=False)
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("mistral")
         except Exception:
             pass
         from mistralai.client import Mistral

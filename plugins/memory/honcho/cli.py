@@ -518,7 +518,7 @@ def _ensure_sdk_installed() -> bool:
     print("  Installing honcho-ai...", flush=True)
     # Environment-aware install: sealed hosted venvs redirect to the durable
     # data-volume target instead of writing to /opt/hermes (NS-605).
-    from tools.lazy_deps import install_specs
+    from pm.extras import install_extra_for_specs as install_specs
 
     result = install_specs(["honcho-ai==2.2.0"])
     if result.ok:

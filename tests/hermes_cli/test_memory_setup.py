@@ -90,7 +90,7 @@ def test_install_dependencies_force_reinstalls_versioned_specs(tmp_path, monkeyp
         installed.append(list(specs))
         return SimpleNamespace(ok=True, blocked=False, reason="", stderr="")
 
-    monkeypatch.setattr("tools.lazy_deps.install_specs", fake_install_specs)
+    monkeypatch.setattr("pm.extras.install_extra_for_specs", fake_install_specs)
 
     memory_setup._install_dependencies("mem0", force=True)
 

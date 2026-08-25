@@ -118,8 +118,8 @@ except ImportError:
     # running `hermes dashboard` needs fastapi+uvicorn; lazy install keeps
     # them out of every other install path. After install, re-import.
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("tool.dashboard", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("web")
         from fastapi import (
             FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
             WebSocket, WebSocketDisconnect,
@@ -6428,18 +6428,8 @@ def _install_memory_provider_pip_dependencies(dependencies: List[str]) -> List[D
             _command_result(kind="pip", name=", ".join(dependencies), status="already_installed")
         ]
 
-    # Route through the lazy-install pipeline (tools.lazy_deps.install_specs)
-    # instead of shelling out to pip against sys.executable directly. That
-    # pipeline is environment-aware: on hosted/immutable images the agent venv
-    # under /opt/hermes is sealed read-only, and installs must be redirected
-    # to the writable durable target on the data volume
-    # (HERMES_LAZY_INSTALL_TARGET, e.g. /opt/data/lazy-packages) — the same
-    # path every lazy backend already uses. A direct `pip install --python
-    # sys.executable` on those images fails with a permission error (NS-605).
-    # install_specs also activates the target on sys.path post-install so the
-    # availability recheck below sees the new packages without a restart.
     try:
-        from tools.lazy_deps import install_specs
+        from pm.extras import install_extra_for_specs as install_specs
 
         outcome = install_specs(missing, timeout=240)
     except Exception as exc:

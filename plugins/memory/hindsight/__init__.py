@@ -71,7 +71,7 @@ class _RecallResult:
 
 _DEFAULT_API_URL = "https://api.hindsight.vectorize.io"
 _DEFAULT_LOCAL_URL = "http://localhost:8888"
-# Keep in sync with tools/lazy_deps.py ("memory.hindsight") and plugin.yaml.
+# Keep in sync with the pyproject "hindsight" extra and plugin.yaml.
 _MIN_CLIENT_VERSION = "0.6.1"
 _DEFAULT_TIMEOUT = 120  # seconds — cloud API can take 30-40s per request
 _DEFAULT_IDLE_TIMEOUT = 300  # seconds — Hindsight embedded daemon default
@@ -204,8 +204,8 @@ def _local_runtime_hint(reason: str | None) -> str:
 def _ensure_cloud_client_dependency() -> None:
     """Install the Hindsight cloud client lazily before importing it."""
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("memory.hindsight", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("hindsight")
     except ImportError:
         pass
     except Exception as exc:
@@ -1015,7 +1015,7 @@ class HindsightMemoryProvider(MemoryProvider):
         print("\n  Checking dependencies...")
         # Environment-aware install: sealed hosted venvs redirect to the durable
         # data-volume target instead of writing to /opt/hermes (NS-605).
-        from tools.lazy_deps import install_specs
+        from pm.extras import install_extra_for_specs as install_specs
 
         outcome = install_specs(deps_to_install, timeout=120)
         if outcome.ok:
@@ -1241,8 +1241,8 @@ class HindsightMemoryProvider(MemoryProvider):
                         + (f": {reason}" if reason else "")
                     )
                 try:
-                    from tools.lazy_deps import ensure as _lazy_ensure
-                    _lazy_ensure("memory.hindsight", prompt=False)
+                    from pm import ensure_import as _lazy_ensure
+                    _lazy_ensure("hindsight")
                 except ImportError:
                     pass
                 except Exception as _e:
@@ -1610,7 +1610,7 @@ class HindsightMemoryProvider(MemoryProvider):
                                installed, _MIN_CLIENT_VERSION)
                 # Environment-aware install: sealed hosted venvs redirect to the
                 # durable data-volume target instead of /opt/hermes (NS-605).
-                from tools.lazy_deps import install_specs
+                from pm.extras import install_extra_for_specs as install_specs
                 outcome = install_specs([f"hindsight-client>={_MIN_CLIENT_VERSION}"], timeout=120)
                 if outcome.ok:
                     logger.info("hindsight-client upgraded to >=%s", _MIN_CLIENT_VERSION)

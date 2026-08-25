@@ -865,7 +865,7 @@ def _install_provider_deps(llm_id: str, embedder_id: str, vector_id: str) -> Non
             print(f"  Installing {dep}...")
             # Environment-aware install: sealed hosted venvs redirect to the
             # durable data-volume target instead of /opt/hermes (NS-605).
-            from tools.lazy_deps import install_specs
+            from pm.extras import install_extra_for_specs as install_specs
 
             outcome = install_specs([dep], timeout=60)
             if outcome.ok:

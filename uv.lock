@@ -57,8 +57,17 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/3d/41a85023e1c6cc76d895f3ba6ac7c22b0785db7e08d0827ebeb8a403eefc/ai_edge_litert-2.1.6-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:edf598814004e594b40c888f52cae59e950dbeffd821e83ba45d28db0a0aa3f5", size = 10031164, upload-time = "2026-07-01T21:42:50.986Z" },
+    { url = "https://files.pythonhosted.org/packages/53/b5/da7057bfd08f270b5d924c4daba62a583df6dc25d916955fc7543d1c8847/ai_edge_litert-2.1.6-cp311-cp311-manylinux_2_27_aarch64.whl", hash = "sha256:8475d18c73698d9244380ad72f67caf540e5c72d9a80c66d17c4b81ca81a21c8", size = 13065484, upload-time = "2026-07-01T21:02:27.896Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/b9/c7153b2f6f37bc521876b8fa86125eb618bba9d84b20ba0bc5c05795eda7/ai_edge_litert-2.1.6-cp311-cp311-manylinux_2_27_x86_64.whl", hash = "sha256:af4f2ba681fa2c688746cbd7ddd71a2bbbdd9e6a51aa609d382bfad77d1c695e", size = 17328951, upload-time = "2026-07-01T20:59:23.82Z" },
+    { url = "https://files.pythonhosted.org/packages/87/0f/031a56bc95a7109f4a71ec5510a34214d5f9d99ff01a926fb2129ec2288b/ai_edge_litert-2.1.6-cp311-cp311-win_amd64.whl", hash = "sha256:b20f4c8cdbbf6f64e3baa77853e55a1b29515a45d6dfbe6b2ced9b3a1efb5807", size = 16587870, upload-time = "2026-07-01T21:43:43.398Z" },
     { url = "https://files.pythonhosted.org/packages/52/d5/164aaf69f60f72b7076900ef1cc6153bf50d82cd15202bdf1239c0dbfb1c/ai_edge_litert-2.1.6-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:5adf0c9afde6151dc7f2989d039c800f3060d98d40bb5dfc95e426ad4eb3680b", size = 10033170, upload-time = "2026-07-01T21:42:53.208Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/24/4f490bc5df4e3c5e796de20437804da9982e565cb9eba0d862eb20efa2b7/ai_edge_litert-2.1.6-cp312-cp312-manylinux_2_27_aarch64.whl", hash = "sha256:e8aa6393e1293fac837f764b5a9ba3ef81bb16068c94a2068d9dfb109a24e3b9", size = 13066237, upload-time = "2026-07-01T21:02:30.375Z" },
+    { url = "https://files.pythonhosted.org/packages/39/df/08defcb80cfe1782a51b58184300ca592f302d7cd1e3d26d5adcd11bb588/ai_edge_litert-2.1.6-cp312-cp312-manylinux_2_27_x86_64.whl", hash = "sha256:0156d9051c9a2500cd4c4ecedb77676eff0b45bd8efb1001e8e730a8cd0db4ee", size = 17332723, upload-time = "2026-07-01T20:59:25.961Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/3a/d4236d7a971c70eceeb957f2f186db16fa46dc0fa27fd30e1b2ef075cace/ai_edge_litert-2.1.6-cp312-cp312-win_amd64.whl", hash = "sha256:f722298b070343e24634ab51a55b7185d32d8f84d4df8659f9d2989e76d7d63f", size = 16589039, upload-time = "2026-07-01T21:43:45.484Z" },
     { url = "https://files.pythonhosted.org/packages/ad/92/578b31c4c05afa9081a664cd86afe33c304fecd70de1c2a4d3a3b9ca51c9/ai_edge_litert-2.1.6-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:2e8a3f92fa407690189533bea8b64d49bb1b8a9e96f707ba27e1a64a9c3cc8cf", size = 10032950, upload-time = "2026-07-01T21:42:55.102Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/f6/277760deec426c52d4138eb406750d23e83eff22562201214ba867eac5c0/ai_edge_litert-2.1.6-cp313-cp313-manylinux_2_27_aarch64.whl", hash = "sha256:5819dcafe62005483744636dfe429fcd429a29ba382187eeb156dda2ada2f82c", size = 13066200, upload-time = "2026-07-01T21:02:32.768Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/8e/9264ce26ca8735f716b5f1ac6e76e37370e271da1010bf1a9a46c2a9771b/ai_edge_litert-2.1.6-cp313-cp313-manylinux_2_27_x86_64.whl", hash = "sha256:c7c93fb0dc2a1d45750443731d0193974737f9f1ffb36eb6c1889bdfb61bf091", size = 17332407, upload-time = "2026-07-01T20:59:28.161Z" },
+    { url = "https://files.pythonhosted.org/packages/26/ac/3baf781f2ff2bbab4bd2ea78d6c395ad135202b4dcd9a8cc1d760776f223/ai_edge_litert-2.1.6-cp313-cp313-win_amd64.whl", hash = "sha256:282f3521e31d9d1cb4f60143f6b64fa07a8ac8488b098c37c809b574fa3dc264", size = 16589190, upload-time = "2026-07-01T21:43:47.599Z" },
 ]
 
 [[package]]
@@ -1269,6 +1278,21 @@ wheels = [
 ]
 
 [[package]]
+name = "firecrawl-anydoc"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/a1/d9c9675eab93cf3780ca784bba572252ca717b4e9cb4ab6363f42e573a19/firecrawl_anydoc-0.1.6.tar.gz", hash = "sha256:c23806b2228a7bee2fb2d9accdfae1ba5062e46a292285781ac4bdbd87fff35b", size = 190241, upload-time = "2026-08-05T18:29:23.785Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/9e/7bea14ed71bec4678d4daad1610e7eef850301f28e2122bdffe6d997d9d8/firecrawl_anydoc-0.1.6-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:996aa4ff2848b0b4a259421561364ff888202744ec257ccdba09111488ebdfbf", size = 3326951, upload-time = "2026-08-05T18:29:12.61Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/af/342a3fcaab2d6cc80ecf636cbab9e3b29205467c21cf1ec6dbf9e2a77814/firecrawl_anydoc-0.1.6-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:f102e87c004bcf6de979a1697776774454f814d85893e47fedc58fdf838a2f9b", size = 3175663, upload-time = "2026-08-05T18:29:14.405Z" },
+    { url = "https://files.pythonhosted.org/packages/78/64/97f90fea4b77457fd5cb13d30aefed2f64ffc34e89764e789ed1520d5a2f/firecrawl_anydoc-0.1.6-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6c9acbeb860656205677b7991cf17a39241968e0533f6fe1b9d24bb7688e63d6", size = 3220877, upload-time = "2026-08-05T18:29:15.926Z" },
+    { url = "https://files.pythonhosted.org/packages/db/0b/d2943ee6b5eab1a673fe96333070b67232e819cc39728294a7034176006f/firecrawl_anydoc-0.1.6-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d3e65bbe6709a3a02dc4faf6af8b387016ac4ac2a5b38a70a9f950a8efa492d0", size = 3431813, upload-time = "2026-08-05T18:29:17.408Z" },
+    { url = "https://files.pythonhosted.org/packages/26/ed/7c171ee10d7eb73ddcbc3d63cdd59695bb0ea6598491ea53c79e8a152350/firecrawl_anydoc-0.1.6-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:dd80d01f72d983d6190aa37f0ee772d0e0f313baad80cd266acd0e584a7274b2", size = 3389223, upload-time = "2026-08-05T18:29:19.022Z" },
+    { url = "https://files.pythonhosted.org/packages/05/fa/02d6f34cb30b745fc99a0eba62a3028e4590c2dd6be852ae2c24acc45e4c/firecrawl_anydoc-0.1.6-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:05d2c32513270d622ddade866fa67f9598eda8bc35df35cbca2d3a5f95202a09", size = 3672930, upload-time = "2026-08-05T18:29:20.449Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/53/eb2ccf69aad54fbf873b5bcf6766e240f7a94b9a22903674f262b010fadc/firecrawl_anydoc-0.1.6-cp310-abi3-win_amd64.whl", hash = "sha256:ad9134ad79fbef3d988bfc667ae083b8e18292bdeb8250e8623be251bb8229f3", size = 3491314, upload-time = "2026-08-05T18:29:22.154Z" },
+]
+
+[[package]]
 name = "firecrawl-py"
 version = "4.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1660,6 +1684,9 @@ dingtalk = [
     { name = "dingtalk-stream" },
     { name = "qrcode" },
 ]
+doc-extract = [
+    { name = "firecrawl-anydoc" },
+]
 edge-tts = [
     { name = "edge-tts" },
 ]
@@ -1730,6 +1757,9 @@ otlp = [
 parallel-web = [
     { name = "parallel-web" },
 ]
+silk = [
+    { name = "pilk" },
+]
 slack = [
     { name = "aiohttp" },
     { name = "slack-bolt" },
@@ -1745,31 +1775,8 @@ teams = [
     { name = "aiohttp" },
     { name = "microsoft-teams-apps" },
 ]
-termux = [
-    { name = "agent-client-protocol" },
-    { name = "honcho-ai" },
-    { name = "httpx2" },
-    { name = "mcp" },
-    { name = "python-telegram-bot", extra = ["webhooks"] },
-    { name = "starlette" },
-]
-termux-all = [
-    { name = "agent-client-protocol" },
-    { name = "aiohttp" },
-    { name = "fastapi" },
-    { name = "google-api-python-client" },
-    { name = "google-auth" },
-    { name = "google-auth-httplib2" },
-    { name = "google-auth-oauthlib" },
-    { name = "honcho-ai" },
-    { name = "httplib2" },
-    { name = "httpx2" },
-    { name = "mcp" },
-    { name = "pyasn1" },
-    { name = "python-multipart" },
-    { name = "python-telegram-bot", extra = ["webhooks"] },
-    { name = "starlette" },
-    { name = "uvicorn", extra = ["standard"] },
+trace-upload = [
+    { name = "huggingface-hub" },
 ]
 tts-premium = [
     { name = "elevenlabs" },
@@ -1795,6 +1802,9 @@ wake = [
     { name = "sherpa-onnx" },
     { name = "sounddevice" },
 ]
+wake-tflite = [
+    { name = "ai-edge-litert" },
+]
 web = [
     { name = "fastapi" },
     { name = "python-multipart" },
@@ -1812,6 +1822,7 @@ youtube = [
 requires-dist = [
     { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = "==0.9.0" },
     { name = "ai-edge-litert", marker = "sys_platform == 'darwin' and extra == 'wake'", specifier = "==2.1.6" },
+    { name = "ai-edge-litert", marker = "extra == 'wake-tflite'", specifier = "==2.1.6" },
     { name = "aiohttp", marker = "extra == 'homeassistant'", specifier = "==3.14.3" },
     { name = "aiohttp", marker = "extra == 'matrix'", specifier = "==3.14.3" },
     { name = "aiohttp", marker = "extra == 'messaging'", specifier = "==3.14.3" },
@@ -1843,6 +1854,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'web'", specifier = "==0.133.1" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = "==1.2.1" },
     { name = "fire", specifier = "==0.7.1" },
+    { name = "firecrawl-anydoc", marker = "extra == 'doc-extract'", specifier = "==0.1.6" },
     { name = "firecrawl-py", marker = "extra == 'firecrawl'", specifier = "==4.17.0" },
     { name = "google-api-python-client", marker = "extra == 'google'", specifier = "==2.194.0" },
     { name = "google-auth", marker = "extra == 'google'", specifier = "==2.55.1" },
@@ -1850,23 +1862,13 @@ requires-dist = [
     { name = "google-auth-httplib2", marker = "extra == 'google'", specifier = "==0.3.1" },
     { name = "google-auth-oauthlib", marker = "extra == 'google'", specifier = "==1.3.1" },
     { name = "hermes-agent", extras = ["acp"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["acp"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["cron"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["cron"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["google"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["google"], marker = "extra == 'termux-all'" },
     { name = "hermes-agent", extras = ["homeassistant"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["homeassistant"], marker = "extra == 'termux-all'" },
-    { name = "hermes-agent", extras = ["honcho"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["mcp"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["mcp"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["pty"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["pty"], marker = "extra == 'termux-all'" },
     { name = "hermes-agent", extras = ["sms"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["sms"], marker = "extra == 'termux-all'" },
-    { name = "hermes-agent", extras = ["termux"], marker = "extra == 'termux-all'" },
     { name = "hermes-agent", extras = ["web"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["web"], marker = "extra == 'termux-all'" },
     { name = "hermes-agent", extras = ["youtube"], marker = "extra == 'all'" },
     { name = "hindsight-client", marker = "extra == 'hindsight'", specifier = "==0.6.1" },
     { name = "honcho-ai", marker = "extra == 'honcho'", specifier = "==2.2.0" },
@@ -1875,6 +1877,7 @@ requires-dist = [
     { name = "httpx2", marker = "extra == 'computer-use'", specifier = "==2.7.0" },
     { name = "httpx2", marker = "extra == 'dev'", specifier = "==2.7.0" },
     { name = "httpx2", marker = "extra == 'mcp'", specifier = "==2.7.0" },
+    { name = "huggingface-hub", marker = "extra == 'trace-upload'", specifier = "==1.24.0" },
     { name = "jinja2", specifier = "==3.1.6" },
     { name = "lark-oapi", marker = "extra == 'feishu'", specifier = "==1.6.8" },
     { name = "markdown", specifier = "==3.10.2" },
@@ -1897,6 +1900,7 @@ requires-dist = [
     { name = "packaging", specifier = "==26.0" },
     { name = "parallel-web", marker = "extra == 'parallel-web'", specifier = "==0.4.2" },
     { name = "pathspec", specifier = "==1.1.1" },
+    { name = "pilk", marker = "extra == 'silk'", specifier = "==0.2.4" },
     { name = "pillow", specifier = "==12.3.0" },
     { name = "prompt-toolkit", specifier = "==3.0.52" },
     { name = "psutil", specifier = "==7.2.2" },
@@ -1911,7 +1915,6 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.9,<1" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = "==0.0.32" },
     { name = "python-telegram-bot", extras = ["webhooks"], marker = "extra == 'messaging'", specifier = "==22.8" },
-    { name = "python-telegram-bot", extras = ["webhooks"], marker = "extra == 'termux'", specifier = "==22.8" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=306,<312" },
     { name = "pywinpty", marker = "sys_platform == 'win32'", specifier = ">=2.0.0,<3" },
     { name = "pyyaml", specifier = "==6.0.3" },
@@ -1946,7 +1949,7 @@ requires-dist = [
     { name = "websockets", specifier = "==15.0.1" },
     { name = "youtube-transcript-api", marker = "extra == 'youtube'", specifier = "==1.2.4" },
 ]
-provides-extras = ["anthropic", "exa", "firecrawl", "parallel-web", "fal", "edge-tts", "modal", "daytona", "vercel", "hindsight", "dev", "messaging", "cron", "slack", "matrix", "wecom", "tts-premium", "voice", "wake", "honcho", "supermemory", "mem0", "vision", "pty", "mcp", "nemo-relay", "homeassistant", "sms", "teams", "computer-use", "acp", "mistral", "otlp", "bedrock", "vertex", "azure-identity", "termux", "termux-all", "dingtalk", "feishu", "google", "youtube", "web", "all"]
+provides-extras = ["anthropic", "exa", "firecrawl", "parallel-web", "fal", "edge-tts", "modal", "daytona", "vercel", "hindsight", "dev", "messaging", "cron", "slack", "matrix", "wecom", "tts-premium", "voice", "wake", "honcho", "supermemory", "mem0", "vision", "silk", "doc-extract", "trace-upload", "wake-tflite", "pty", "mcp", "nemo-relay", "homeassistant", "sms", "teams", "computer-use", "acp", "mistral", "otlp", "bedrock", "vertex", "azure-identity", "dingtalk", "feishu", "google", "youtube", "web", "all"]
 
 [[package]]
 name = "hf-xet"
@@ -3113,6 +3116,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pilk"
+version = "0.2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/66/bb/938dd697b6bc2d851ffec4ffe82ed20078e58bd0ef049e84f4d038d6f991/pilk-0.2.4.tar.gz", hash = "sha256:d4a1bcf93dc6ef5e95e0cfd728ed4ef4d49f9c0476d70816fecbe456cc762e7f", size = 226451, upload-time = "2023-05-26T03:32:34.133Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ff/06/80cac61bc7f791bcaae552ba90fb868f7af7503ef1c74e423cc20fca1a53/pilk-0.2.4-cp311-cp311-win_amd64.whl", hash = "sha256:a6692096607e8d77d348aeec00df633788c85b527aa83cbd803ddf508936db7f", size = 127024, upload-time = "2023-05-26T03:32:24.524Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4050,7 +4065,7 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.12'" },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -4105,7 +4120,7 @@ resolution-markers = [
     "python_full_version == '3.12.*'",
 ]
 dependencies = [
-    { name = "numpy", marker = "python_full_version >= '3.12'" },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz", hash = "sha256:67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378", size = 30774447, upload-time = "2026-06-19T15:01:43.456Z" }
 wheels = [
@@ -4744,11 +4759,11 @@ name = "vercel-workers"
 version = "0.0.25"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", marker = "python_full_version >= '3.12'" },
-    { name = "httpx", marker = "python_full_version >= '3.12'" },
-    { name = "pydantic", marker = "python_full_version >= '3.12'" },
-    { name = "python-dotenv", marker = "python_full_version >= '3.12'" },
-    { name = "vercel", marker = "python_full_version >= '3.12'" },
+    { name = "anyio" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "vercel" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/30/df/04d37021ad7ca53b7599c313e411d91623c7a005c741f491d1eefb7a9f0c/vercel_workers-0.0.25.tar.gz", hash = "sha256:212ded01400b524be51d251df49f801caf115ad7d48cca7eb168cbeceda3def3", size = 64149, upload-time = "2026-06-20T19:26:27.177Z" }
 wheels = [

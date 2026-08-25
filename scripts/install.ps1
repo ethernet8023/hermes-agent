@@ -3008,7 +3008,7 @@ function Install-HermesCommandLaunchers {
     # Launcher form depends on the venv (keep in lockstep with
     # hermes_cli/_install_repair.py): a normal venv's exe trampoline
     # embeds an absolute interpreter path and survives copying; a
-    # relocatable venv's trampoline (managed_uv rebuilds use
+    # relocatable venv's trampoline (pre-pm managed_uv rebuilds used
     # --relocatable) resolves relative to its own location, and a copy
     # dies with 'uv trampoline failed to canonicalize script path' --
     # those get a .cmd delegator invoking the in-venv exe instead.

@@ -1,0 +1,99 @@
+{
+  "packages": {
+    "agent-browser": {
+      "sha256": {
+        "any": "8a48cf4110d7dc2c12c1c4d6d25e0babdfa31604b537f05df0dc835fe2f854bf"
+      },
+      "version": "0.26.0"
+    },
+    "chromium": {
+      "sha256": {
+        "darwin-arm64": "3dbf04e28a02079148e9c7417840a0c1d3903361eceeee7e7eb59ef77021bdb2",
+        "darwin-x64": "0de8f876af53a93f8832e54490ff7de41a9b6648211590280cb50289ed45f240",
+        "linux-arm64": "70b4620521b1ada360475e1059dfe9d549a6461a79b9342f85b7d47e44123077",
+        "linux-x64": "b5e3195041af345a668d110f5daf5581961fa3608626ea588c97dd0fe81c4e38",
+        "win32-x64": "08476e6fe550ccbc0d11d1ab030292fc4e32d4987400c77b2d1905a6bd13b4f6"
+      },
+      "version": "1208"
+    },
+    "chromium-headless-shell": {
+      "sha256": {
+        "darwin-arm64": "8510b9b1575538aa6a092ed16d981738b2ebf52c5e41ea4c54a7ce16756cdcf5",
+        "darwin-x64": "4316f7f98213a173e2356406203359cd4ab5b2b2db36cb219b9d99edec746819",
+        "linux-arm64": "6bdb4349429ec33e7c0267e0eaa039c2131fa0b3b2997dec0ec96b0d40f579fd",
+        "linux-x64": "2536e97d8f410df0394b3e7c4252e88ce9f239f04f3af4e247a26caf45baf49e",
+        "win32-x64": "839500db9e1b0865961ce8b05134ba3d3d71b82be5dec236d6c87ecd93e082cd"
+      },
+      "version": "1208"
+    },
+    "cua-driver": {
+      "sha256": {
+        "darwin-arm64": "5e327e58f6ce81d5c117fe5edec5f267e87e1b921e8c5a8aa4f7f21cbcf5f273",
+        "darwin-x64": "5e327e58f6ce81d5c117fe5edec5f267e87e1b921e8c5a8aa4f7f21cbcf5f273",
+        "linux-arm64": "6b3a308c6741dd8291aad22a308bd2ec8eb52eab64687be007ac86ceaf7e3307",
+        "linux-x64": "cf29bfaad16737e31e72f38dad2a6424f24b21a4ac2edea885e83cb9d5034135",
+        "win32-arm64": "79caf7e4f55cdab08533abf7ead4038132aa070040669238d806d057f648cc5f",
+        "win32-x64": "d63f6a78e65afc06524048f5557fed36cdf01f0a8a680236e93c9a2fb3587f44"
+      },
+      "version": "0.21.0"
+    },
+    "gh": {
+      "sha256": {
+        "darwin-arm64": "a58b8fd77b417a38f47a0b54d1370c59b0fcdb324ccc9ca002b0998f7c4c999e",
+        "darwin-x64": "63298c998cc2a924c9e254c6af6a1caad6ece281122687a91f079bc0a462700e",
+        "linux-arm64": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
+        "linux-x64": "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
+        "win32-arm64": "3e2d4a166da4ee5020c592737b65eec0e724946d5d5b962f5fe59d99116dc4bf",
+        "win32-x64": "35d7fe05c4dd1411ffda1e73dfc7c6f44b75c936ca51fa6595c657fdc0350cec"
+      },
+      "version": "2.97.0"
+    },
+    "git": {
+      "sha256": {
+        "win32-arm64": "0db54010054c01f35501cf69e1e32d3710138ecb934d188bd77093afed24300e",
+        "win32-x64": "b365da794b1d2225eb24d5f5e09ef7792cfd5fa26c3a3586210280c80dff3a2a"
+      },
+      "version": "2.53.0"
+    },
+    "node": {
+      "sha256": {
+        "darwin-arm64": "7ee659a7768e641bbfd5360940660b8e8fd0052f77488f365562bac522fc15d4",
+        "darwin-x64": "f279d1ed28ce57f7788bf23435d2ad7fdd7438904ad5c4d8a1081a7cde3d4b96",
+        "linux-arm64": "afc7a004018485092ac8985b817b0d5684472bd9472e0b57d2ab88737e50090d",
+        "linux-x64": "982aa24dd8be4c889c6a8ab337ddff3b0896645b20f4239356e80552c16277ee",
+        "win32-arm64": "be8775204cfceca5a73c30f91bf0de5e85274c01b776dc13f16b91aa251ebb01",
+        "win32-x64": "d3bd72755141ed32bbcd841228ee81897c8a98d50dfa7dae2179399a0a7c90f8"
+      },
+      "version": "26.7.0"
+    },
+    "npm": {
+      "sha256": {
+        "any": "5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1"
+      },
+      "version": "12.0.2"
+    },
+    "ripgrep": {
+      "sha256": {
+        "darwin-arm64": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+        "darwin-x64": "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+        "linux-arm64": "800b1e7206afe799dfb5a6901f23147cfaabe0e52210538100f61e86e1740915",
+        "linux-x64": "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+        "win32-arm64": "e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+        "win32-x64": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5"
+      },
+      "version": "15.2.0"
+    },
+    "uv": {
+      "sha256": {
+        "darwin-arm64": "546f7f8a6c70ff13a3a9d2bc958db3427298cebf3e0cb756f9177133b7068843",
+        "darwin-x64": "4c9f52262a14da336e4a42ed24992d12d0c956acde87619e4611d321dffa602b",
+        "linux-arm64": "bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2",
+        "linux-x64": "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101",
+        "win32-arm64": "4343217d668727b8a8eb5cad92389a1d2eeead93c89940d1b955ba1bb15462eb",
+        "win32-x64": "b23350c79e8ad0192b8124af13a0f17e8d4e4549524785e1aef389ae5a06990e"
+      },
+      "version": "0.12.3"
+    }
+  },
+  "schema": 1
+}

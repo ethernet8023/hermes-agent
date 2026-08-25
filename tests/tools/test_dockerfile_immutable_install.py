@@ -68,7 +68,7 @@ def test_dockerfile_redirects_lazy_installs_to_durable_target() -> None:
     without being able to break the sealed core.
 
     Guards the contract between the Dockerfile env var, the stage2-hook
-    seeding, and tools/lazy_deps.py — these three must agree on the path.
+    seeding, and pm — these must agree on the path.
     """
     text = _dockerfile_text()
     target = "/opt/data/lazy-packages"

@@ -233,6 +233,12 @@ mem0 = ["mem0ai==2.0.10"]
 # CLI under prompt_toolkit (#40490). This extra is kept as a no-op back-compat
 # alias so existing requests for the `vision` extra resolve.
 vision = []
+# Formerly lazy-only features (tools/lazy_deps.py, deleted): every runtime
+# feature is an extra so the venv is always `uv sync`-able from this file.
+silk = ["pilk==0.2.4"]
+doc-extract = ["firecrawl-anydoc==0.1.6"]
+trace-upload = ["huggingface-hub==1.24.0"]
+wake-tflite = ["ai-edge-litert==2.1.6"]
 # Kept as a no-op back-compat alias — `ptyprocess` and `pywinpty` are now
 # in the main `dependencies` list (with the same platform markers), so
 # any existing requests for the `pty` extra resolve cleanly
@@ -283,26 +289,6 @@ otlp = ["opentelemetry-sdk==1.39.1", "opentelemetry-exporter-otlp-proto-http==1.
 bedrock = ["boto3==1.42.89"]
 vertex = ["google-auth==2.55.1"]
 azure-identity = ["azure-identity==1.25.3"]
-termux = [
-  # Baseline Android / Termux path for reliable fresh installs.
-  "python-telegram-bot[webhooks]==22.8",
-  "hermes-agent[cron]",
-  "hermes-agent[mcp]",
-  "hermes-agent[honcho]",
-  "hermes-agent[acp]",
-]
-termux-all = [
-  # Best-effort "install all" profile for Termux. Same policy as [all]:
-  # only includes extras that aren't covered by `tools/lazy_deps.py`.
-  # Backends like telegram/slack/dingtalk/feishu/honcho lazy-install at
-  # first use, so they're no longer eager-installed here.
-  "hermes-agent[termux]",
-  "hermes-agent[google]",
-  "hermes-agent[homeassistant]",
-  "hermes-agent[sms]",
-  "hermes-agent[web]",
-  "hermes-agent[pty]",
-]
 dingtalk = ["dingtalk-stream==0.24.3", "alibabacloud-dingtalk==2.2.42", "qrcode==7.4.2"]
 feishu = ["lark-oapi==1.6.8", "qrcode==7.4.2"]
 google = [

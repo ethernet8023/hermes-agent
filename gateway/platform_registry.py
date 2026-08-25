@@ -87,7 +87,7 @@ class PlatformEntry:
     validate_config: Optional[Callable[[Any], bool]] = None
 
     # ACTIVE dependency installer: make the platform's dependencies available,
-    # installing them (pip / lazy_deps) if needed.  Returns True once deps are
+    # installing them (pm.sync_venv) if needed.  Returns True once deps are
     # importable, False if they could not be installed.  Called by
     # ``create_adapter()`` when ``check_fn`` returns False — i.e. exactly at
     # the moment the gateway is about to bring the platform up and the user

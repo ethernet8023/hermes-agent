@@ -1255,10 +1255,10 @@ def get_honcho_client(config: HonchoClientConfig | None = None) -> Honcho:
     def _build() -> "Honcho":
         # Lazy dependency failures fall through to the canonical import error.
         try:
-            from tools.lazy_deps import FeatureUnavailable, ensure as _lazy_ensure
-            _lazy_ensure("memory.honcho", prompt=False)
+            from pm import InstallError as FeatureUnavailable, ensure_import as _lazy_ensure
+            _lazy_ensure("honcho")
         except ImportError:
-            # lazy_deps module missing — fall through to the raw import below.
+            # pm module missing — fall through to the raw import below.
             pass
         except Exception:
             # FeatureUnavailable or unexpected error. Don't crash here; let the

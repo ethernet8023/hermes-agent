@@ -286,8 +286,8 @@ class _SupermemoryClient:
         # fall through so the raw import below produces the canonical
         # ImportError message.
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("memory.supermemory", prompt=False)
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("supermemory")
         except ImportError:
             pass
         except Exception:

@@ -5073,7 +5073,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_park_stashed_changes",
         "_ensure_acp_launcher",
         "_ensure_fhs_path_guard",
-        "_ensure_uv_for_termux",
         "_finish_dashboard_update_cleanup",
         "_fleet_probe_expected_runtimes",
         "_for_each_systemd_gateway_unit",
@@ -5086,9 +5085,7 @@ _LAZY_COMMAND_EXPORTS = {
         "_gateway_prompt",
         "_get_origin_url",
         "_has_upstream_remote",
-        "_install_psutil_android_compat",
         "_invalidate_update_cache",
-        "_is_android_python",
         "_is_fork",
         "_leftover_pausable_gateway_pids",
         "_log_only_write",
@@ -8676,8 +8673,7 @@ def _respawn_dashboard_processes(commands: list[list[str]]) -> list[list[str]]:
 def _load_installable_optional_extras(group: str = "all") -> list[str]:
     """Return optional extras referenced by a dependency group.
 
-    ``group`` is usually ``all`` (desktop/server broad install) or
-    ``termux-all`` (Termux-compatible broad install).
+    ``group`` is usually ``all`` (the broad install profile).
     """
     try:
         import tomllib
@@ -8911,12 +8907,12 @@ def _recover_core_update_marker_locked() -> None:
     try:
         from hermes_cli import _install_repair as _ir
 
-        # ensure_uv bootstraps the installer itself when missing (the early
-        # pass's stdlib-only lookup cannot); keeping it here means the late
-        # path still self-heals a venv whose uv vanished mid-update.
-        from hermes_cli.managed_uv import ensure_uv
+        # pm realizes uv when missing (the early pass's stdlib-only
+        # lookup cannot); keeping it here means the late path still
+        # self-heals a venv whose uv vanished mid-update.
+        import pm
 
-        ensure_uv()
+        pm.uv()
 
         # Delegate the install itself to the shared stdlib executor so both
         # this late path and the pre-import early pass run exactly the same
@@ -9109,20 +9105,15 @@ def _reexec_dependency_sync_off_windows_shim() -> bool:
 def _default_venv_install_target() -> tuple[list[str], dict[str, str] | None]:
     """Return ``(install_cmd_prefix, env)`` for the project venv when possible."""
     try:
-        from hermes_cli.managed_uv import ensure_uv
-
-        uv_bin = ensure_uv()
-    except Exception:
-        uv_bin = None
-    if uv_bin:
+        import pm
         from hermes_constants import project_venv_dir
 
         venv_dir = project_venv_dir(PROJECT_ROOT) or PROJECT_ROOT / "venv"
-        env = {**os.environ, "VIRTUAL_ENV": str(venv_dir)}
-        if _is_termux_env(env):
-            env.pop("PYTHONPATH", None)
-            env.pop("PYTHONHOME", None)
-        return [uv_bin, "pip"], env
+        uv_bin, uv_env = pm.uv(venv=venv_dir)
+    except Exception:
+        uv_bin, uv_env = None, None
+    if uv_bin:
+        return [uv_bin, "pip"], uv_env
     return [sys.executable, "-m", "pip"], None
 
 
@@ -9817,8 +9808,7 @@ def _install_python_dependencies_with_optional_fallback(
 ) -> None:
     """Install base deps plus as many optional extras as the environment supports.
 
-    By default this targets ``.[all]``; Termux callers can pass
-    ``group='termux-all'`` to use the curated Android-compatible profile.
+    By default this targets ``.[all]``.
 
     On Windows, pre-renames live ``hermes.exe`` / ``hermes-gateway.exe`` shims
     in the venv Scripts dir before each install attempt so uv can write fresh
@@ -12101,7 +12091,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "pm", "portal", "profile",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -12892,6 +12882,26 @@ def main():
         return
     if _try_fast_chat_launch():
         return
+
+    # pm owns its own tiny argparse tree; dispatch before the heavy parser.
+    if sys.argv[1:2] == ["pm"]:
+        from pm.cli import main as pm_main
+
+        sys.exit(pm_main(sys.argv[2:]))
+
+    # The startup check: O(1) stamp comparisons, no network, no installs.
+    # One loud line when the install is damaged; never blocks the command.
+    try:
+        import pm
+
+        problems = pm.check()
+        if problems:
+            print(
+                f"⚠ install out of sync ({'; '.join(problems)}) — run `hermes pm install`",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
 
     from hermes_cli._parser import build_top_level_parser
 

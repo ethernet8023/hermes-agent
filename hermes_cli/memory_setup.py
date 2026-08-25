@@ -162,11 +162,7 @@ def _install_dependencies(provider_name: str, *, force: bool = False) -> None:
 
     print(f"\n  Installing dependencies: {', '.join(missing)}")
 
-    # Environment-aware install: on immutable hosted images the agent venv
-    # is sealed read-only and installs must go to the durable target on the
-    # data volume (HERMES_LAZY_INSTALL_TARGET). install_specs handles the
-    # routing/gating; on normal installs it is venv-scoped as before (NS-605).
-    from tools.lazy_deps import install_specs
+    from pm.extras import install_extra_for_specs as install_specs
 
     manual_cmd = f"uv pip install {' '.join(missing)}"
     try:

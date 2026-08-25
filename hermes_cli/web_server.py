@@ -118,8 +118,8 @@ except ImportError:
     # running `hermes dashboard` needs fastapi+uvicorn; lazy install keeps
     # them out of every other install path. After install, re-import.
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("tool.dashboard", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("web")
         from fastapi import (
             FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
             WebSocket, WebSocketDisconnect,
@@ -6279,8 +6279,9 @@ def _memory_provider_setup_manifest(name: str) -> Dict[str, Any]:
         if dep["name"] or dep["install"] or dep["check"]:
             external_dependencies.append(dep)
 
+    extra = manifest.get("extra")
     return {
-        "pip_dependencies": _string_list(manifest.get("pip_dependencies")),
+        "extras": [extra] if isinstance(extra, str) and extra else [],
         "external_dependencies": external_dependencies,
         "required_env": _string_list(manifest.get("requires_env")),
     }
@@ -6292,31 +6293,12 @@ def _memory_provider_setup_info(name: str) -> Dict[str, Any]:
     return setup
 
 
-_MEMORY_PROVIDER_IMPORT_NAMES = {
-    "honcho-ai": "honcho",
-    "mem0ai": "mem0",
-    "hindsight-client": "hindsight_client",
-    "hindsight-all": "hindsight",
-}
-
-
-def _memory_provider_dependency_package(dep: str) -> str:
-    return re.split(r"[\[<>=!~;]", dep, maxsplit=1)[0].strip()
-
-
-def _memory_provider_import_name(dep: str) -> str:
-    package = _memory_provider_dependency_package(dep)
-    return _MEMORY_PROVIDER_IMPORT_NAMES.get(package, package.replace("-", "_"))
-
-
-def _dependency_importable(dep: str) -> bool:
-    import_name = _memory_provider_import_name(dep)
-    if not import_name:
-        return False
+def _extra_available(extra: str) -> bool:
     try:
-        __import__(import_name)
-        return True
-    except ImportError:
+        import pm
+
+        return pm.available(extra)
+    except Exception:
         return False
 
 
@@ -6390,10 +6372,10 @@ def _run_setup_command(
 
 
 def _memory_provider_dependencies_installed(setup: Dict[str, Any]) -> bool:
-    pip_dependencies = _string_list(setup.get("pip_dependencies"))
+    extras = _string_list(setup.get("extras"))
     external_dependencies = setup.get("external_dependencies") or []
 
-    pip_ok = all(_dependency_importable(dep) for dep in pip_dependencies)
+    pip_ok = all(_extra_available(extra) for extra in extras)
     external_ok = True
     for dep in external_dependencies:
         if not isinstance(dep, dict):
@@ -6419,47 +6401,28 @@ def _memory_provider_dependencies_installed(setup: Dict[str, Any]) -> bool:
     return pip_ok and external_ok
 
 
-def _install_memory_provider_pip_dependencies(dependencies: List[str]) -> List[Dict[str, Any]]:
-    missing = [dep for dep in dependencies if not _dependency_importable(dep)]
-    if not dependencies:
+def _install_memory_provider_extras(extras: List[str]) -> List[Dict[str, Any]]:
+    missing = [e for e in extras if not _extra_available(e)]
+    if not extras:
         return []
     if not missing:
         return [
-            _command_result(kind="pip", name=", ".join(dependencies), status="already_installed")
+            _command_result(kind="pip", name=", ".join(extras), status="already_installed")
         ]
 
-    # Route through the lazy-install pipeline (tools.lazy_deps.install_specs)
-    # instead of shelling out to pip against sys.executable directly. That
-    # pipeline is environment-aware: on hosted/immutable images the agent venv
-    # under /opt/hermes is sealed read-only, and installs must be redirected
-    # to the writable durable target on the data volume
-    # (HERMES_LAZY_INSTALL_TARGET, e.g. /opt/data/lazy-packages) — the same
-    # path every lazy backend already uses. A direct `pip install --python
-    # sys.executable` on those images fails with a permission error (NS-605).
-    # install_specs also activates the target on sys.path post-install so the
-    # availability recheck below sees the new packages without a restart.
+    command = "hermes pm install"
     try:
-        from tools.lazy_deps import install_specs
+        import pm
 
-        outcome = install_specs(missing, timeout=240)
+        pm.sync_venv(missing, explicit=True)
     except Exception as exc:
         return [
             _command_result(
                 kind="pip",
                 name=", ".join(missing),
                 status="failed",
+                command=command,
                 error=str(exc),
-            )
-        ]
-
-    if outcome.blocked:
-        return [
-            _command_result(
-                kind="pip",
-                name=", ".join(missing),
-                status="failed",
-                command=outcome.command,
-                error=outcome.reason,
             )
         ]
 
@@ -6467,14 +6430,8 @@ def _install_memory_provider_pip_dependencies(dependencies: List[str]) -> List[D
         _command_result(
             kind="pip",
             name=", ".join(missing),
-            status="installed" if outcome.ok else "failed",
-            command=outcome.command,
-            completed=subprocess.CompletedProcess(
-                args=outcome.command,
-                returncode=0 if outcome.ok else 1,
-                stdout=outcome.stdout,
-                stderr=outcome.stderr,
-            ),
+            status="installed",
+            command=command,
         )
     ]
 
@@ -6598,7 +6555,7 @@ def _install_memory_provider_setup(name: str) -> Dict[str, Any]:
 
     setup = _memory_provider_setup_manifest(name)
     results = []
-    results.extend(_install_memory_provider_pip_dependencies(setup["pip_dependencies"]))
+    results.extend(_install_memory_provider_extras(setup["extras"]))
     results.extend(
         _install_memory_provider_external_dependencies(setup["external_dependencies"])
     )

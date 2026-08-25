@@ -658,6 +658,7 @@ _KNOWN_MANIFEST_FIELDS: Set[str] = {
     "name", "version", "description", "author", "requires_env",
     "provides_tools", "provides_hooks", "kind", "hooks", "label",
     "optional_env", "platforms", "external_dependencies", "pip_dependencies",
+    "extra",
     "provides_browser_providers", "provides_web_providers",
     # v2 (#64165)
     "manifest_version", "api_version", "requires_plugins",

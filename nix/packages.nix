@@ -12,6 +12,15 @@
 
       sandbox = pkgs.callPackage ./sandbox.nix { };
 
+      # pm/lock.json translated into derivations — one per tool package
+      # with an artifact for this system. The lockfile carries resolved
+      # urls + hashes, so nix consumes it as pure data. callPackage adds
+      # .override/.overrideDerivation to the returned SET; keep only the
+      # real derivations.
+      pmPackages = lib.filterAttrs (_: lib.isDerivation) (
+        pkgs.callPackage ./pm-packages.nix { }
+      );
+
       minimal = pkgs.callPackage ./hermes-agent.nix {
         inherit (inputs) uv2nix pyproject-nix pyproject-build-systems;
         npm-lockfile-fix = inputs'.npm-lockfile-fix.packages.default;
@@ -70,6 +79,9 @@
         desktop = full.hermesDesktop;
 
         update-npm-lockfile = full.hermesNpmLib.updateNpmLockfile;
-      };
+      }
+      # Every pm lockfile tool as its own installable derivation:
+      # `nix build .#pm-ripgrep`, `nix build .#pm-gh`, ...
+      // lib.mapAttrs' (name: drv: lib.nameValuePair "pm-${name}" drv) pmPackages;
     };
 }

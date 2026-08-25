@@ -504,7 +504,7 @@ def _load_fal_client() -> Any:
     """Lazy-load the ``fal_client`` SDK and cache it on this module.
 
     Delegates the actual import to :func:`tools.fal_common.import_fal_client`
-    so the ``lazy_deps`` ensure-install handling stays in one place.
+    so the ``pm.ensure_import`` handling stays in one place.
 
     Thread-safe via double-checked locking: concurrent first calls import
     the SDK exactly once instead of each racing thread re-running the import.

@@ -516,20 +516,15 @@ def _ensure_sdk_installed() -> bool:
         return False
 
     print("  Installing honcho-ai...", flush=True)
-    # Environment-aware install: sealed hosted venvs redirect to the durable
-    # data-volume target instead of writing to /opt/hermes (NS-605).
-    from tools.lazy_deps import install_specs
+    import pm
 
-    result = install_specs(["honcho-ai==2.2.0"])
-    if result.ok:
+    try:
+        pm.sync_venv(["honcho"], explicit=True)
         print("  Installed.\n")
         return True
-    elif result.blocked:
-        print(f"  Cannot install: {result.reason}\n")
-        return False
-    else:
-        print(f"  Install failed:\n{(result.stderr or '').strip()}")
-        print("  Run manually: uv pip install 'honcho-ai==2.2.0'\n")
+    except Exception as exc:
+        print(f"  Install failed: {exc}")
+        print("  Run manually: hermes pm install\n")
         return False
 
 

@@ -39,6 +39,11 @@ is_termux() {
     [ -n "${TERMUX_VERSION:-}" ] || [[ "${PREFIX:-}" == *"com.termux/files/usr"* ]]
 }
 
+if is_termux; then
+    echo "Termux is no longer a supported install target." >&2
+    exit 1
+fi
+
 get_command_link_dir() {
     if is_termux && [ -n "${PREFIX:-}" ]; then
         echo "$PREFIX/bin"

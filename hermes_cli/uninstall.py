@@ -445,19 +445,18 @@ def remove_portable_tooling_windows(hermes_home: Path) -> list[Path]:
 
 
 def remove_windows_bin_launchers(*, windows: bool | None = None) -> list[Path]:
-    """Delete the ``hermes`` launchers install.ps1 staged in the managed
-    binary dir (the default Hermes root's ``bin``, next to the managed uv).
+    """Delete the managed binary dir (the default Hermes root's ``bin``).
 
-    Every uninstall mode deletes the code checkout, so the launchers —
-    which invoke ``<checkout>\\venv\\Scripts`` — would otherwise dangle:
-    ``hermes`` in a new terminal resolves to a launcher whose target is
-    gone and errors, which reads worse than command-not-found. The managed
-    uv (uv*.exe) in the same dir is left for keep-data reinstalls.
+    The dir holds only hermes-owned launcher copies (the relocatable venv's
+    console scripts, staged onto PATH by first-run repair) — pm keeps uv in
+    its own store entry, so nothing shared lives here and the whole dir goes.
+    Every uninstall mode deletes the code checkout, so a surviving launcher
+    would dangle: ``hermes`` in a new terminal resolves and then errors on
+    its missing venv target, which reads worse than command-not-found.
 
     A launcher that IS this process's own trampoline is mandatory-locked
-    against deletion but not rename (same fact
-    ``_install_repair._quarantine_running_hermes_exe`` relies on), so
-    deletion falls back to renaming it aside with a non-executable suffix.
+    against deletion but not rename, so removal falls back to renaming it
+    aside with a non-executable suffix.
 
     *windows* is an injectable platform verdict for tests (same pattern as
     ``_install_repair.ensure_windows_bin_launchers``).
@@ -467,32 +466,33 @@ def remove_windows_bin_launchers(*, windows: bool | None = None) -> list[Path]:
     if not windows:
         return []
     try:
-        # Lockstep launcher-name list — the same names install.ps1 and the
-        # startup heal stage into this dir.
-        from hermes_cli._install_repair import _WINDOWS_BIN_LAUNCHERS
         from hermes_constants import get_default_hermes_root
 
         bin_dir = get_default_hermes_root() / "bin"
     except Exception as e:
         log_warn(f"Could not locate the managed binary dir: {e}")
         return []
+    if not bin_dir.is_dir():
+        return []
 
     removed: list[Path] = []
-    for name in _WINDOWS_BIN_LAUNCHERS:
-        for suffix in (".exe", ".cmd"):
-            launcher = bin_dir / f"{name}{suffix}"
-            if not launcher.exists():
-                continue
+    for launcher in sorted(bin_dir.iterdir()):
+        if not launcher.is_file():
+            continue
+        try:
+            launcher.unlink()
+            removed.append(launcher)
+        except OSError:
+            aside = launcher.with_name(f"{launcher.name}.uninstalled.{os.getpid()}")
             try:
-                launcher.unlink()
+                os.rename(launcher, aside)
                 removed.append(launcher)
-            except OSError:
-                aside = launcher.with_name(f"{launcher.name}.uninstalled.{os.getpid()}")
-                try:
-                    os.rename(launcher, aside)
-                    removed.append(launcher)
-                except OSError as e:
-                    log_warn(f"Could not remove {launcher}: {e}")
+            except OSError as e:
+                log_warn(f"Could not remove {launcher}: {e}")
+    try:
+        bin_dir.rmdir()
+    except OSError:
+        pass  # leftovers (renamed-aside trampolines) keep the dir until next run
     return removed
 
 

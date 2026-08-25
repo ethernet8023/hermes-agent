@@ -353,7 +353,7 @@ _HERMES_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
 # system/venv Pythons — to the Hermes venv's stdlib, which crashes with
 # version-mismatch errors before a child script even imports a package
 # (#75018). Hermes itself treats PYTHONHOME as contamination in its own
-# child processes (managed_uv.py, sqlite_runtime.py), so stripping it from
+# child processes (sqlite_runtime.py), so stripping it from
 # subprocess envs is consistent. Users who need PYTHONHOME for a specific
 # child can set it explicitly in the command.
 #
@@ -617,7 +617,9 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
 })
 
 
-def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
+def hermes_subprocess_env(
+    *, inherit_credentials: bool = False, base_env: dict[str, str] | None = None
+) -> dict[str, str]:
     """Build a sanitized environment dict for a spawned subprocess.
 
     Centralized helper for the **non-terminal** spawn surface (browser,
@@ -648,8 +650,12 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     needs ``BROWSERBASE_API_KEY`` / ``FIRECRAWL_API_KEY``) should call with
     ``inherit_credentials=False`` and copy just those keys back from
     ``os.environ`` into the returned dict.
+
+    ``base_env`` swaps the starting environment (default ``os.environ``) —
+    for callers that already hold a curated env (pm's sanitized uv env) and
+    want the strip policy applied on top of it.
     """
-    env = os.environ.copy()
+    env = dict(base_env) if base_env is not None else os.environ.copy()
 
     # Tier 1 — always strip.
     for key in _ALWAYS_STRIP_KEYS:

@@ -338,7 +338,7 @@ def test_lsp_client_spawn_hides_console_window(monkeypatch):
 #
 # Windowless processes (pythonw gateway + kanban workers) flashed consoles
 # from three more spawn families: tools/env_probe._run's interpreter/pip
-# probes, tools/lazy_deps' uv→pip→ensurepip install ladder, and CPython
+# probes and CPython
 # 3.11/3.12's platform.win32_ver() which shells out `cmd /c ver` with
 # shell=True and no CREATE_NO_WINDOW. All are hide-only (creationflags);
 # win32_ver is neutralized by stubbing platform._syscmd_ver so the
@@ -371,38 +371,6 @@ def test_env_probe_run_hides_console_window(monkeypatch):
     assert kwargs["stdin"] == subprocess.DEVNULL
 
 
-def test_lazy_deps_uv_install_hides_console_window(monkeypatch):
-    from tools import lazy_deps
-
-    captured = []
-
-    def fake_run(cmd, **kwargs):
-        captured.append((cmd, kwargs))
-        return _Completed(stdout="installed", returncode=0)
-
-    monkeypatch.delenv(lazy_deps._LAZY_TARGET_ENV, raising=False)
-    monkeypatch.setattr(lazy_deps, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
-    monkeypatch.setattr(lazy_deps.subprocess, "run", fake_run)
-    monkeypatch.setattr(lazy_deps.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
-
-    res = lazy_deps._venv_pip_install(("left-pad",))
-
-    assert res.success
-    spawns = _spawns(captured, "pip", "install", "left-pad")
-    assert len(spawns) == 1, captured
-    cmd, kwargs = spawns[0]
-    assert cmd[:3] == ["/usr/bin/uv", "pip", "install"]
-    assert kwargs["creationflags"] == _CREATE_NO_WINDOW
-    assert kwargs["stdin"] == subprocess.DEVNULL
-
-
-
-
-
-
-
-
-@pytest.mark.windows_only
 def test_suppress_platform_ver_console_stubs_syscmd_ver(monkeypatch):
     """``_syscmd_ver`` is replaced by an in-process echo stub so win32_ver()
     takes its ValueError fallback instead of shelling out to `cmd /c ver`.

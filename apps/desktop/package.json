@@ -34,6 +34,8 @@
     "builder": "cross-env NODE_OPTIONS=--max-old-space-size=16384 node scripts/run-electron-builder.mjs",
     "pack": "npm run build && npm run builder -- --dir --publish never",
     "dist": "npm run build && npm run builder",
+    "payload": "node scripts/stage-payload.mjs",
+    "dist:bundled": "npm run payload && npm run dist",
     "dist:mac": "npm run build && npm run builder -- --mac",
     "dist:mac:dmg": "npm run build && npm run builder -- --mac dmg",
     "dist:mac:zip": "npm run build && npm run builder -- --mac zip",
@@ -216,6 +218,10 @@
       {
         "from": "build/install-stamp.json",
         "to": "install-stamp.json"
+      },
+      {
+        "from": "build/agent-payload",
+        "to": "agent-payload"
       },
       {
         "from": "assets/icon.ico",

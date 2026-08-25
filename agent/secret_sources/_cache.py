@@ -137,7 +137,7 @@ class DiskCache(Generic[K]):
             return None
         path = self.path(home_path)
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 payload = json.load(f)
         except (OSError, json.JSONDecodeError):
             return None

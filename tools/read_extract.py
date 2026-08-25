@@ -504,7 +504,7 @@ def _notebook_outputs(cell: dict, jq_pointer: str = "", filename: str = "") -> s
 
 def _extract_notebook(path: str) -> str:
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
+        with open(path, encoding="utf-8-sig", errors="replace") as fh:
             nb = json.load(fh)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ExtractionError(f"Not a valid notebook: {exc}") from exc

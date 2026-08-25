@@ -278,7 +278,7 @@ def _local_probe_disk_cache_path() -> Path:
 
 def _load_local_probe_disk_cache() -> Dict[str, Any]:
     try:
-        with _local_probe_disk_cache_path().open("r", encoding="utf-8") as f:
+        with _local_probe_disk_cache_path().open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -344,7 +344,7 @@ def _load_model_metadata_disk_cache() -> Dict[str, Dict[str, Any]]:
     """Load processed OpenRouter metadata cache from disk."""
     try:
         cache_path = _get_model_metadata_cache_path()
-        with cache_path.open("r", encoding="utf-8") as f:
+        with cache_path.open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return {}
@@ -1549,7 +1549,7 @@ def _load_context_cache() -> Dict[str, int]:
     if not path.exists():
         return {}
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             data = yaml.safe_load(f) or {}
         return data.get("context_lengths") or {}
     except Exception as e:

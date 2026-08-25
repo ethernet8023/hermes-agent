@@ -310,7 +310,7 @@ def _jobs_lock():
         try:
             try:
                 ensure_dirs()
-                lock_fd = open(_jobs_lock_file(), "a+", encoding="utf-8")
+                lock_fd = open(_jobs_lock_file(), "a+", encoding="utf-8-sig")
                 lock_fd.seek(0)
                 if fcntl is not None:
                     # Bounded acquisition (#60703): a plain blocking
@@ -1221,7 +1221,7 @@ def record_ticker_heartbeat(success: bool = False) -> None:
 
 def _epoch_file_age(path: Path) -> Optional[float]:
     try:
-        raw = path.read_text(encoding="utf-8").strip()
+        raw = path.read_text(encoding="utf-8-sig").strip()
         return max(0.0, time.time() - float(raw))
     except Exception:
         return None
@@ -1257,7 +1257,7 @@ def record_catch_up_occurrence() -> None:
     path = _current_cron_store().cron_dir / "catch_up_occurrences"
     try:
         try:
-            value = int(path.read_text(encoding="utf-8").strip())
+            value = int(path.read_text(encoding="utf-8-sig").strip())
         except (OSError, ValueError):
             value = 0
         _atomic_write_counter(path, max(0, value) + 1)
@@ -1304,7 +1304,7 @@ def get_catch_up_occurrence_count() -> int:
     """Return the profile-local stale-schedule catch-up count."""
     path = _current_cron_store().cron_dir / "catch_up_occurrences"
     try:
-        return max(0, int(path.read_text(encoding="utf-8").strip()))
+        return max(0, int(path.read_text(encoding="utf-8-sig").strip()))
     except (OSError, ValueError):
         return 0
 
@@ -1322,7 +1322,7 @@ def get_ticker_last_error() -> Optional[str]:
     """Return the most recent recorded tick error message, or None."""
     store = _current_cron_store()
     try:
-        raw = (store.cron_dir / "ticker_last_error").read_text(encoding="utf-8")
+        raw = (store.cron_dir / "ticker_last_error").read_text(encoding="utf-8-sig")
     except Exception:
         return None
     lines = raw.splitlines()

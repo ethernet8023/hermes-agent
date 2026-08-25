@@ -536,7 +536,7 @@ def _gateway_prompt(prompt_text: str, default: str = "", timeout: float = 300.0)
     while _time.monotonic() < deadline:
         if response_path.exists():
             try:
-                answer = response_path.read_text(encoding="utf-8").strip()
+                answer = response_path.read_text(encoding="utf-8-sig").strip()
                 response_path.unlink(missing_ok=True)
                 prompt_path.unlink(missing_ok=True)
                 return answer if answer else default
@@ -2954,7 +2954,7 @@ def _npm_manifest_paths() -> tuple[Path, ...]:
     root_pkg = _m().PROJECT_ROOT / "package.json"
     paths = [_m().PROJECT_ROOT / "package-lock.json", root_pkg]
     try:
-        workspaces = json.loads(root_pkg.read_text(encoding="utf-8")).get(
+        workspaces = json.loads(root_pkg.read_text(encoding="utf-8-sig")).get(
             "workspaces", []
         )
         if isinstance(workspaces, dict):  # legacy {"packages": [...]} form
@@ -3007,7 +3007,7 @@ def _npm_lockfile_changed(hermes_root: Path) -> bool:
         cache_file = hermes_root / f".npm_lock_hash_{cache_key}"
         if not cache_file.exists():
             return True
-        return cache_file.read_text(encoding="utf-8").strip() != current
+        return cache_file.read_text(encoding="utf-8-sig").strip() != current
     except OSError:
         return True
 
@@ -3501,7 +3501,7 @@ def _ensure_fhs_path_guard() -> None:
         if not cfg.is_file():
             continue
         try:
-            existing = cfg.read_text(errors="replace", encoding="utf-8")
+            existing = cfg.read_text(errors="replace", encoding="utf-8-sig")
         except OSError:
             continue
         # Idempotency: skip if any uncommented PATH= line already references
@@ -4135,7 +4135,7 @@ def _dependency_sync_would_rewrite(dist_name: str) -> bool | None:
         from packaging.version import Version
 
         pyproject = _m().PROJECT_ROOT / "pyproject.toml"
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
         project = data.get("project") or {}
         req_strings: list[str] = list(project.get("dependencies") or [])
         for extra_reqs in (project.get("optional-dependencies") or {}).values():

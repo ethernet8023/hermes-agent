@@ -820,7 +820,7 @@ def load_conversation(context_id: str, limit: int = 50) -> list[dict]:
         return []
     out: list[dict] = []
     try:
-        with path.open("r", encoding="utf-8") as fh:
+        with path.open("r", encoding="utf-8-sig") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:

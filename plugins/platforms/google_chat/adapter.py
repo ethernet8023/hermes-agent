@@ -558,7 +558,7 @@ class _ThreadCountStore:
             self._counts = {}
             return
         try:
-            raw = self._path.read_text(encoding="utf-8")
+            raw = self._path.read_text(encoding="utf-8-sig")
             data = json.loads(raw) if raw.strip() else {}
         except json.JSONDecodeError as exc:
             logger.warning(
@@ -799,7 +799,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
                 )
             # Validate file parses before handing to google-auth for nicer error.
             try:
-                with open(sa_path, "r", encoding="utf-8") as fh:
+                with open(sa_path, "r", encoding="utf-8-sig") as fh:
                     info = json.load(fh)
             except json.JSONDecodeError as exc:
                 raise ValueError(
@@ -924,7 +924,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         if not path.exists():
             return None
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             return data.get("bot_user_id") or None
         except (OSError, json.JSONDecodeError):
             return None
@@ -3599,7 +3599,7 @@ async def _standalone_send(
                 if not os.path.exists(sa_value):
                     return {"error": f"Google Chat standalone send: SA JSON file not found at {sa_value}"}
                 try:
-                    with open(sa_value, "r", encoding="utf-8") as fh:
+                    with open(sa_value, "r", encoding="utf-8-sig") as fh:
                         info = json.load(fh)
                 except json.JSONDecodeError as exc:
                     return {"error": f"Google Chat standalone send: SA JSON file is invalid: {exc}"}

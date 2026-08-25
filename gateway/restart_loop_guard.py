@@ -71,7 +71,7 @@ def _state_path():
 
 def _load_boots() -> List[float]:
     try:
-        raw = _state_path().read_text(encoding="utf-8")
+        raw = _state_path().read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         boots = data.get("boots", [])
         return [float(t) for t in boots if isinstance(t, (int, float))]

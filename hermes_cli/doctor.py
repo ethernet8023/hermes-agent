@@ -700,7 +700,7 @@ def _read_pyproject_version() -> str | None:
     """
     pyproject = PROJECT_ROOT / "pyproject.toml"
     try:
-        text = pyproject.read_text(encoding="utf-8")
+        text = pyproject.read_text(encoding="utf-8-sig")
     except OSError:
         return None
     in_project = False
@@ -1261,7 +1261,7 @@ def run_doctor(args):
         # latin-1 for Windows Notepad/cp1252 files that are not valid UTF-8 —
         # matches hermes_cli.env_loader._load_dotenv_with_fallback.
         try:
-            content = env_path.read_text(encoding="utf-8")
+            content = env_path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
             content = env_path.read_text(encoding="latin-1")
         if _has_provider_env_config(content):
@@ -1792,7 +1792,7 @@ def run_doctor(args):
     # Check for SOUL.md persona file
     soul_path = hermes_home / "SOUL.md"
     if soul_path.exists():
-        content = soul_path.read_text(encoding="utf-8").strip()
+        content = soul_path.read_text(encoding="utf-8-sig").strip()
         # Check if it's just the template comments (no real content)
         lines = [l for l in content.splitlines() if l.strip() and not l.strip().startswith(("<!--", "-->", "#"))]
         if lines:
@@ -1819,12 +1819,12 @@ def run_doctor(args):
         memory_file = memories_dir / "MEMORY.md"
         user_file = memories_dir / "USER.md"
         if memory_file.exists():
-            size = len(memory_file.read_text(encoding="utf-8").strip())
+            size = len(memory_file.read_text(encoding="utf-8-sig").strip())
             check_ok(f"MEMORY.md exists ({size} chars)")
         else:
             check_info("MEMORY.md not created yet (will be created when the agent first writes a memory)")
         if user_file.exists():
-            size = len(user_file.read_text(encoding="utf-8").strip())
+            size = len(user_file.read_text(encoding="utf-8-sig").strip())
             check_ok(f"USER.md exists ({size} chars)")
         else:
             check_info("USER.md not created yet (will be created when the agent first writes a memory)")
@@ -2975,7 +2975,7 @@ def run_doctor(args):
         if lock_file.exists():
             try:
                 import json
-                lock_data = json.loads(lock_file.read_text(encoding="utf-8"))
+                lock_data = json.loads(lock_file.read_text(encoding="utf-8-sig"))
                 count = len(lock_data.get("installed", {}))
                 check_ok(f"Lock file OK ({count} hub-installed skill(s))")
             except Exception:
@@ -3141,7 +3141,7 @@ def run_doctor(args):
                     if not wrapper.is_file():
                         continue
                     try:
-                        content = wrapper.read_text(encoding="utf-8")
+                        content = wrapper.read_text(encoding="utf-8-sig")
                         if "hermes -p" in content:
                             _m = _re.search(r"hermes -p (\S+)", content)
                             if _m and not profile_exists(_m.group(1)):

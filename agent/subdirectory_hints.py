@@ -105,7 +105,7 @@ class SubdirectoryHintTracker:
             try:
                 if not candidate.is_file():
                     continue
-                content = candidate.read_text(encoding="utf-8").strip()
+                content = candidate.read_text(encoding="utf-8-sig").strip()
             except (OSError, UnicodeDecodeError):
                 continue
             if content:
@@ -285,7 +285,7 @@ class SubdirectoryHintTracker:
             except OSError:
                 continue
             try:
-                content = hint_path.read_text(encoding="utf-8").strip()
+                content = hint_path.read_text(encoding="utf-8-sig").strip()
                 if not content:
                     continue
                 # Skip content we've already injected. The same AGENTS.md is

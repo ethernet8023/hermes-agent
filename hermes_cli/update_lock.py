@@ -178,7 +178,7 @@ def read_live_update(*, path: Path | None = None) -> UpdateHolder | None:
     """
     marker = path or update_marker_path()
     try:
-        raw = marker.read_text(encoding="utf-8")
+        raw = marker.read_text(encoding="utf-8-sig")
     except OSError:
         return None  # absent or unreadable => no live update
 
@@ -268,7 +268,7 @@ class UpdateLock:
             return
         self.acquired = False
         try:
-            raw = self.path.read_text(encoding="utf-8")
+            raw = self.path.read_text(encoding="utf-8-sig")
             owner = int(raw.splitlines()[0].strip())
         except (OSError, IndexError, ValueError):
             return

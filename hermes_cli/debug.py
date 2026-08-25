@@ -91,7 +91,7 @@ def _load_pending() -> list[dict]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         if isinstance(data, list):
             # Filter to well-formed entries only
             return [

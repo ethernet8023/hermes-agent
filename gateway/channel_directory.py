@@ -40,7 +40,7 @@ def _load_channel_aliases() -> Dict[str, Dict[str, str]]:
     if not CHANNEL_ALIASES_PATH.exists():
         return {}
     try:
-        with open(CHANNEL_ALIASES_PATH, encoding="utf-8") as f:
+        with open(CHANNEL_ALIASES_PATH, encoding="utf-8-sig") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -491,7 +491,7 @@ def _build_from_sessions_json(platform_name: str) -> List[Dict[str, str]]:
 
     entries = []
     try:
-        with open(sessions_path, encoding="utf-8") as f:
+        with open(sessions_path, encoding="utf-8-sig") as f:
             data = json.load(f)
 
         seen_ids = set()
@@ -530,7 +530,7 @@ def load_directory() -> Dict[str, Any]:
         _apply_channel_aliases(base["platforms"])
         return base
     try:
-        with open(DIRECTORY_PATH, encoding="utf-8") as f:
+        with open(DIRECTORY_PATH, encoding="utf-8-sig") as f:
             data = json.load(f)
         # Re-apply aliases on read so friendly names take effect immediately,
         # even between timed rebuilds and for brand-new alias entries.

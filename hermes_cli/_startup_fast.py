@@ -85,7 +85,7 @@ def is_container_startup_environment() -> bool:
     if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
         return True
     try:
-        with open("/proc/1/cgroup", encoding="utf-8") as handle:
+        with open("/proc/1/cgroup", encoding="utf-8-sig") as handle:
             cgroup = handle.read()
     except OSError:
         return False
@@ -97,7 +97,7 @@ def active_profile_may_override_home(hermes_root: str) -> bool:
     active_profile = os.path.join(hermes_root, "active_profile")
     try:
         if os.path.exists(active_profile):
-            with open(active_profile, encoding="utf-8") as handle:
+            with open(active_profile, encoding="utf-8-sig") as handle:
                 active = handle.read().strip()
             return bool(active and active != "default")
     except (OSError, UnicodeDecodeError):
@@ -149,7 +149,7 @@ def read_openai_version() -> str | None:
             base = os.getcwd()
         version_file = os.path.join(base, "openai", "_version.py")
         try:
-            with open(version_file, encoding="utf-8") as handle:
+            with open(version_file, encoding="utf-8-sig") as handle:
                 for line in handle:
                     stripped = line.strip()
                     if not stripped.startswith("__version__"):
@@ -173,7 +173,7 @@ def read_install_method() -> str | None:
     """
     stamp = os.path.join(_resolved_home(), ".install_method")
     try:
-        with open(stamp, encoding="utf-8") as handle:
+        with open(stamp, encoding="utf-8-sig") as handle:
             method = handle.read().strip().lower()
         return method or None
     except OSError:

@@ -139,7 +139,7 @@ def resolve_client_socket_path(home: Path) -> Optional[Path]:
     pointer = _pointer_path(home)
     try:
         if pointer.is_file():
-            target = pointer.read_text(encoding="utf-8").strip()
+            target = pointer.read_text(encoding="utf-8-sig").strip()
             if target:
                 candidate = Path(target)
                 if candidate.exists():

@@ -166,7 +166,7 @@ def _off_host_marker_files(files: List[Path]) -> dict[str, int]:
     counts = {marker: 0 for marker in off_host}
     for path in files:
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
         for marker, pattern in off_host.items():
@@ -191,7 +191,7 @@ def _approximately_count_tests(
     results = {}
 
     for path in files:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             contents = f.read()
         results[path] = contents.count("def test_")
 
@@ -634,7 +634,7 @@ def _load_durations(repo_root: Path) -> dict[str, float]:
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError) as e:
         print("[ERROR] Failed to load json durations file! {e}")
         return {}

@@ -32,7 +32,7 @@ def _dotenv_key_names() -> set[str]:
     """
     try:
         env_path = get_env_path()
-        text = env_path.read_text(encoding="utf-8", errors="ignore")
+        text = env_path.read_text(encoding="utf-8-sig", errors="ignore")
     except (OSError, UnicodeError):
         return set()
 

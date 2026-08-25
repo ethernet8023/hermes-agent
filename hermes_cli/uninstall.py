@@ -57,7 +57,7 @@ def remove_path_from_shell_configs():
     
     for config_path in configs:
         try:
-            content = config_path.read_text(encoding="utf-8")
+            content = config_path.read_text(encoding="utf-8-sig")
             original_content = content
             
             # Remove lines containing hermes-agent or hermes PATH entries
@@ -125,7 +125,7 @@ def remove_wrapper_script():
         if wrapper.exists():
             try:
                 # Check if it's our wrapper (contains hermes_cli reference)
-                content = wrapper.read_text(encoding="utf-8")
+                content = wrapper.read_text(encoding="utf-8-sig")
                 if 'hermes_cli' in content or 'hermes-agent' in content:
                     wrapper.unlink()
                     removed.append(wrapper)

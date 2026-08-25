@@ -189,7 +189,7 @@ def _read_bundled_manifest_names() -> Set[str]:
         return set()
     names: Set[str] = set()
     try:
-        for line in manifest.read_text(encoding="utf-8").splitlines():
+        for line in manifest.read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -218,7 +218,7 @@ def _read_hub_installed_names() -> Set[str]:
         # /api/skills endpoint. errors="replace" degrades the offending byte to
         # U+FFFD, keeping the (structurally valid) JSON — and every other
         # skill — readable. See #68053.
-        data = json.loads(lock_path.read_text(encoding="utf-8", errors="replace"))
+        data = json.loads(lock_path.read_text(encoding="utf-8-sig", errors="replace"))
         if isinstance(data, dict):
             installed = data.get("installed") or {}
             if isinstance(installed, dict):
@@ -284,7 +284,7 @@ def read_suppressed_names() -> Set[str]:
         return set()
     names: Set[str] = set()
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
                 names.add(line)
@@ -406,7 +406,7 @@ def list_archived_skill_names() -> List[str]:
 def _read_skill_name(skill_md: Path, fallback: str) -> str:
     """Parse the `name:` field from a SKILL.md YAML frontmatter."""
     try:
-        text = skill_md.read_text(encoding="utf-8", errors="replace")[:4000]
+        text = skill_md.read_text(encoding="utf-8-sig", errors="replace")[:4000]
     except OSError:
         return fallback
     in_frontmatter = False
@@ -665,7 +665,7 @@ def load_usage() -> Dict[str, Dict[str, Any]]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as e:
         logger.debug("Failed to read %s: %s", path, e)
         return {}

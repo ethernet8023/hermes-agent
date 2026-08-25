@@ -240,7 +240,7 @@ def list_entries(
         return []
     rows: List[Dict[str, Any]] = []
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8-sig") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:

@@ -427,7 +427,7 @@ def _ensure_target_ready(target: Path) -> Optional[str]:
         if target.exists():
             have = ""
             try:
-                have = stamp.read_text(encoding="utf-8").strip()
+                have = stamp.read_text(encoding="utf-8-sig").strip()
             except (OSError, FileNotFoundError):
                 have = ""
             if have and have != want:

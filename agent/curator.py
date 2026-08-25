@@ -103,7 +103,7 @@ def load_state() -> Dict[str, Any]:
     if not path.exists():
         return _default_state()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         if isinstance(data, dict):
             base = _default_state()
             base.update({k: v for k, v in data.items() if k in base or k.startswith("_")})

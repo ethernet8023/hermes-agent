@@ -208,7 +208,7 @@ def _read_disk_cache() -> tuple[dict[str, Any] | None, float]:
     except (OSError, FileNotFoundError):
         return (None, 0.0)
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return (None, 0.0)
@@ -451,7 +451,7 @@ def seed_cache_from_checkout(project_root: "Path | str") -> bool:
     """
     src = Path(project_root) / "website" / "static" / "api" / "model-catalog.json"
     try:
-        with open(src, encoding="utf-8") as fh:
+        with open(src, encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
         logger.debug("model catalog seed from checkout skipped (%s): %s", src, exc)

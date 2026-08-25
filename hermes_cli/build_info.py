@@ -51,7 +51,7 @@ def _resolve_git_head_sha(project_root: Path) -> Optional[str]:
         git_path = project_root / ".git"
         if git_path.is_file():
             # Worktree/submodule: ".git" is a pointer file.
-            pointer = git_path.read_text(encoding="utf-8", errors="replace").strip()
+            pointer = git_path.read_text(encoding="utf-8-sig", errors="replace").strip()
             if not pointer.startswith("gitdir:"):
                 return None
             git_dir = Path(pointer[len("gitdir:"):].strip())
@@ -66,13 +66,13 @@ def _resolve_git_head_sha(project_root: Path) -> Optional[str]:
         common_dir = git_dir
         commondir_file = git_dir / "commondir"
         if commondir_file.is_file():
-            rel = commondir_file.read_text(encoding="utf-8", errors="replace").strip()
+            rel = commondir_file.read_text(encoding="utf-8-sig", errors="replace").strip()
             common = Path(rel)
             if not common.is_absolute():
                 common = (git_dir / common).resolve()
             common_dir = common
 
-        head = (git_dir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+        head = (git_dir / "HEAD").read_text(encoding="utf-8-sig", errors="replace").strip()
         if not head.startswith("ref:"):
             # Detached HEAD: the file holds the sha itself.
             return head if len(head) == 40 else None
@@ -80,12 +80,12 @@ def _resolve_git_head_sha(project_root: Path) -> Optional[str]:
 
         loose = common_dir / ref_name
         if loose.is_file():
-            sha = loose.read_text(encoding="utf-8", errors="replace").strip()
+            sha = loose.read_text(encoding="utf-8-sig", errors="replace").strip()
             return sha if len(sha) == 40 else None
 
         packed = common_dir / "packed-refs"
         if packed.is_file():
-            for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in packed.read_text(encoding="utf-8-sig", errors="replace").splitlines():
                 line = line.strip()
                 if not line or line.startswith(("#", "^")):
                     continue
@@ -160,7 +160,7 @@ def get_build_sha(short: int = 8) -> Optional[str]:
     try:
         if not _BUILD_SHA_FILE.is_file():
             return None
-        sha = _BUILD_SHA_FILE.read_text(encoding="utf-8").strip()
+        sha = _BUILD_SHA_FILE.read_text(encoding="utf-8-sig").strip()
     except Exception:
         return None
     if not sha:

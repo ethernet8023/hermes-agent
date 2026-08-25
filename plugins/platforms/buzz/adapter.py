@@ -263,7 +263,7 @@ def _resolve_private_key(extra: Optional[dict] = None) -> str:
             candidates = []
     for path in candidates:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             continue
         if not isinstance(data, dict):

@@ -123,7 +123,7 @@ def _repo_npm_range() -> str | None:
     """Return ``engines.npm`` from the checkout's root ``package.json``."""
     package_json = Path(__file__).resolve().parent.parent / "package.json"
     try:
-        data = json.loads(package_json.read_text(encoding="utf-8"))
+        data = json.loads(package_json.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     engines = data.get("engines")

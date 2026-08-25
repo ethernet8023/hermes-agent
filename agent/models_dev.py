@@ -248,7 +248,7 @@ def _load_etag() -> str:
     try:
         etag_path = _get_etag_path()
         if etag_path.exists():
-            return etag_path.read_text(encoding="utf-8").strip()
+            return etag_path.read_text(encoding="utf-8-sig").strip()
     except Exception as e:
         logger.debug("Failed to load models.dev ETag: %s", e)
     return ""
@@ -314,7 +314,7 @@ def _load_disk_cache() -> Dict[str, Any]:
     try:
         cache_path = _get_cache_path()
         if cache_path.exists():
-            with open(cache_path, encoding="utf-8") as f:
+            with open(cache_path, encoding="utf-8-sig") as f:
                 data = json.load(f)
             if not _validate_registry(data):
                 logger.warning(

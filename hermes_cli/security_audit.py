@@ -184,7 +184,7 @@ def _discover_plugins(hermes_home: Path) -> list[Component]:
             path = plugin_dir / req_file
             if path.is_file():
                 try:
-                    pins = _parse_requirements(path.read_text(encoding="utf-8", errors="replace"))
+                    pins = _parse_requirements(path.read_text(encoding="utf-8-sig", errors="replace"))
                 except OSError:
                     continue
                 for name, version in pins:
@@ -192,7 +192,7 @@ def _discover_plugins(hermes_home: Path) -> list[Component]:
         pyproject = plugin_dir / "pyproject.toml"
         if pyproject.is_file():
             try:
-                pins = _parse_pyproject_pins(pyproject.read_text(encoding="utf-8", errors="replace"))
+                pins = _parse_pyproject_pins(pyproject.read_text(encoding="utf-8-sig", errors="replace"))
             except OSError:
                 continue
             for name, version in pins:

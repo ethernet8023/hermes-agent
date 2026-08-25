@@ -200,7 +200,7 @@ def slack_manifest_command(args) -> int:
         source_arg = str(long_description_file)
         try:
             source = Path(source_arg).expanduser()
-            with source.open("r", encoding="utf-8", newline="") as handle:
+            with source.open("r", encoding="utf-8-sig", newline="") as handle:
                 long_description = handle.read()
         except (OSError, UnicodeError, RuntimeError) as exc:
             print(

@@ -416,7 +416,7 @@ def check_for_updates() -> Optional[int]:
     now = time.time()
     try:
         if cache_file.exists():
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            cached = json.loads(cache_file.read_text(encoding="utf-8-sig"))
             if (
                 now - cached.get("ts", 0) < _UPDATE_CHECK_CACHE_SECONDS
                 and cached.get("rev") == embedded_rev
@@ -818,7 +818,7 @@ def banner_snapshot_fingerprint() -> Optional[str]:
 def load_banner_snapshot(enabled_toolsets: List[str] = None) -> Optional[Dict[str, Any]]:
     """Return the stored banner snapshot when its fingerprint is current."""
     try:
-        blob = json.loads(_banner_snapshot_path().read_text(encoding="utf-8"))
+        blob = json.loads(_banner_snapshot_path().read_text(encoding="utf-8-sig"))
     except Exception:
         return None
     if not isinstance(blob, dict):

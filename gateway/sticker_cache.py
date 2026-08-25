@@ -30,7 +30,7 @@ def _load_cache() -> dict:
     """Load the sticker cache from disk."""
     if CACHE_PATH.exists():
         try:
-            return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+            return json.loads(CACHE_PATH.read_text(encoding="utf-8-sig"))
         except (json.JSONDecodeError, OSError):
             return {}
     return {}

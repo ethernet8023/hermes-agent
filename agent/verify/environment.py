@@ -32,7 +32,7 @@ def load_manifest(root: Path) -> Recipe | None:
     """
     path = manifest_path(root)
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8-sig")
     except OSError:
         return None
     try:

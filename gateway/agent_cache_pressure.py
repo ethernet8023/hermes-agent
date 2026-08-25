@@ -124,7 +124,7 @@ def _cgroup_limit_bytes() -> Optional[int]:
     )
     for candidate in candidates:
         try:
-            raw = Path(candidate).read_text(encoding="utf-8").strip()
+            raw = Path(candidate).read_text(encoding="utf-8-sig").strip()
         except OSError:
             continue
         if not raw or raw == "max":

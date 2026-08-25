@@ -181,7 +181,7 @@ class _FileLock:
 
 def _read_entries(path: Path) -> list[dict[str, Any]]:
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
     except FileNotFoundError:
         return []

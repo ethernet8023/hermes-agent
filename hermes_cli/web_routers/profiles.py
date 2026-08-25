@@ -1054,7 +1054,7 @@ async def get_profile_soul(name: str):
     soul_path = _resolve_profile_dir(name) / "SOUL.md"
     if soul_path.exists():
         try:
-            return {"content": soul_path.read_text(encoding="utf-8"), "exists": True}
+            return {"content": soul_path.read_text(encoding="utf-8-sig"), "exists": True}
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"Could not read SOUL.md: {e}")
     return {"content": "", "exists": False}
@@ -1236,7 +1236,7 @@ async def import_profile_endpoint(body: ProfileImport):
     if overlay_path.is_file():
         try:
             import json as _json
-            desktop_overlay = _json.loads(overlay_path.read_text(encoding="utf-8"))
+            desktop_overlay = _json.loads(overlay_path.read_text(encoding="utf-8-sig"))
         except Exception:
             _log.exception("Reading desktop.json from imported profile %s failed", imported)
 
@@ -1257,6 +1257,6 @@ async def get_profile_desktop_overlay(name: str):
         return {"exists": False, "desktop": None}
     try:
         import json as _json
-        return {"exists": True, "desktop": _json.loads(overlay_path.read_text(encoding="utf-8"))}
+        return {"exists": True, "desktop": _json.loads(overlay_path.read_text(encoding="utf-8-sig"))}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not read desktop.json: {e}")

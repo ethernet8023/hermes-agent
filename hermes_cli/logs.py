@@ -295,7 +295,7 @@ def _read_last_n_lines(path: Path, n: int) -> list:
 
         # For files up to 1MB, just read the whole thing — simple and correct.
         if size <= 1_048_576:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
                 all_lines = f.readlines()
             return all_lines[-n:]
 
@@ -333,7 +333,7 @@ def _read_last_n_lines(path: Path, n: int) -> list:
 
     except Exception:
         # Fallback: read entire file
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
             all_lines = f.readlines()
         return all_lines[-n:]
 
@@ -347,7 +347,7 @@ def _follow_log(
     component_prefixes: Optional[Sequence[str]] = None,
 ) -> None:
     """Poll a log file for new content and print matching lines."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
         # Seek to end
         f.seek(0, 2)
         while True:

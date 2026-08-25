@@ -267,7 +267,7 @@ def read_latest_receipt() -> Optional[dict[str, Any]]:
         path = _receipt_dir() / "latest.json"
         if not path.is_file():
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
         return payload if isinstance(payload, dict) else None
     except Exception:
         return None

@@ -3532,7 +3532,7 @@ def _skill_slug_from_frontmatter(skill_md: Path) -> tuple[str | None, str | None
     can't be read or lacks a ``name:`` in its frontmatter.
     """
     try:
-        content = skill_md.read_text(encoding="utf-8", errors="replace")
+        content = skill_md.read_text(encoding="utf-8-sig", errors="replace")
     except Exception:
         return None, None
     content = content.lstrip("\ufeff")  # tolerate UTF-8 BOM (Windows editors)
@@ -3682,7 +3682,7 @@ def _load_gateway_config(config_path: "Path | None" = None) -> dict:
         try:
             if config_path.exists():
                 import yaml
-                with open(config_path, 'r', encoding='utf-8') as f:
+                with open(config_path, 'r', encoding='utf-8-sig') as f:
                     raw = yaml.safe_load(f) or {}
         except Exception:
             logger.debug("Could not load gateway config from %s", config_path)
@@ -7454,7 +7454,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     def _load_voice_modes(self) -> Dict[str, str]:
         try:
-            data = json.loads(self._VOICE_MODE_PATH.read_text(encoding="utf-8"))
+            data = json.loads(self._VOICE_MODE_PATH.read_text(encoding="utf-8-sig"))
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return {}
 
@@ -9360,7 +9360,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.warning("Prefill messages file not found: %s", path)
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if not isinstance(data, list):
                 logger.warning("Prefill messages file must contain a JSON array: %s", path)
@@ -11342,7 +11342,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         path = _hermes_home / self._STUCK_LOOP_FILE
         try:
-            counts = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            counts = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
         except Exception:
             counts = {}
 
@@ -11372,7 +11372,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return 0
 
         try:
-            counts = json.loads(path.read_text(encoding="utf-8"))
+            counts = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception:
             return 0
 
@@ -11420,7 +11420,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not path.exists():
             return
         try:
-            counts = json.loads(path.read_text(encoding="utf-8"))
+            counts = json.loads(path.read_text(encoding="utf-8-sig"))
             if session_key in counts:
                 del counts[session_key]
                 if counts:
@@ -21352,7 +21352,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     self._booted_from_restart = False
                     return True
                 return False
-            data = json.loads(marker_path.read_text(encoding="utf-8"))
+            data = json.loads(marker_path.read_text(encoding="utf-8-sig"))
         except Exception:
             return False
 
@@ -24057,7 +24057,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         for path in (claimed_path, pending_path):
             if path.exists():
                 try:
-                    pending = json.loads(path.read_text(encoding="utf-8"))
+                    pending = json.loads(path.read_text(encoding="utf-8-sig"))
                     platform_str = pending.get("platform")
                     chat_id = pending.get("chat_id")
                     chat_type = pending.get("chat_type")
@@ -24158,7 +24158,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
                 # Send final status
                 try:
-                    exit_code_raw = exit_code_path.read_text(encoding="utf-8").strip() or "1"
+                    exit_code_raw = exit_code_path.read_text(encoding="utf-8-sig").strip() or "1"
                     exit_code = int(exit_code_raw)
                     if exit_code == 0:
                         await adapter.send(
@@ -24212,7 +24212,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         and _up_pending_state.persistent.update_prompt_pending
                     )):
                 try:
-                    prompt_data = json.loads(prompt_path.read_text(encoding="utf-8"))
+                    prompt_data = json.loads(prompt_path.read_text(encoding="utf-8-sig"))
                     prompt_text = prompt_data.get("prompt", "")
                     default = prompt_data.get("default", "")
                     if prompt_text:
@@ -24310,7 +24310,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             elif not claimed_path.exists():
                 return True
 
-            pending = json.loads(claimed_path.read_text(encoding="utf-8"))
+            pending = json.loads(claimed_path.read_text(encoding="utf-8-sig"))
             platform_str = pending.get("platform")
             chat_id = pending.get("chat_id")
             chat_type = pending.get("chat_type")
@@ -24324,7 +24324,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 claimed_path.replace(pending_path)
                 return False
 
-            exit_code_raw = exit_code_path.read_text(encoding="utf-8").strip() or "1"
+            exit_code_raw = exit_code_path.read_text(encoding="utf-8-sig").strip() or "1"
             exit_code = int(exit_code_raw)
 
             # Read the captured update output
@@ -24406,7 +24406,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return None
 
         try:
-            data = json.loads(notify_path.read_text(encoding="utf-8"))
+            data = json.loads(notify_path.read_text(encoding="utf-8-sig"))
             platform_str = data.get("platform")
             chat_id = data.get("chat_id")
             chat_type = data.get("chat_type")
@@ -31450,7 +31450,7 @@ def main():
     config = None
     if args.config:
         import yaml
-        with open(args.config, encoding="utf-8") as f:
+        with open(args.config, encoding="utf-8-sig") as f:
             data = yaml.safe_load(f) or {}
             config = GatewayConfig.from_dict(data)
     

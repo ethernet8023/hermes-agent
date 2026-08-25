@@ -2094,7 +2094,7 @@ def _load_contributor_dir(directory: "Path | None" = None) -> dict:
         if not path.is_file() or path.name.startswith("."):
             continue
         try:
-            for line in path.read_text(encoding="utf-8").splitlines():
+            for line in path.read_text(encoding="utf-8-sig").splitlines():
                 line = line.strip()
                 if line and not line.startswith("#"):
                     mapping[path.name] = line.lstrip("@")
@@ -2153,7 +2153,7 @@ def next_available_tag(base_tag: str) -> tuple[str, str]:
 
 def get_current_version():
     """Read current semver from __init__.py."""
-    content = VERSION_FILE.read_text(encoding="utf-8")
+    content = VERSION_FILE.read_text(encoding="utf-8-sig")
     match = re.search(r'__version__\s*=\s*"([^"]+)"', content)
     return match.group(1) if match else "0.0.0"
 
@@ -2183,7 +2183,7 @@ def bump_version(current: str, part: str) -> str:
 def update_version_files(semver: str, calver_date: str):
     """Update version strings in source files."""
     # Update __init__.py
-    content = VERSION_FILE.read_text(encoding="utf-8")
+    content = VERSION_FILE.read_text(encoding="utf-8-sig")
     content = re.sub(
         r'__version__\s*=\s*"[^"]+"',
         f'__version__ = "{semver}"',
@@ -2197,7 +2197,7 @@ def update_version_files(semver: str, calver_date: str):
     VERSION_FILE.write_text(content, encoding="utf-8")
 
     # Update pyproject.toml
-    pyproject = PYPROJECT_FILE.read_text(encoding="utf-8")
+    pyproject = PYPROJECT_FILE.read_text(encoding="utf-8-sig")
     pyproject = re.sub(
         r'^version\s*=\s*"[^"]+"',
         f'version = "{semver}"',
@@ -2212,7 +2212,7 @@ def update_version_files(semver: str, calver_date: str):
     # from this field, so it must track pyproject to avoid drift.
     desktop_pkg = REPO_ROOT / "apps" / "desktop" / "package.json"
     if desktop_pkg.exists():
-        pkg_text = desktop_pkg.read_text(encoding="utf-8")
+        pkg_text = desktop_pkg.read_text(encoding="utf-8-sig")
         pkg_text = re.sub(
             r'("version"\s*:\s*)"[^"]+"',
             rf'\g<1>"{semver}"',

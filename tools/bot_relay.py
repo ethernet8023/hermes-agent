@@ -181,7 +181,7 @@ def write_remote_roster(root: Path | str, rows: Any) -> int:
 def read_remote_roster(root: Path | str) -> list[dict]:
     """The current remote roster (possibly empty). Never raises."""
     try:
-        raw = (relay_root(root) / ROSTER_FILE).read_text(encoding="utf-8")
+        raw = (relay_root(root) / ROSTER_FILE).read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         agents = data.get("agents") if isinstance(data, dict) else None
         if not isinstance(agents, list):
@@ -367,7 +367,7 @@ def claim_pending_envelopes(root: Path | str) -> list[dict]:
         if ttl > 0:
             expired = False
             try:
-                env = json.loads(path.read_text(encoding="utf-8"))
+                env = json.loads(path.read_text(encoding="utf-8-sig"))
                 created = float(env.get("created_at") or path.stat().st_mtime)
                 if now - created > ttl:
                     expired = True
@@ -398,7 +398,7 @@ def claim_pending_envelopes(root: Path | str) -> list[dict]:
         claimed = base / CLAIMED_DIR / path.name
         try:
             os.replace(path, claimed)  # atomic claim
-            out.append(json.loads(claimed.read_text(encoding="utf-8")))
+            out.append(json.loads(claimed.read_text(encoding="utf-8-sig")))
         except (OSError, ValueError):
             continue
     return out
@@ -512,7 +512,7 @@ def waiter_command(root: Path | str, envelope: dict) -> str:
         f"deadline = time.time() + {REPLY_WAIT_SECONDS}\n"
         "while time.time() < deadline:\n"
         "    if os.path.exists(p):\n"
-        "        d = json.load(open(p, encoding='utf-8'))\n"
+        "        d = json.load(open(p, encoding='utf-8-sig'))\n"
         "        if d.get('error'):\n"
         # The typed reason code (#93091) rides ahead of the free text so the
         # sending agent can branch on it (auth vs rate limit vs offline)

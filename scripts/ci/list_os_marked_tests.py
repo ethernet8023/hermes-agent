@@ -45,7 +45,7 @@ def find_marked_files(marker: str, root: Path) -> list[Path]:
     hits: list[Path] = []
     for path in sorted(root.rglob("test_*.py")):
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
         if pattern.search(text):

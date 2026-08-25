@@ -110,12 +110,12 @@ def load_tracked() -> List[Dict[str, Any]]:
         return []
 
     try:
-        return json.loads(tf.read_text(encoding="utf-8"))
+        return json.loads(tf.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, ValueError):
         bak = tf.with_suffix(".json.bak")
         if bak.exists():
             try:
-                data = json.loads(bak.read_text(encoding="utf-8"))
+                data = json.loads(bak.read_text(encoding="utf-8-sig"))
                 _log("WARN: tracked.json corrupted — restored from .bak")
                 return data
             except Exception:

@@ -773,7 +773,7 @@ def _read_small(path: Path) -> str:
     try:
         if not path.is_file() or path.stat().st_size > _MAX_FACT_FILE_BYTES:
             return ""
-        return path.read_text(encoding="utf-8", errors="replace")
+        return path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return ""
 

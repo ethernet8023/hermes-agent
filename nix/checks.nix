@@ -128,6 +128,146 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
       packages.configKeys = configKeys;
 
       checks = {
+        # The Nix runtime dir IS the pin table, not a copy of it. Before
+        # this, nix/npm-12-0-2.nix and runtime-pins.json pinned the same
+        # npm independently: two files to bump, and a devShell that could
+        # silently ship a different npm than every user's install.
+        #
+        # Asserting the relationship rather than the values means a pin
+        # bump needs no edit here — and the artifact this builds is the
+        # same runtime dir Hermes provisions, read by the same registry
+        # code, so a drift would fail `hermes doctor` on a nix install.
+        runtime-pins-are-the-source =
+          let
+            allPins = (builtins.fromJSON (builtins.readFile ../installation/runtime-pins.json)).tools;
+            # OPTIONAL tools are provisioned on demand into a writable
+            # runtime dir, so a sealed Nix bundle does not build them
+            # (nix/runtime-pins.nix `requiredPins`). Asserting a version
+            # for a tool that was never built would fail on the lookup,
+            # not on a real disagreement.
+            pins = lib.filterAttrs (_: entry: !(entry.optional or false)) allPins;
+            runtimeDir = pkgs.callPackage ./runtime-pins.nix { };
+            mismatched = lib.filterAttrs (
+              name: entry: runtimeDir.${name}.pinnedVersion != entry.version
+            ) pins;
+          in
+          pkgs.runCommand "hermes-runtime-pins-source" { } (
+            if mismatched != { } then
+              throw "Nix runtime tools disagree with runtime-pins.json: ${
+                toString (builtins.attrNames mismatched)
+              }"
+            else
+              ''
+                echo "PASS: ${toString (builtins.length (builtins.attrNames pins))} tools built from runtime-pins.json"
+                mkdir -p $out && echo ok > $out/result
+              ''
+          );
+
+        # The nix-built runtime dir satisfies the Python readers with no
+        # nix-specific code: `installation.env` assembles PATH from
+        # its facts, every pinned tool runs (patchelf'd), and each reports
+        # the version the table pinned. That is the whole contract — if
+        # this passes, a nix install needs no special handling anywhere.
+        runtime-dir-serves-python =
+          let
+            runtimeDir = pkgs.callPackage ./runtime-pins.nix { };
+            allPins = (builtins.fromJSON (builtins.readFile ../installation/runtime-pins.json)).tools;
+            # Only what the sealed bundle actually contains: optional
+            # tools are staged on demand into a writable runtime dir, so
+            # there is nothing here to probe.
+            pins = lib.filterAttrs (_: entry: !(entry.optional or false)) allPins;
+            # "How do I ask your version" is genuinely per-tool; the TOOLS
+            # come from the table, so a new pin surfaces here as a missing
+            # probe rather than going silently unchecked.
+            #
+            # npm is resolved from PATH but launched through node on
+            # purpose: its shim is `#!/usr/bin/env node`, and the Nix
+            # build sandbox has no /usr/bin/env (exit 126). That is a
+            # sandbox artifact, not a property of the artifact under test
+            # — `command -v npm` still proves the assembled PATH resolves
+            # to the pinned npm rather than node's bundled copy.
+            probes = {
+              node = "node --version";
+              npm = "node \"$(command -v npm)\" --version";
+              uv = "uv --version";
+              git = "git --version";
+              gh = "gh --version";
+              ripgrep = "rg --version";
+            };
+            probeFor =
+              name:
+              probes.${name}
+                or (throw "runtime-dir-serves-python: no version probe for pinned tool '${name}'");
+          in
+          pkgs.runCommand "hermes-runtime-dir-serves-python"
+            {
+              nativeBuildInputs = [ hermesVenv ];
+            }
+            ''
+              set -euo pipefail
+              export HOME=$TMPDIR
+
+              # This check drives the venv directly, so it must set what
+              # the package's wrapper sets. A sealed venv has no repo root
+              # above site-packages, so the pin table is pointed at by
+              # HERMES_RUNTIME_PINS — the same bare-data-dir treatment as
+              # HERMES_OPTIONAL_SKILLS and HERMES_INSTALL_ROOT.
+              export HERMES_RUNTIME_PINS=${../installation/runtime-pins.json}
+              export HERMES_RUNTIME_DIR=${runtimeDir}
+
+              # PATH comes from the facts file, via the same assembler
+              # every Hermes subprocess uses. No hand-built PATH here:
+              # that would test a PATH this check invented. It is seeded
+              # with the build PATH because the assembler PREPENDS (that
+              # is the behaviour under test) and the script still needs
+              # coreutils afterwards.
+              eval "$(${hermesVenv}/bin/python3 - <<'PY'
+              import os
+              from pathlib import Path
+              from installation.env import with_managed_runtimes
+
+              env = with_managed_runtimes(
+                  {"PATH": os.environ["PATH"]}, runtime_dir=Path("${runtimeDir}")
+              )
+              for key in ("PATH", "GIT_EXEC_PATH", "GIT_SSL_CAINFO", "npm_config_cache"):
+                  if env.get(key):
+                      print(f"export {key}={env[key]!r}")
+              PY
+              )"
+
+              ${lib.concatStringsSep "\n" (
+                lib.mapAttrsToList (name: entry: ''
+                  echo "== ${name} (pinned ${entry.version})"
+                  got=$(${probeFor name} 2>&1 | head -1)
+                  echo "   $got"
+                  case "$got" in
+                    *${entry.version}*) ;;
+                    *) echo "expected ${entry.version} from ${name}"; exit 1 ;;
+                  esac
+                '') pins
+              )}
+
+              # And the sealed-install gate agrees this dir is current.
+              ${hermesVenv}/bin/python3 - <<'PY'
+              import json, tempfile
+              from pathlib import Path
+              from installation.provisioner import require_current_runtimes, stale_tools
+
+              runtime_dir = Path("${runtimeDir}")
+              drift = stale_tools(runtime_dir=runtime_dir)
+              assert not drift, f"nix runtime dir is stale against its own pins: {drift}"
+
+              with tempfile.TemporaryDirectory() as td:
+                  sealed = Path(td)
+                  (sealed / "install-stamp.json").write_text(json.dumps({"distribution": "nix", "updateMechanism": "external"}))
+                  require_current_runtimes(project_root=sealed, runtime_dir=runtime_dir)
+              print("sealed-install gate: current")
+              PY
+
+              mkdir -p $out && echo ok > $out/result
+            '';
+
+
         # Cross-platform evaluation — catches "not supported for interpreter"
         # errors (e.g. sphinx dropping python311) without needing a darwin builder.
         # Evaluation is pure and instant; it doesn't build anything.

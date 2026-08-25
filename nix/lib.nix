@@ -32,10 +32,21 @@
 let
   repoRoot = ./..;
 
-  npm12 = callPackage ./npm-12-0-2.nix { };
+  # The managed runtime tools come from the repo's pin table, not from a
+  # version and digest restated here. runtime-pins.json is what a source
+  # install, `hermes update` and the desktop payload all provision from,
+  # so the devShell and every nix build get the same tools those users
+  # get. npm used to be pinned twice (nix/npm-12-0-2.nix vs the table),
+  # which is two places to bump and one silent skew when someone bumps
+  # only one.
+  runtimeDir = callPackage ./runtime-pins.nix { };
+  npm12 = runtimeDir.npm;
   node_gyp_11_4_0 = callPackage ./node-gyp-11-4-0.nix { };
   nodejs_26_npm_12 = symlinkJoin {
     name = "nodejs-26-npm-12";
+    # npm FIRST: it supersedes the npm bundled inside node, and
+    # symlinkJoin resolves a collision in favour of the earlier path.
+    # The pin table states that relationship as npm's `extends: [node]`.
     paths = [
       npm12
       nodejs_26

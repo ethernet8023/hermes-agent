@@ -1,0 +1,166 @@
+{
+  "$id": "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/runtime-pins.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hermes Tool Provisioning Manifest",
+  "description": "Exact, verifiable pins for every tool Hermes manages per-install. One source of truth read by installation/provisioner.py and desktop payload staging. Every tool pins an exact version plus, per target, an exact download URL and its sha256.",
+  "type": "object",
+  "required": ["schemaVersion", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer to this schema file for editor validation."
+    },
+    "$comment": {
+      "type": "string",
+      "description": "Documentation for maintainers. Ignored."
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "const": 2,
+      "description": "Bump when the manifest shape changes."
+    },
+    "tools": {
+      "type": "object",
+      "description": "Map of tool name -> a pinned version & per-target artifacts.",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "additionalProperties": { "$ref": "#/$defs/toolEntry" }
+    }
+  },
+  "$defs": {
+    "toolEntry": {
+      "type": "object",
+      "required": ["version", "files"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Exact upstream version string (no ranges). Semver, or a bare revision number for upstreams that number builds rather than release them (playwright's chromium).",
+          "oneOf": [
+            { "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.]+)?$" },
+            { "pattern": "^[0-9]+$" }
+          ]
+        },
+        "$comment": {
+          "type": "string",
+          "description": "Notes on why this tool/version/build variant was chosen."
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "A capability nobody asked for is not downloaded until something asks. Optional tools are staged on demand, may declare missing targets, and their absence is not drift.",
+          "default": false
+        },
+        "onPath": {
+          "type": "boolean",
+          "description": "Whether this tool's bin dir joins the managed PATH. False for artifacts that are not a CLI surface (a browser tree the consumer locates by directory).",
+          "default": true
+        },
+        "python": {
+          "type": "string",
+          "description": "The interpreter version this tool installs. Only 'uv' may carry it: uv IS the installer the pin configures, and python-build-standalone's own checksums travel with it rather than being duplicated here.",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "extends": {
+          "type": "array",
+          "description": "Tools this one plugs into. One edge, two consequences, both derived rather than restated in code: the tool is INSTALLED after everything it extends (staging may run them), and its bin dir sorts BEFORE theirs on PATH (it exists to supersede a copy they ship). npm extends node for exactly that reason.",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "requires": {
+          "type": "array",
+          "description": "Tools this one cannot function without. Drives SELECTION only: asking for this tool (--extra, provision_tool) also asks for these, transitively. No install-order or PATH consequence — that is what separates it from 'extends'. agent-browser requires the chromium pair it launches.",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "files": {
+          "type": "object",
+          "description": "Map of '<platform>-<arch>' targets to their pinned artifact, or to a declared gap saying why no artifact exists there. The single key 'any' replaces the whole map when one artifact serves every target. Otherwise every target is named: a silently absent row and a deliberate gap look identical to a reader, and only one of them is a bug.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/target"
+          },
+          "additionalProperties": { "$ref": "#/$defs/targetEntry" },
+          "oneOf": [
+            {
+              "required": ["any"],
+              "properties": {
+                "any": { "$ref": "#/$defs/artifact" },
+                "darwin-arm64": { "$ref": "#/$defs/missing" },
+                "darwin-x64": { "$ref": "#/$defs/missing" },
+                "linux-arm64": { "$ref": "#/$defs/missing" },
+                "linux-x64": { "$ref": "#/$defs/missing" },
+                "win32-arm64": { "$ref": "#/$defs/missing" },
+                "win32-x64": { "$ref": "#/$defs/missing" }
+              }
+            },
+            {
+              "required": [
+                "darwin-arm64",
+                "darwin-x64",
+                "linux-arm64",
+                "linux-x64",
+                "win32-arm64",
+                "win32-x64"
+              ],
+              "not": { "required": ["any"] }
+            }
+          ]
+        }
+      }
+    },
+    "target": {
+      "type": "string",
+      "description": "Target architecture for binaries, or 'any' for a target-independent artifact (a source/registry tarball whose bytes do not vary).",
+      "enum": [
+        "any",
+        "darwin-arm64",
+        "darwin-x64",
+        "linux-arm64",
+        "linux-x64",
+        "win32-arm64",
+        "win32-x64"
+      ]
+    },
+    "targetEntry": {
+      "description": "What this target has: an artifact to download, or a reason there is none. Exactly one — the union makes 'present and missing at once' unrepresentable rather than a rule the runtime has to check.",
+      "oneOf": [
+        { "$ref": "#/$defs/artifact" },
+        { "$ref": "#/$defs/missing" }
+      ]
+    },
+    "missing": {
+      "type": "object",
+      "description": "A DECLARED gap. The reason is what separates 'upstream ships no such build' from 'someone forgot a row', and the resolver quotes it when refusing.",
+      "required": ["missing"],
+      "additionalProperties": false,
+      "properties": {
+        "missing": {
+          "type": "string",
+          "description": "Why no artifact exists for this target, in a sentence a user can act on.",
+          "minLength": 1
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["url", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "URL from where this artifact can be downloaded from.",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Lowercase hex-encoded SHA-256 digest of the downloaded artifact, exactly 64 characters.",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

@@ -227,6 +227,26 @@ def get_default_hermes_root() -> Path:
     return result
 
 
+# ─── Install-scoped runtime dir ─────────────────────────────────────────
+# HERMES_HOME holds PROFILE state (config, sessions, skills). Install-scoped
+# artifacts — managed binaries, venvs, true caches, update bookkeeping —
+# belong to ONE install of Hermes and live beside its code in
+# ``<install root>/.hermes-runtime/``. Two installs sharing one home must
+# never share these (different node versions, venv ABIs, update stamps).
+#
+# Install paths live in `installation.paths` — the bottom of that layer,
+# where the pin/fact tables and the provisioner can reach them without
+# importing back up into this module. Re-exported here because ~40 callers
+# already ask hermes_constants for them.
+from installation.paths import (  # noqa: E402
+    RUNTIME_DIR_NAME,
+    get_install_root,
+    get_runtime_dir,
+    reset_install_root_override,
+    set_install_root_override,
+)
+
+
 def get_optional_skills_dir(default: Path | None = None) -> Path:
     """Return the optional-skills directory, honoring package-manager wrappers.
 

@@ -53,10 +53,6 @@ param(
     #   powershell -File install.ps1 -ShowResolvedPaths
     [switch]$ShowResolvedPaths,
 
-    # --- Ensure mode (dep_ensure.py entry point) ---
-    [string]$Ensure = "",
-    [switch]$PostInstall,
-
     # --- Desktop GUI build (opt-in) ---
     # When set, install.ps1 includes Stage-Desktop in the manifest and
     # builds apps/desktop into a launchable Hermes.exe.
@@ -248,10 +244,7 @@ function ConvertTo-LongPath {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $Path }
     # Only 8.3 short names carry a tilde+digit ("~1"); skip every resolver for
     # ordinary long paths, which is the overwhelmingly common case.
-    if ($Path -notmatch '~\d') {
-        $script:LastResolver = 'skipped-long-path'
-        return $Path
-    }
+    if ($Path -notmatch '~\d') { return $Path }
 
     # 1. kernel32. Compiled on first use only, so a normal profile never pays
     #    the Add-Type cost (this file is re-entered once per install stage).
@@ -329,12 +322,6 @@ function Set-LongProfileEnvVars {
     return $rewrote
 }
 
-# ConvertTo-LongPath only assigns $script:LastResolver when a ~\d short path
-# actually needs expansion, so an ordinary long profile leaves it unset -- and
-# the ResolvedPathReport below reads it unconditionally, which is fatal under
-# Set-StrictMode before any stage starts. 'none' is the resolver's own value
-# for "nothing ran".
-$script:LastResolver = 'none'
 $script:NormalizedProfilePaths = Set-LongProfileEnvVars
 
 # Re-derive the install paths now that the env vars behind their defaults are
@@ -391,14 +378,6 @@ $PythonVersion = "3.11"
 # interpreters, so this list also matches a pre-existing system Python.  Single
 # source of truth shared by Test-Python's fallback and Resolve-AvailablePythonVersion.
 $PythonFallbackVersions = @("3.12", "3.13", "3.10")
-$NodeVersion = "22"
-# The npm range the root package.json pins in `engines.npm`.  A constant rather
-# than a manifest read like the POSIX side does: Test-Node runs BEFORE the repo
-# is cloned, so there is usually no package.json on disk yet (and none at all
-# when install.ps1 is piped straight from the web).  Get-NpmRange prefers the
-# manifest whenever it does exist, so a drifted constant self-corrects on any
-# run against an existing checkout.
-$NpmRange = ">=12.0.0"
 
 # Stage-protocol version.  Bumped only for genuinely breaking changes to the
 # manifest schema, stage-name set semantics, or stdout JSON shape.  Adding a
@@ -662,193 +641,122 @@ function Write-BrowserEnv {
     Add-Content -Path $envFile -Value "AGENT_BROWSER_EXECUTABLE_PATH=$BrowserPath" -Encoding UTF8
 }
 
-function Install-AgentBrowser {
-    $npm = Resolve-NpmCmd
-    if (-not $npm) {
-        Write-Err "npm not found -- install Node.js first"
-        throw "npm not found"
-    }
-
-    # agent-browser itself is intentionally NOT installed here (#43564 /
-    # PR #44772 review): it resolves lazily via `npx agent-browser` instead,
-    # which every consumer (tools/browser_tool.py, `hermes update`'s npx
-    # cache warm) already goes through. Eagerly npm-installing a second,
-    # separately version-pinned copy here -- only reachable via this
-    # explicit -Ensure browser fallback in the first place -- was redundant
-    # complexity and an extra credential/supply-chain surface for a path
-    # npx already covers.
-    Write-Info "Installing camofox browser server..."
-    $prefixDir = Join-Path $HermesHome "node"
-    if (-not (Test-Path $prefixDir)) {
-        New-Item -ItemType Directory -Path $prefixDir -Force | Out-Null
-    }
-    $npmLog = [System.IO.Path]::GetTempFileName()
-    $prevEAP = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    & $npm install -g --prefix $prefixDir --silent --ignore-scripts "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
-    $npmExit = $LASTEXITCODE
-    $ErrorActionPreference = $prevEAP
-    if ($npmExit -ne 0) {
-        $npmDetail = Get-Content $npmLog -Raw -ErrorAction SilentlyContinue
-        Remove-Item $npmLog -Force -ErrorAction SilentlyContinue
-        Write-Err "npm install -g failed (exit $npmExit): $npmDetail"
-        Show-NpmCertHint $npmDetail | Out-Null
-        # This install runs with --silent, so $npmDetail is often near-empty;
-        # npm's debug log is the only place the real error survives.
-        Write-NpmDebugLogTail -NpmOutput $npmDetail
-        throw "npm install failed"
-    }
-    Remove-Item $npmLog -Force -ErrorAction SilentlyContinue
-
-    $sysBrowser = Find-SystemBrowser
-    if ($sysBrowser) {
-        Write-BrowserEnv -BrowserPath $sysBrowser
-        Write-Info "Explicit browser override set -- Chromium download will be skipped when agent-browser installs on demand"
-    }
-    Write-Success "Agent-browser ready"
-}
-
 # ============================================================================
 # Dependency checks
 # ============================================================================
 
-# Resolve the PowerShell host executable used to spawn child PowerShell
-# processes (the astral uv installer below).  We must NOT hardcode the bare
-# name `powershell`: it names *Windows PowerShell* and only resolves when its
-# System32 directory is on PATH.  When install.ps1 is run under PowerShell 7+
-# (`pwsh`) -- or any session where `powershell` isn't on PATH -- a bare
-# `powershell` spawn dies with "The term 'powershell' is not recognized",
-# aborting uv installation (field report: Windows install stuck, uv install
-# failed with exactly that message).  Prefer the absolute path of the host we
-# are already running in (PATH-independent), then fall back to whichever of
-# powershell/pwsh is resolvable, and only then to the bare name.
-function Get-PowerShellHostExe {
-    try {
-        $hostExe = (Get-Process -Id $PID).Path
-        if ($hostExe -and (Test-Path $hostExe)) {
-            $leaf = Split-Path $hostExe -Leaf
-            # Only trust the current host when it is a real PowerShell CLI
-            # (not e.g. powershell_ise.exe or an embedded host that can't take
-            # `-ExecutionPolicy`/`-Command`).
-            if ($leaf -match '^(?i:powershell|pwsh)\.exe$') { return $hostExe }
-        }
-    } catch { }
-    foreach ($candidate in @("powershell", "pwsh")) {
-        $cmd = Get-Command $candidate -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if ($cmd -and $cmd.Source) { return $cmd.Source }
+# --- BEGIN GENERATED: bootstrap pins (scripts/gen-bootstrap-pins.py) ---
+# Derived from installation/runtime-pins.json. DO NOT EDIT BY HAND:
+# run scripts/gen-bootstrap-pins.py after a pin bump.
+$script:UvPinVersion = "0.12.3"
+$script:PythonPinVersion = "3.11.15"
+$script:UvPinFiles = @{
+    "win32-x64" = @{
+        Url    = "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-pc-windows-msvc.zip"
+        Sha256 = "b23350c79e8ad0192b8124af13a0f17e8d4e4549524785e1aef389ae5a06990e"
     }
-    # Last-ditch: hand back the bare name so the spawn surfaces its own error.
-    return "powershell"
+    "win32-arm64" = @{
+        Url    = "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-pc-windows-msvc.zip"
+        Sha256 = "4343217d668727b8a8eb5cad92389a1d2eeead93c89940d1b955ba1bb15462eb"
+    }
 }
 
+$script:GitPinVersion = "2.53.0"
+$script:GitPinFiles = @{
+    "win32-x64" = @{
+        Url    = "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.3/PortableGit-2.53.0.3-64-bit.7z.exe"
+        Sha256 = "b365da794b1d2225eb24d5f5e09ef7792cfd5fa26c3a3586210280c80dff3a2a"
+    }
+    "win32-arm64" = @{
+        Url    = "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.3/PortableGit-2.53.0.3-arm64.7z.exe"
+        Sha256 = "0db54010054c01f35501cf69e1e32d3710138ecb934d188bd77093afed24300e"
+    }
+}
+# --- END GENERATED: bootstrap pins ---
+
 function Install-Uv {
-    # Hermes owns its own uv at $HermesHome\bin\uv.exe.  Always install there --
-    # no PATH probing, no conda guards, no multi-location resolution chains.
-    # The runtime update path (hermes_cli/managed_uv.py) looks in the same
-    # place, so install.ps1 and `hermes update` stay in sync.
-    $managedUv = Join-Path $HermesHome "bin\uv.exe"
+    # Hermes owns its own uv at $InstallDir\.hermes-runtime\uv\uv.exe -- the
+    # SAME install-scoped location managed_uv.managed_uv_path() resolves, so
+    # the binary this installer stages is the one every later `hermes update`
+    # / ensure_uv() finds. No PATH probing, no conda guards, no second copy
+    # in $HermesHome\bin.
+    # The binary is the EXACT artifact pinned in installation/runtime-pins.json
+    # (URL + sha256 via the generated fragment above): the same authority the
+    # provisioner uses for every other managed tool. No astral-latest.
+    # Runs AFTER Stage-Repository: the install dir must exist to hold it.
+    $uvDir = Join-Path $InstallDir ".hermes-runtime\uv"
+    $managedUv = Join-Path $uvDir "uv.exe"
 
     if (Test-Path $managedUv) {
-        $script:UvCmd = $managedUv
         $version = & $managedUv --version
-        Write-Success "Managed uv found ($version)"
-        return $true
-    }
-
-    Write-Info "Installing managed uv into $HermesHome\bin ..."
-    New-Item -ItemType Directory -Path (Join-Path $HermesHome "bin") -Force | Out-Null
-
-    # UV_INSTALL_DIR tells the astral installer to place the binary
-    # directly into $HermesHome\bin instead of ~/.local/bin.
-    $prevEAP = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        $env:UV_INSTALL_DIR = Join-Path $HermesHome "bin"
-        # Spawn via the resolved host exe (see Get-PowerShellHostExe) rather
-        # than a bare `powershell`, which isn't guaranteed to be on PATH under
-        # PowerShell 7 / pwsh-only setups.
-        $psHostExe = Get-PowerShellHostExe
-
-        # Rungs 1 + 2: run the uv installer -- astral.sh first, then the
-        # byte-identical copy published on GitHub releases.  Corporate
-        # proxies and AV products frequently block astral.sh while
-        # github.com is reachable (issue #69216), so a second source turns
-        # a hard failure into a working install.  Capture the installer
-        # output (Tee-Object) instead of discarding it: when every source
-        # fails, the real error (download blocked, AV quarantine,
-        # permissions) must reach the user instead of only the generic
-        # "installed but not found" message.
-        $installerOutput = @()
-        $astralOut = @()
-        & $psHostExe -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex" 2>&1 | Tee-Object -Variable astralOut | Out-Null
-        $installerOutput += "--- uv installer source: astral.sh ---"
-        $installerOutput += @($astralOut | ForEach-Object { "$_" })
-        if (Test-Path $managedUv) {
-            Write-Info "uv installer succeeded via astral.sh"
-        } else {
-            Write-Info "astral.sh uv installer did not produce $managedUv; trying GitHub releases mirror ..."
-            $ghOut = @()
-            & $psHostExe -ExecutionPolicy ByPass -c "irm https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1 | iex" 2>&1 | Tee-Object -Variable ghOut | Out-Null
-            $installerOutput += "--- uv installer source: GitHub releases ---"
-            $installerOutput += @($ghOut | ForEach-Object { "$_" })
-            if (Test-Path $managedUv) {
-                Write-Info "uv installer succeeded via GitHub releases"
-            }
-        }
-
-        # Rung 3: salvage an existing uv.exe.  When the installer cannot run
-        # at all (network fully blocked) but a working uv already exists --
-        # on PATH, or at ~/.local/bin (the astral default location when
-        # UV_INSTALL_DIR was ignored by an older installer) -- copy it into
-        # the managed location so the managed-first invariant holds
-        # (hermes_cli/managed_uv.py looks only at $HermesHome\bin\uv.exe).
-        if (-not (Test-Path $managedUv)) {
-            $existingUv = $null
-            $uvOnPath = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-            if ($uvOnPath -and $uvOnPath.Source -and (Test-Path $uvOnPath.Source)) {
-                $existingUv = $uvOnPath.Source
-            }
-            if (-not $existingUv) {
-                $defaultUv = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
-                if (Test-Path $defaultUv) { $existingUv = $defaultUv }
-            }
-            if ($existingUv) {
-                Write-Info "Salvaging existing uv from $existingUv"
-                try {
-                    Copy-Item $existingUv $managedUv -Force
-                    # Verify the salvaged binary actually runs before
-                    # trusting it as the managed uv.
-                    $null = & $managedUv --version
-                } catch {
-                    Write-Info "Existing uv at $existingUv could not be salvaged: $_"
-                    Remove-Item $managedUv -Force -ErrorAction SilentlyContinue
-                }
-            }
-        }
-
-        $ErrorActionPreference = $prevEAP
-
-        if (Test-Path $managedUv) {
+        # Keep it only when it IS the pinned version -- a pin bump must
+        # propagate, and a stale binary predating the pin is unverified.
+        if ($version -match [regex]::Escape($script:UvPinVersion)) {
             $script:UvCmd = $managedUv
-            $version = & $managedUv --version
-            Write-Success "Managed uv installed ($version)"
+            Write-Success "Managed uv found ($version)"
             return $true
         }
+        Write-Info "Managed uv is '$version', pin is $($script:UvPinVersion) -- replacing"
+    }
 
-        Write-Err "uv installed but not found at $managedUv"
-        if ($installerOutput.Count -gt 0) {
-            Write-Info "uv installer output (last 15 lines):"
-            $installerOutput | Select-Object -Last 15 | ForEach-Object { Write-Info "  $_" }
+    $target = "win32-$(Get-WindowsArch)"
+    $pin = $script:UvPinFiles[$target]
+    if (-not $pin) {
+        Write-Err "No pinned uv build for this platform ($target)"
+        Write-Info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
+        return $false
+    }
+
+    Write-Info "Installing pinned uv $($script:UvPinVersion) into $uvDir ..."
+    New-Item -ItemType Directory -Path $uvDir -Force | Out-Null
+
+    $tmpDir = Join-Path ([IO.Path]::GetTempPath()) "hermes-uv-bootstrap-$PID"
+    $zipPath = Join-Path $tmpDir "uv.zip"
+    try {
+        New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+        Invoke-WebRequest -Uri $pin.Url -OutFile $zipPath -UseBasicParsing
+
+        # Digest check BEFORE extraction -- a mismatched archive is deleted,
+        # never unpacked.
+        $digest = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($digest -ne $pin.Sha256.ToLowerInvariant()) {
+            Write-Err "uv download digest mismatch (expected $($pin.Sha256), got $digest)"
+            Write-Info "The download may be corrupted or tampered with. Re-run the installer."
+            return $false
         }
-        Write-Info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
-        return $false
+
+        $extractDir = Join-Path $tmpDir "unpacked"
+        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+        # The zip carries uv.exe (+ uvx.exe) at the root or under one
+        # versioned wrapper dir -- take whichever layout arrived.
+        $uvExe = Get-ChildItem -Path $extractDir -Filter "uv.exe" -Recurse |
+            Select-Object -First 1
+        if (-not $uvExe) {
+            Write-Err "uv.exe not found inside the downloaded archive"
+            return $false
+        }
+        Move-Item -Path $uvExe.FullName -Destination $managedUv -Force
+        $uvxExe = Get-ChildItem -Path $extractDir -Filter "uvx.exe" -Recurse |
+            Select-Object -First 1
+        if ($uvxExe) {
+            Move-Item -Path $uvxExe.FullName -Destination (Join-Path $uvDir "uvx.exe") -Force
+        }
+
+        $version = & $managedUv --version
+        if (-not $version) {
+            Write-Err "Pinned uv staged but does not run on this host"
+            return $false
+        }
+        $script:UvCmd = $managedUv
+        Write-Success "Managed uv installed ($version)"
+        return $true
     } catch {
-        if ($prevEAP) { $ErrorActionPreference = $prevEAP }
-        Write-Err "Failed to install uv: $_"
+        Write-Err "Failed to install pinned uv: $_"
         Write-Info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
         return $false
+    } finally {
+        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -919,132 +827,6 @@ function Set-ManagedNodeFirstOnUserPath {
     }
 }
 
-# The npm range to install into the managed Node tree.  Prefers the checkout's
-# root package.json so the installer and the manifest cannot drift; falls back
-# to the $NpmRange constant, which is the common case here because Test-Node
-# runs before the repo is cloned.
-function Get-NpmRange {
-    $manifest = Join-Path $InstallDir "package.json"
-    if (Test-Path $manifest) {
-        try {
-            $engines = (Get-Content $manifest -Raw | ConvertFrom-Json).engines
-            if ($engines -and $engines.npm) { return [string]$engines.npm }
-        } catch { }
-    }
-    return $NpmRange
-}
-
-# Upgrade the Hermes-managed Node tree's bundled npm into $NpmRange.
-#
-# The nodejs.org zip ships whatever npm that Node major bundles -- Node 26.5.1
-# bundles npm 11.17.0, one minor below the root package.json's own
-# `engines.npm` floor of >=12.  The repo .npmrc sets `engine-strict=true`, so
-# that is fatal rather than a warning and a brand-new install dies at the first
-# `npm ci` with EBADENGINE.  Provision the right npm here instead of reacting
-# to the failure later.
-#
-# Three details are load-bearing, mirroring _nb_ensure_bundled_npm_range in
-# scripts/lib/node-bootstrap.sh and upgrade_managed_npm in
-# hermes_cli/npm_engine.py:
-#   - a temp cwd, so the checkout's own .npmrc (engine-strict,
-#     min-release-age) does not gate the very upgrade meant to satisfy it;
-#   - npm_config_min_release_age=0, which also neutralises a user ~/.npmrc;
-#   - an explicit --prefix at the managed tree, so the upgrade rewrites the
-#     tree's own npm rather than installing a second copy elsewhere.
-#
-# Best-effort: a failure leaves a working Node with an old npm, which beats no
-# Node at all, and npm_engine.py still covers the EBADENGINE that follows.
-function Update-ManagedNpm {
-    param([string]$NodeDir)
-
-    $npmCmd = Join-Path $NodeDir "npm.cmd"
-    if (-not (Test-Path $npmCmd)) { return $false }
-
-    $range = Get-NpmRange
-
-    # Skip the network round-trip when the bundled npm already satisfies the
-    # range.  Only the ">=N" shape we actually author is parsed; anything more
-    # exotic falls through to letting npm itself decide.
-    if ($range -match '^>=(\d+)') {
-        $want = [int]$Matches[1]
-        try {
-            $have = (& $npmCmd --version 2>$null)
-            if ($have -match '^(\d+)') {
-                if ([int]$Matches[1] -ge $want) { return $true }
-            }
-        } catch { }
-    }
-
-    # In-app updates run while the desktop app's Node processes are alive.
-    # The managed npm lives inside the very tree they execute from, so an
-    # in-place upgrade would hit WinError 5 (Access denied) on npm.cmd
-    # (#80926).  Defer; the next update with the app closed retries.
-    if (Test-ManagedNodeInUse $NodeDir) {
-        Write-Warn "Hermes-managed Node.js is in use by a running app; skipping the bundled npm upgrade (applies on a later update with the app closed)."
-        return $false
-    }
-
-    Write-Info "Upgrading bundled npm to satisfy $range ..."
-
-    $tmpCwd = Join-Path $env:TEMP ("hermes-npm-upgrade-" + [Guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Force -Path $tmpCwd | Out-Null
-    $prevAge = $env:npm_config_min_release_age
-    $prevCI = $env:CI
-    $prevEAP = $ErrorActionPreference
-    Push-Location $tmpCwd
-    try {
-        $env:npm_config_min_release_age = "0"
-        $env:CI = "1"
-        # Relax EAP=Stop so npm's stderr lines don't get wrapped as
-        # ErrorRecords and short-circuit before $LASTEXITCODE is checked.
-        # Same pattern as Install-Uv.
-        $ErrorActionPreference = "Continue"
-        & $npmCmd install --global --prefix $NodeDir "npm@$range" `
-            --no-fund --no-audit --progress=false 2>&1 | Out-Null
-        $exit = $LASTEXITCODE
-    } catch {
-        $exit = 1
-    } finally {
-        $ErrorActionPreference = $prevEAP
-        Pop-Location
-        $env:npm_config_min_release_age = $prevAge
-        $env:CI = $prevCI
-        Remove-Item -Recurse -Force $tmpCwd -ErrorAction SilentlyContinue
-    }
-
-    if ($exit -ne 0) {
-        Write-Warn "Could not upgrade bundled npm to $range -- ``npm ci`` may fail with EBADENGINE."
-        Write-Info  "Fix manually: npm install -g --prefix `"$NodeDir`" npm@`"$range`""
-        return $false
-    }
-
-    Write-Success "npm $(& $npmCmd --version 2>$null) installed"
-    return $true
-}
-
-function Test-ManagedNodeInUse {
-    param([string]$NodeDir)
-    # Windows locks files that running processes execute from.  During an
-    # in-app update the desktop app's Node processes may hold the managed
-    # tree open, and rewriting it then fails with WinError 5 (Access denied)
-    # on npm.cmd (#80926).  Cheap pre-check used to skip destructive steps;
-    # the rename/move itself remains the authoritative guard.
-    #
-    # Check the executable path AND the command line: a cmd.exe wrapper
-    # running npm.cmd from the tree reports its own exe (cmd.exe lives in
-    # System32) while the tree path appears only in the command line.
-    # Win32_Process.CommandLine is available on Windows PowerShell 5.1 and
-    # 7+ (the Get-Process .CommandLine ETS property is 7.4+ only), and a
-    # single CIM query beats a per-process property access loop.
-    return @(
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
-                ($_.ExecutablePath -like "$NodeDir\*") -or
-                ($_.CommandLine -like "*$NodeDir*")
-            }
-    ).Count -gt 0
-}
-
 # Re-discover uv without re-installing it.  Cross-process stage drivers
 # (the desktop GUI's onboarding wizard, CI step-runners) invoke each stage
 # in a fresh powershell process, so $script:UvCmd set by Install-Uv in a
@@ -1067,8 +849,9 @@ function Resolve-UvCmd {
         # Stale; fall through to re-discover.
     }
 
-    # Check the managed location first -- this is where Install-Uv puts it.
-    $managedUv = Join-Path $HermesHome "bin\uv.exe"
+    # Check the managed location first -- this is where Install-Uv puts it
+    # (the install-scoped runtime dir; requires $InstallDir to be resolved).
+    $managedUv = Join-Path $InstallDir ".hermes-runtime\uv\uv.exe"
     if (Test-Path $managedUv) {
         $script:UvCmd = $managedUv
         return
@@ -1118,8 +901,14 @@ function Resolve-AvailablePythonVersion {
 }
 
 function Test-Python {
+    # Decision 3: the exact interpreter comes from the generated pin
+    # fragment, unconditionally. The fragment is generated from the same
+    # commit's pin table (gen-bootstrap-pins.py fails if the python pin
+    # is absent), so there is no "script without a pin" state to fall
+    # back from.
+    $PythonVersion = $script:PythonPinVersion
     Write-Info "Checking Python $PythonVersion..."
-    
+
     # Let uv find or install Python
     try {
         $pythonPath = & $UvCmd python find $PythonVersion 2>$null
@@ -1332,10 +1121,13 @@ function Install-Git {
     package manager):
       1. Existing ``git`` on PATH -- use it as-is (the common fast path).
       2. Download **PortableGit** from the official git-for-windows GitHub
-         release (self-extracting 7z.exe) and unpack it to
-         ``%LOCALAPPDATA%\hermes\git`` -- never touches system Git, never
-         requires admin, works even on locked-down machines and machines
-         with a broken system Git install.
+         release (self-extracting 7z.exe) and publish it into the Hermes
+         tool store (``%LOCALAPPDATA%\hermes\tools\git-<ver>-<target>``,
+         the provisioner's own layout, marker file and all) -- never
+         touches system Git, never requires admin, works even on
+         locked-down machines and machines with a broken system Git
+         install. The provisioner later finds the marker and reuses the
+         entry instead of downloading the same bytes a second time.
 
     **Why PortableGit, not MinGit:**  MinGit is the minimal-automation
     distribution and ships ONLY ``git.exe`` -- no bash, no POSIX utilities.
@@ -1347,8 +1139,9 @@ function Install-Git {
     We deliberately skip winget because it fails badly when the system Git
     install is in a half-installed state (partially registered, or uninstall-
     blocked).  Owning the Hermes copy of Git ourselves is predictable and
-    recoverable: if it ever breaks, ``Remove-Item %LOCALAPPDATA%\hermes\git``
-    and re-running this installer fully recovers.
+    recoverable: if it ever breaks, delete its store entry under
+    ``%LOCALAPPDATA%\hermes\tools`` and re-running this installer fully
+    recovers.
 
     After install we locate ``bash.exe`` and persist the path in
     ``HERMES_GIT_BASH_PATH`` (User scope) so Hermes can find it in a fresh
@@ -1381,85 +1174,150 @@ function Install-Git {
         Write-Info "Trying a Hermes-managed PortableGit install instead..."
     }
 
-    # Download PortableGit into $HermesHome\git.  Always works as long as
-    # we can reach github.com -- no admin, no winget, no reliance on the
-    # user's possibly-broken system Git install.
-    Write-Info "Git not found -- downloading PortableGit to $HermesHome\git\ ..."
+    # Download PortableGit into the machine-wide tool store -- the SAME
+    # entry the provisioner publishes (`installation/paths.py
+    # get_tool_store`, `provisioner.py _publish`): one directory per
+    # <tool>-<version>-<target>, a marker file inside, staged next to its
+    # final name and moved in with one rename.
+    #
+    # This is the BOOTSTRAP git: it must exist before the repo is cloned,
+    # so it cannot come from the provisioner (which lives in the repo).
+    # Speaking the store's own protocol is what retires the old double
+    # fetch: the provisioner finds the marker, verifies the tuple, and
+    # `kept`-fast-paths it instead of downloading the same bytes again
+    # into a second location.
+    Write-Info "Git not found -- staging PortableGit into the Hermes tool store..."
     Write-Info "(no admin rights required; isolated from any system Git install)"
 
     try {
         $arch = Get-WindowsArch
-        if ($arch -eq 'arm64') {
-            $assetTag = 'arm64'
-            $downloadIsZip = $false
-        } elseif ($arch -eq 'x64') {
-            $assetTag = '64-bit'
-            $downloadIsZip = $false
-        } else {
-            # PortableGit does not ship 32-bit / arm builds -- fall back to MinGit
-            # 32-bit with a warning that bash-based features will be unavailable.
-            $assetTag = '32-bit-mingit'
-            $downloadIsZip = $true
+
+        # The pinned git-for-windows artifact, generated from
+        # installation/runtime-pins.json (see the GENERATED block above).
+        # Hard-coded version literals used to live here and had already
+        # drifted a full minor ahead of the pin table, so a Windows box got
+        # one git from the installer and a different one from the
+        # provisioner. Deriving both from the table is what keeps them
+        # equal. Static release URLs also dodge the api.github.com
+        # rate limit (60/hour/IP unauthenticated) that breaks installs
+        # behind CGNAT and corporate NAT.
+        $pinTarget = if ($arch -eq 'arm64') { "win32-arm64" } else { "win32-x64" }
+        $gitPin = $script:GitPinFiles[$pinTarget]
+        if (-not $gitPin) {
+            throw "No pinned PortableGit for $pinTarget (32-bit Windows is not supported: PortableGit ships 64-bit and arm64 only, and Hermes needs the bash it bundles)"
         }
 
-        # Pinned git-for-windows release. We deliberately do NOT hit
-        # api.github.com/repos/.../releases/latest here: that endpoint
-        # is rate-limited to 60 requests/hour/IP for unauthenticated
-        # callers, and users behind CGNAT / corporate NAT / dorm WiFi
-        # routinely hit the limit, breaking the installer.
-        # Static github.com/.../releases/download/<tag>/<asset> URLs
-        # are not subject to the API rate limit.
-        $gitTag    = "v2.54.0.windows.1"
-        $gitVer    = "2.54.0"
-        $gitVerTag = "$gitVer.windows.1"
-
-        if ($arch -eq "32-bit-mingit") {
-            Write-Warn "32-bit Windows detected -- PortableGit is 64-bit only.  Installing MinGit 32-bit as a last resort; bash-dependent Hermes features (terminal tool, agent-browser) will not work on this machine."
-            $assetName    = "MinGit-$gitVer-32-bit.zip"
-            $downloadIsZip = $true
-        } elseif ($arch -eq "arm64") {
-            $assetName    = "PortableGit-$gitVer-arm64.7z.exe"
-            $downloadIsZip = $false
-        } else {
-            $assetName    = "PortableGit-$gitVer-64-bit.7z.exe"
-            $downloadIsZip = $false
-        }
-
-        $downloadUrl = "https://github.com/git-for-windows/git/releases/download/$gitTag/$assetName"
-        $downloadExt = if ($downloadIsZip) { "zip" } else { "7z.exe" }
+        $downloadUrl = $gitPin.Url
+        $assetName = Split-Path $downloadUrl -Leaf
         $tmpFile = "$env:TEMP\$assetName"
-        $gitDir = "$HermesHome\git"
 
-        Write-Info "Downloading $assetName (Git for Windows $gitVerTag)..."
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
+        # The store entry, spelled exactly the way the provisioner spells
+        # it (registry.store_entry_name): <tool>-<version>-<target>.
+        # $HermesHome may be a profile home; the store is machine-wide by
+        # definition, so anchor it at the base home the way
+        # installation.paths.get_tool_store does.
+        $storeRoot = if ($HermesHome -match '\\profiles\\[^\\]+$') {
+            Split-Path (Split-Path $HermesHome -Parent) -Parent
+        } else { $HermesHome }
+        $storeDir = Join-Path $storeRoot "tools"
+        $entryName = "git-$($script:GitPinVersion)-$pinTarget"
+        $gitDir = Join-Path $storeDir $entryName
+        $markerPath = Join-Path $gitDir ".hermes-store-entry.json"
 
-        if (Test-Path $gitDir) {
-            Write-Info "Removing previous Git install at $gitDir ..."
-            Remove-Item -Recurse -Force $gitDir
-        }
-        New-Item -ItemType Directory -Path $gitDir -Force | Out-Null
-
-        if ($downloadIsZip) {
-            Expand-Archive -Path $tmpFile -DestinationPath $gitDir -Force
-        } else {
-            # PortableGit is a self-extracting 7z archive.  Invoke it with
-            # `-o<target> -y` (silent) to extract to $gitDir.  No 7z install
-            # required; it's fully self-contained.
-            Write-Info "Extracting PortableGit to $gitDir ..."
-            $extractProc = Start-Process -FilePath $tmpFile `
-                -ArgumentList "-o`"$gitDir`"", "-y" `
-                -NoNewWindow -Wait -PassThru
-            if ($extractProc.ExitCode -ne 0) {
-                throw "PortableGit extraction failed (exit code $($extractProc.ExitCode))"
+        # kept fast path, same rule as the provisioner: a marker whose
+        # tuple matches means this exact verified artifact is already
+        # published -- possibly by a previous install run, possibly by
+        # another Hermes install on this machine. Never re-download it,
+        # and NEVER rewrite it: another install may be running it now.
+        $alreadyPublished = $false
+        if (Test-Path $markerPath) {
+            try {
+                $marker = Get-Content $markerPath -Raw | ConvertFrom-Json
+                if ($marker.tool -eq "git" -and
+                    $marker.version -eq $script:GitPinVersion -and
+                    $marker.target -eq $pinTarget) {
+                    $alreadyPublished = $true
+                }
+            } catch {
+                $alreadyPublished = $false
             }
         }
-        Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
+
+        if (-not $alreadyPublished) {
+            Write-Info "Downloading $assetName (Git for Windows $script:GitPinVersion)..."
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
+
+            # Verify BEFORE extracting: this artifact is a self-extracting
+            # executable, so an unverified download is arbitrary code that the
+            # next line runs. Same reason installation/provisioner.py checks the
+            # digest before handing the file to itself.
+            $actualHash = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash.ToLower()
+            if ($actualHash -ne $gitPin.Sha256.ToLower()) {
+                Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
+                throw "PortableGit digest mismatch: expected $($gitPin.Sha256), got $actualHash"
+            }
+
+            # Stage beside the final name, then one rename. The staging
+            # dir lives INSIDE the store because a rename across
+            # filesystems is a copy, not an atomic move -- same reason the
+            # provisioner's _publish stages in <store>/.staging-<uuid>.
+            $staging = Join-Path $storeDir ".staging-$([guid]::NewGuid().ToString('N'))"
+            New-Item -ItemType Directory -Path $staging -Force | Out-Null
+
+            # PortableGit is a self-extracting 7z archive.  Invoke it with
+            # `-o<target> -y` (silent) to extract.  No 7z install required;
+            # it's fully self-contained. Both pinned targets are .7z.exe,
+            # so there is no archive branch to choose between.
+            Write-Info "Extracting PortableGit..."
+            $extractProc = Start-Process -FilePath $tmpFile `
+                -ArgumentList "-o`"$staging`"", "-y" `
+                -NoNewWindow -Wait -PassThru
+            if ($extractProc.ExitCode -ne 0) {
+                Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+                throw "PortableGit extraction failed (exit code $($extractProc.ExitCode))"
+            }
+            Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
+
+            if (-not (Test-Path "$staging\cmd\git.exe")) {
+                Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+                throw "Git extraction did not produce git.exe in the staged tree"
+            }
+
+            # Marker BEFORE the rename, so it lands with the tree in one
+            # atomic step; an entry without a marker is junk from an
+            # interrupted run and the provisioner will replace it.
+            # WriteAllText, not Set-Content: PS 5.1's -Encoding UTF8 adds
+            # a BOM, and Python's json.loads refuses BOM'd input -- the
+            # provisioner would junk the entry and re-download.
+            $markerJson = @{
+                tool        = "git"
+                version     = $script:GitPinVersion
+                target      = $pinTarget
+                sha256      = $gitPin.Sha256.ToLower()
+                publishedAt = (Get-Date).ToUniversalTime().ToString("o")
+            } | ConvertTo-Json
+            [System.IO.File]::WriteAllText(
+                (Join-Path $staging ".hermes-store-entry.json"),
+                $markerJson,
+                (New-Object System.Text.UTF8Encoding $false)
+            )
+
+            try {
+                Move-Item -Path $staging -Destination $gitDir -ErrorAction Stop
+            } catch {
+                # Lost the publish race to a concurrent install run. The
+                # winner's bytes passed the same digest check; use theirs.
+                Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+                if (-not (Test-Path "$gitDir\cmd\git.exe")) { throw }
+            }
+        } else {
+            Write-Info "PortableGit $script:GitPinVersion already in the tool store -- reusing it"
+        }
 
         # PortableGit layout: cmd\git.exe + bin\bash.exe + usr\bin\ (coreutils)
-        # MinGit layout:      cmd\git.exe + usr\bin\bash.exe (if present)
         $gitExe = "$gitDir\cmd\git.exe"
         if (-not (Test-Path $gitExe)) {
-            throw "Git extraction did not produce git.exe at $gitExe"
+            throw "Git store entry did not produce git.exe at $gitExe"
         }
 
         # Add to session PATH so the rest of this install run can use git.
@@ -1533,10 +1391,21 @@ function Set-GitBashEnvVar {
     # this with a system-Git-only installation anyway.
     #
     # Layouts:
-    #   PortableGit (our default): $HermesHome\git\bin\bash.exe
-    #   MinGit (32-bit fallback):  $HermesHome\git\usr\bin\bash.exe
-    $candidates += "$HermesHome\git\bin\bash.exe"       # PortableGit layout (primary)
-    $candidates += "$HermesHome\git\usr\bin\bash.exe"   # MinGit / PortableGit usr\bin fallback
+    #   Tool store (what we stage now): <store>\git-<ver>-<target>\bin\bash.exe
+    #   Legacy pre-store installs:      $HermesHome\git\bin\bash.exe
+    #   A system Git for Windows may instead keep it under usr\bin.
+    $bashStoreRoot = if ($HermesHome -match '\\profiles\\[^\\]+$') {
+        Split-Path (Split-Path $HermesHome -Parent) -Parent
+    } else { $HermesHome }
+    $storeGitEntries = Get-ChildItem -Path (Join-Path $bashStoreRoot "tools") `
+        -Directory -Filter "git-*" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending
+    foreach ($entry in $storeGitEntries) {
+        $candidates += "$($entry.FullName)\bin\bash.exe"
+        $candidates += "$($entry.FullName)\usr\bin\bash.exe"
+    }
+    $candidates += "$HermesHome\git\bin\bash.exe"       # legacy layout
+    $candidates += "$HermesHome\git\usr\bin\bash.exe"   # legacy usr\bin fallback
 
     # git.exe on PATH can tell us where the install root is
     $gitCmd = Get-Command git -ErrorAction SilentlyContinue
@@ -1571,224 +1440,100 @@ function Set-GitBashEnvVar {
     Write-Info "If needed, set HERMES_GIT_BASH_PATH manually to your bash.exe path."
 }
 
-# The dependency tree's real Node floor is >=22.22.0, set by react-router 8.3.0
-# (`engines.node`). Keep this in sync with the root package.json: looser lets an
-# install reach a `npm ci` that dies with EBADENGINE, stricter replaces a working
-# user toolchain for nothing. Returns $true when a `node --version` string
-# clears that floor.
-function Test-NodeVersionOk {
-    param([string]$Version)
-    try {
-        $v = [version]($Version -replace '^v', '' -replace '-.*$', '')
-    } catch {
+function Invoke-RuntimeProvisioning {
+    # THE dep engine, shared with `hermes update`: one implementation of
+    # "download the pinned tools", in Python, reading runtime-pins.json.
+    # This installer's job ends at "python can run"; node, npm, git, gh and
+    # ripgrep below that line belong to the provisioner.
+    #
+    # Run with `uv run --no-project`, NOT the venv python. The installation
+    # package is stdlib-only by contract, so provisioning does not need the
+    # venv and must not wait for it: uv is bootstrapped before this point,
+    # and the tools installed here are what later stages build with.
+    #
+    # FATAL on failure. Hermes runs its own toolchain -- the versions in
+    # runtime-pins.json are the ones every `npm ci` and every managed
+    # subprocess uses, and `engine-strict=true` means a system Node that
+    # happens to be present is not a substitute. An install that continues
+    # without them produces a Hermes that cannot build the web UI, cannot
+    # run browser tools, and reports no error until the user hits one of
+    # those. Better to fail here, where the cause is on screen.
+    Write-Info "Provisioning managed runtimes (node, npm, uv, git, gh, ripgrep)..."
+
+    if (-not (Test-Path (Join-Path $InstallDir "installation"))) {
+        Write-Err "No installation package in $InstallDir -- the repository download did not complete."
         return $false
     }
-    if ($v.Major -eq 22) { return ($v.Minor -ge 22) }
-    return ($v.Major -gt 22)
-}
+    Resolve-UvCmd
+    if (-not $script:UvCmd) {
+        Write-Err "uv is not available -- cannot run the provisioner"
+        return $false
+    }
 
-function Test-Node {
-    Write-Info "Checking Node.js (for browser tools)..."
+    # Downloads fail transiently: a dropped connection, a slow mirror, a
+    # registry hiccup. Retrying costs seconds; failing the install costs the
+    # user a reinstall. The provisioner is idempotent and skips tools already
+    # at their pinned version, so a retry only re-fetches what is missing.
+    #
+    # The browser rides the same sweep: --extra agent-browser stages the
+    # driver AND (through the pin table's requires edge) the pinned Chromium
+    # pair, digest-verified into the shared store -- replacing the old
+    # `npx playwright install chromium` download into
+    # %LOCALAPPDATA%\ms-playwright.
+    #
+    # cua-driver rides it too. It used to arrive through Install-CuaDriver,
+    # which piped upstream's install.ps1 to iex: whatever release upstream
+    # had tagged, unverified by us, plus a FileShare::None lock file and a
+    # scheduled-task repair for that installer's own quoting bug. As a
+    # pinned optional tool it is one more --extra.
+    $provisionerArgs = @("--extra", "agent-browser")
+    if (-not $SkipComputerUse) {
+        $provisionerArgs += @("--extra", "cua-driver")
+    }
+    foreach ($attempt in 1..3) {
+        Push-Location $InstallDir
+        try {
+            & $script:UvCmd run --no-project python -m installation.provisioner @provisionerArgs
+            $code = $LASTEXITCODE
+        } finally {
+            Pop-Location
+        }
 
-    if (Get-Command node -ErrorAction SilentlyContinue) {
-        $version = node --version
-        if (Test-NodeVersionOk $version) {
-            Ensure-NodeExeOnPath | Out-Null
-            Write-Success "Node.js $version found"
-            $script:HasNode = $true
+        if ($code -eq 0) {
+            Write-Success "Managed runtimes provisioned"
+            # Derive PATH from the shared runtime-facts authority
+            # (installation.env.managed_path_dirs), NOT a hard-coded layout:
+            # the facts file records the pinned tool's store-relative path
+            # and its extends-order, so the managed bin dirs are whatever
+            # THIS install's pins actually resolved to. A literal
+            # `.hermes-runtime\node` prepend drifted from the pinned node
+            # (e.g. node living in the shared tool store) and could shadow
+            # the real one with nothing.
+            try {
+                $managedPathDirs = & $script:UvCmd run --no-project python -c "import installation.env, json; print(json.dumps([str(p) for p in installation.env.managed_path_dirs()]))"
+                $parsedDirs = $managedPathDirs | ConvertFrom-Json
+                foreach ($d in $parsedDirs) {
+                    if ($d -and (Test-Path $d) -and ($env:Path -notlike "*$d*")) {
+                        $env:Path = "$d;$env:Path"
+                    }
+                }
+            } catch {
+                Write-Warn "Could not read managed runtime facts for PATH ($_); continuing with provisioner-staged PATH."
+            }
             return $true
         }
-        Write-Warn "Node.js $version is too old (Hermes requires Node >=26)"
-    }
 
-    # Prefer a Hermes-managed Node from a previous run over a too-old system one.
-    $managedNode = "$HermesHome\node\node.exe"
-    if ((Test-Path $managedNode) -and (Test-NodeVersionOk (& $managedNode --version))) {
-        $version = & $managedNode --version
-        $env:Path = "$HermesHome\node;$env:Path"
-        Set-ManagedNodeFirstOnUserPath "$HermesHome\node"
-        Write-Success "Node.js $version found (Hermes-managed)"
-        # A tree from an older install still has that Node major's bundled
-        # npm, which is below the current engines.npm floor. No-ops when the
-        # npm is already in range, so reruns cost one --version probe.
-        Update-ManagedNpm "$HermesHome\node" | Out-Null
-        $script:HasNode = $true
-        return $true
-    }
-
-    Write-Info "Installing Hermes-managed Node.js $NodeVersion LTS..."
-
-    # Try the portable-zip path FIRST -- no UAC, no admin, no winget MSI.
-    # winget install OpenJS.NodeJS.LTS triggers a system-wide MSI install
-    # which prompts UAC (the dialog often appears minimized in the taskbar
-    # and the install silently waits for consent, looking like a hang).
-    # The portable zip path drops node.exe + npm into $HermesHome\node\
-    # which is user-scoped and identical to how Install-Git handles
-    # PortableGit.  Same UX guarantee: works on locked-down enterprise
-    # machines with no admin rights.
-    Write-Info "Downloading portable Node.js $NodeVersion to $HermesHome\node\ ..."
-    Write-Info "(no admin rights required; isolated from any system Node install)"
-    try {
-        $arch = Get-WindowsArch
-        $indexUrl = "https://nodejs.org/dist/latest-v${NodeVersion}.x/"
-        $indexPage = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing
-        $zipName = ($indexPage.Content | Select-String -Pattern "node-v${NodeVersion}\.\d+\.\d+-win-${arch}\.zip" -AllMatches).Matches[0].Value
-
-        if ($zipName) {
-            $downloadUrl = "${indexUrl}${zipName}"
-            $tmpZip = "$env:TEMP\$zipName"
-            $tmpDir = "$env:TEMP\hermes-node-extract"
-
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpZip -UseBasicParsing
-            if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir }
-            Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
-
-            $extractedDir = Get-ChildItem $tmpDir -Directory | Select-Object -First 1
-            if ($extractedDir) {
-                # Rename-swap instead of delete-then-move: the live tree is
-                # never removed before its replacement is fully extracted.
-                # Windows permits renaming a tree with running executables,
-                # but if a process holds it without FILE_SHARE_DELETE the
-                # rename fails with WinError 5 -- that refusal means the tree
-                # is in use, so defer instead of forcing the write (#80926).
-                # Best-effort sweep of staging/backup litter from interrupted
-                # runs; locked files simply stay for the next attempt.  Only
-                # dirs older than 10 minutes are removed so a concurrent
-                # heal's in-flight swap is never disturbed.
-                Get-ChildItem "$HermesHome" -Directory -Filter "node.old-*" -ErrorAction SilentlyContinue |
-                    Where-Object { $_.LastWriteTime -lt (Get-Date).AddMinutes(-10) } |
-                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-                Get-ChildItem "$HermesHome" -Directory -Filter "node.new-*" -ErrorAction SilentlyContinue |
-                    Where-Object { $_.LastWriteTime -lt (Get-Date).AddMinutes(-10) } |
-                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-                $stamp = [Guid]::NewGuid().ToString("N")
-                $staged = "$HermesHome\node.new-$stamp"
-                $backup = "$HermesHome\node.old-$stamp"
-                # Stage to a sibling directory so the final swap is a
-                # same-volume rename (atomic), not a cross-volume Move-Item
-                # (copy+delete, non-atomic -- a partial copy would leave a
-                # broken tree).  Move from $env:TEMP here, rename below.
-                try {
-                    Move-Item $extractedDir.FullName $staged -ErrorAction Stop
-                } catch {
-                    Write-Warn "Failed to stage the new Node.js tree; aborting the Node upgrade."
-                    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-                    Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-                    return $false
-                }
-                if (Test-Path "$HermesHome\node") {
-                    try {
-                        Rename-Item "$HermesHome\node" $backup -ErrorAction Stop
-                    } catch {
-                        Write-Warn "Hermes-managed Node.js is in use by a running app; deferring its upgrade. Close the app and re-run the update."
-                        Remove-Item -Recurse -Force $staged -ErrorAction SilentlyContinue
-                        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-                        Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-                        return $false
-                    }
-                    # A rename preserves LastWriteTime, so a backup renamed
-                    # from a long-lived tree would instantly look older than
-                    # the litter-sweep cutoff to a concurrent heal.  Touch it
-                    # (best-effort) so the in-flight backup is never swept.
-                    try {
-                        (Get-Item $backup).LastWriteTime = Get-Date
-                    } catch { }
-                    try {
-                        Rename-Item $staged "$HermesHome\node" -ErrorAction Stop
-                    } catch {
-                        # Restore the live tree before bailing.  The swap is a
-                        # same-volume rename, so a failure leaves no partial
-                        # target to clear.
-                        Rename-Item $backup "$HermesHome\node" -ErrorAction SilentlyContinue
-                        Remove-Item -Recurse -Force $staged -ErrorAction SilentlyContinue
-                        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-                        Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-                        return $false
-                    }
-                    Remove-Item -Recurse -Force $backup -ErrorAction SilentlyContinue
-                } else {
-                    try {
-                        Rename-Item $staged "$HermesHome\node" -ErrorAction Stop
-                    } catch {
-                        Remove-Item -Recurse -Force $staged -ErrorAction SilentlyContinue
-                        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-                        Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-                        return $false
-                    }
-                }
-
-                # Session PATH so the rest of this run sees node/npm.
-                $env:Path = "$HermesHome\node;$env:Path"
-
-                # Persist to User PATH so fresh shells (and future stages
-                # in cross-process driver mode) see it.  Matches the
-                # pattern Install-Git uses for PortableGit.  See
-                # Set-ManagedNodeFirstOnUserPath for why this is a
-                # move-to-front and not an add-if-missing.
-                Set-ManagedNodeFirstOnUserPath "$HermesHome\node"
-
-                $version = & "$HermesHome\node\node.exe" --version
-                Write-Success "Node.js $version installed to $HermesHome\node\ (portable, user-scoped)"
-                # The zip's bundled npm is below the repo's engines.npm floor.
-                Update-ManagedNpm "$HermesHome\node" | Out-Null
-                $script:HasNode = $true
-
-                Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-                Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-                return $true
-            }
-        }
-    } catch {
-        Write-Warn "Portable Node.js download failed: $_"
-    }
-
-    # Fallback: try winget (used to be primary, demoted because the MSI
-    # install triggers a UAC prompt that frequently appears minimized in
-    # the taskbar -- looks like a hang to users on stock Windows).
-    # Kept for environments where the portable download fails (proxy,
-    # locked firewall, etc.) but the user is willing to consent to UAC.
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Info "Falling back to winget (may prompt UAC -- check your taskbar for a flashing icon)..."
-        # Capture EAP outside the try block so the catch's restore call always
-        # has a meaningful value (see Install-Uv for the full rationale).
-        $prevEAP = $ErrorActionPreference
-        try {
-            # Relax EAP=Stop so stderr lines from winget don't get wrapped
-            # as ErrorRecords and short-circuit the 2>&1 pipe before we can
-            # check the post-condition.  See the long comment in Install-Uv
-            # for the same pattern.
-            $ErrorActionPreference = "Continue"
-            # On ARM64, force winget to fetch the ARM64 installer.  Without
-            # the explicit override, winget on WoW64 sometimes still resolves
-            # to x64 manifests, leaving us with an emulated Node toolchain
-            # even after a "successful" install.  The OpenJS manifest does
-            # publish an arm64 installer, so this is safe.
-            $wingetArgs = @(
-                'install','OpenJS.NodeJS','--silent',
-                '--accept-package-agreements','--accept-source-agreements'
-            )
-            if ((Get-WindowsArch) -eq 'arm64') {
-                $wingetArgs += @('--architecture','arm64')
-            }
-            winget @wingetArgs 2>&1 | Out-Null
-            $ErrorActionPreference = $prevEAP
-            # Refresh PATH
-            $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
-            if (Get-Command node -ErrorAction SilentlyContinue) {
-                $version = node --version
-                Write-Success "Node.js $version installed via winget"
-                $script:HasNode = $true
-                return $true
-            }
-        } catch {
-            if ($prevEAP) { $ErrorActionPreference = $prevEAP }
+        if ($attempt -lt 3) {
+            Write-Warn "Provisioning attempt $attempt failed -- retrying..."
+            Start-Sleep -Seconds ($attempt * 2)
         }
     }
 
-
-    Write-Info "Install manually: https://nodejs.org/en/download/"
-    $script:HasNode = $false
-    return $true
+    Write-Err "Could not provision the managed runtimes after 3 attempts."
+    Write-Err "Hermes needs its own pinned Node, npm, git, gh and ripgrep;"
+    Write-Err "a system copy is not a substitute (engine-strict=true)."
+    Write-Info "Check your network and re-run the installer."
+    return $false
 }
 
 function Update-ProcessPathForPackages {
@@ -1828,19 +1573,10 @@ function Update-ProcessPathForPackages {
 }
 
 function Install-SystemPackages {
-    $script:HasRipgrep = $false
+    # ripgrep is a pinned managed runtime (Invoke-RuntimeProvisioning), not
+    # a system package whose version nobody controls. Only ffmpeg is left.
     $script:HasFfmpeg = $false
-    $needRipgrep = $false
     $needFfmpeg = $false
-
-    Write-Info "Checking ripgrep (fast file search)..."
-    if (Get-Command rg -ErrorAction SilentlyContinue) {
-        $version = rg --version | Select-Object -First 1
-        Write-Success "$version found"
-        $script:HasRipgrep = $true
-    } else {
-        $needRipgrep = $true
-    }
 
     Write-Info "Checking ffmpeg (TTS voice messages)..."
     if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
@@ -1850,7 +1586,7 @@ function Install-SystemPackages {
         $needFfmpeg = $true
     }
 
-    if (-not $needRipgrep -and -not $needFfmpeg) { return }
+    if (-not $needFfmpeg) { return }
 
     # Build description and package lists for each package manager
     $descParts = @()
@@ -1858,12 +1594,6 @@ function Install-SystemPackages {
     $chocoPkgs = @()
     $scoopPkgs = @()
 
-    if ($needRipgrep) {
-        $descParts += "ripgrep for faster file search"
-        $wingetPkgs += "BurntSushi.ripgrep.MSVC"
-        $chocoPkgs += "ripgrep"
-        $scoopPkgs += "ripgrep"
-    }
     if ($needFfmpeg) {
         $descParts += "ffmpeg for TTS voice messages"
         $wingetPkgs += "Gyan.FFmpeg"
@@ -1923,14 +1653,6 @@ function Install-SystemPackages {
         # %LOCALAPPDATA%\Microsoft\WinGet\Links (added to PATH only in
         # newly-spawned shells, not this process) are visible to Get-Command below.
         Update-ProcessPathForPackages
-        if ($needRipgrep -and (Get-Command rg -ErrorAction SilentlyContinue)) {
-            Write-Success "ripgrep installed"
-            $script:HasRipgrep = $true
-            $needRipgrep = $false
-            Remove-Item -Path $pkgLogs["BurntSushi.ripgrep.MSVC"] -ErrorAction SilentlyContinue
-        } elseif ($pkgLogs.ContainsKey("BurntSushi.ripgrep.MSVC")) {
-            Write-Warn "winget could not install ripgrep; details: $($pkgLogs['BurntSushi.ripgrep.MSVC'])"
-        }
         if ($needFfmpeg -and (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
             Write-Success "ffmpeg installed"
             $script:HasFfmpeg = $true
@@ -1939,21 +1661,16 @@ function Install-SystemPackages {
         } elseif ($pkgLogs.ContainsKey("Gyan.FFmpeg")) {
             Write-Warn "winget could not install ffmpeg; details: $($pkgLogs['Gyan.FFmpeg'])"
         }
-        if (-not $needRipgrep -and -not $needFfmpeg) { return }
+        if (-not $needFfmpeg) { return }
     }
 
     # Fallback: choco
-    if ($hasChoco -and ($needRipgrep -or $needFfmpeg)) {
+    if ($hasChoco -and $needFfmpeg) {
         Write-Info "Trying Chocolatey..."
         foreach ($pkg in $chocoPkgs) {
             try { choco install $pkg -y 2>&1 | Out-Null } catch { }
         }
         Update-ProcessPathForPackages
-        if ($needRipgrep -and (Get-Command rg -ErrorAction SilentlyContinue)) {
-            Write-Success "ripgrep installed via chocolatey"
-            $script:HasRipgrep = $true
-            $needRipgrep = $false
-        }
         if ($needFfmpeg -and (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
             Write-Success "ffmpeg installed via chocolatey"
             $script:HasFfmpeg = $true
@@ -1962,17 +1679,12 @@ function Install-SystemPackages {
     }
 
     # Fallback: scoop
-    if ($hasScoop -and ($needRipgrep -or $needFfmpeg)) {
+    if ($hasScoop -and $needFfmpeg) {
         Write-Info "Trying Scoop..."
         foreach ($pkg in $scoopPkgs) {
             try { scoop install $pkg 2>&1 | Out-Null } catch { }
         }
         Update-ProcessPathForPackages
-        if ($needRipgrep -and (Get-Command rg -ErrorAction SilentlyContinue)) {
-            Write-Success "ripgrep installed via scoop"
-            $script:HasRipgrep = $true
-            $needRipgrep = $false
-        }
         if ($needFfmpeg -and (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
             Write-Success "ffmpeg installed via scoop"
             $script:HasFfmpeg = $true
@@ -1981,10 +1693,6 @@ function Install-SystemPackages {
     }
 
     # Show manual instructions for anything still missing
-    if ($needRipgrep) {
-        Write-Warn "ripgrep not installed (file search will use findstr fallback)"
-        Write-Info "  winget install BurntSushi.ripgrep.MSVC"
-    }
     if ($needFfmpeg) {
         Write-Warn "ffmpeg not installed (TTS voice messages will be limited)"
         Write-Info "  winget install Gyan.FFmpeg"
@@ -2305,7 +2013,7 @@ function Install-Repository {
                     Write-Success "Downloaded and extracted"
 
                     # Initialize git repo so updates work later. A bare
-                    # `git init` leaves NO HEAD -- desktop's write-build-stamp
+                    # `git init` leaves NO HEAD -- desktop's stamp step
                     # then hard-fails with "could not determine git commit"
                     # (#50823 / #61657). Fetch the requested ref and force-check
                     # it out (-f) so untracked ZIP files cannot block checkout.
@@ -2412,6 +2120,18 @@ function Install-Repository {
     }
 
     Write-Success "Repository ready"
+
+    # The installer owns this checkout: record `updateMechanism: self` so the
+    # stamp-pure ladder (installation/tree.py) classifies it as managed. Keep
+    # an existing stamp -- richer provenance must not be clobbered on re-runs.
+    # A plain Set-Content is fine here: PowerShell may BOM the file, and every
+    # stamp reader reads utf-8-sig (the PR #3 BOM bug is fixed at the readers).
+    $stampPath = Join-Path $InstallDir "install-stamp.json"
+    if (-not (Test-Path $stampPath)) {
+        $stampJson = "{`n  `"schemaVersion`": 2,`n  `"updateMechanism`": `"self`",`n  `"source`": `"installer`"`n}`n"
+        Set-Content -Path $stampPath -Value $stampJson -Encoding UTF8 -NoNewline
+        Write-Info "Wrote install stamp (updateMechanism: self)"
+    }
 }
 
 function Install-Venv {
@@ -2986,95 +2706,41 @@ print(','.join(scripts))
     Write-Success "All dependencies installed"
 }
 
-function Install-HermesCommandLaunchers {
-    param(
-        [Parameter(Mandatory=$true)] [string]$Root,
-        [Parameter(Mandatory=$true)] [string]$Destination
-    )
-
-    # Expose ONLY the hermes launchers on PATH -- never the whole
-    # venv\Scripts directory, which contains python.exe / pip.exe and
-    # silently hijacks the `python` command in every terminal (#83797).
-    # Requiring hermes.exe before creating the destination keeps the PATH
-    # stage from reporting success with an unusable command (PR #92092).
-    $scriptsDir = Join-Path $Root "venv\Scripts"
-    $requiredSource = Join-Path $scriptsDir "hermes.exe"
-    if (-not (Test-Path -LiteralPath $requiredSource -PathType Leaf)) {
-        throw "Cannot set up the hermes command: required launcher not found: $requiredSource"
-    }
-
-    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-
-    # Launcher form depends on the venv (keep in lockstep with
-    # hermes_cli/_install_repair.py): a normal venv's exe trampoline
-    # embeds an absolute interpreter path and survives copying; a
-    # relocatable venv's trampoline (managed_uv rebuilds use
-    # --relocatable) resolves relative to its own location, and a copy
-    # dies with 'uv trampoline failed to canonicalize script path' --
-    # those get a .cmd delegator invoking the in-venv exe instead.
-    $pyvenvCfg = Join-Path $Root "venv\pyvenv.cfg"
-    $venvRelocatable = $false
-    if (Test-Path -LiteralPath $pyvenvCfg) {
-        $venvRelocatable = [bool](Select-String -Path $pyvenvCfg -Pattern '^\s*relocatable\s*=\s*true\s*$' -Quiet)
-    }
-    foreach ($launcher in @("hermes", "hermes-acp")) {
-        $src = Join-Path $scriptsDir "$launcher.exe"
-        if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { continue }
-        if ($venvRelocatable) {
-            Remove-Item (Join-Path $Destination "$launcher.exe") -Force -ErrorAction SilentlyContinue
-            Set-Content -Path (Join-Path $Destination "$launcher.cmd") -Value "@echo off`r`n`"$src`" %*" -Encoding Ascii
-        } else {
-            Remove-Item (Join-Path $Destination "$launcher.cmd") -Force -ErrorAction SilentlyContinue
-            Copy-Item -Force -LiteralPath $src -Destination (Join-Path $Destination "$launcher.exe")
-        }
-    }
-
-    # Verify either staged form before the caller mutates PATH.
-    $requiredExe = Join-Path $Destination "hermes.exe"
-    $requiredCmd = Join-Path $Destination "hermes.cmd"
-    if (-not ((Test-Path -LiteralPath $requiredExe -PathType Leaf) -or
-              (Test-Path -LiteralPath $requiredCmd -PathType Leaf))) {
-        throw "Cannot set up the hermes command: launcher was not installed: $requiredExe"
-    }
-    return $Destination
-}
-
 function Set-PathVariable {
     Write-Info "Setting up hermes command..."
     
     if ($NoVenv) {
         $hermesBin = "$InstallDir"
     } else {
-        # $HermesHome\bin is the managed binary dir (shared with the managed
-        # uv), OUTSIDE the git checkout: `hermes update`'s autostash
-        # (git stash push --include-untracked) deletes untracked files from
-        # the working tree, which silently removed the launchers an earlier
-        # installer staged under hermes-agent\bin. No git operation can ever
-        # touch this dir. Staging and verification live in
-        # Install-HermesCommandLaunchers, which throws BEFORE any PATH
-        # mutation when the launchers cannot be staged.
-        $hermesBin = "$HermesHome\bin"
-        Install-HermesCommandLaunchers -Root $InstallDir -Destination $hermesBin | Out-Null
+        # Expose ONLY the hermes launchers on PATH -- never the whole
+        # venv\Scripts directory. venv\Scripts contains python.exe /
+        # pythonw.exe / pip.exe, and putting it on the user PATH silently
+        # hijacks the `python` command in every terminal on the machine
+        # (#83797): unrelated projects start resolving python to Hermes'
+        # runtime interpreter. A dedicated bin dir with copies of the
+        # launcher exes keeps `hermes` globally available without
+        # shadowing anything. (Launcher exes embed the venv interpreter
+        # path, so they work from any location and survive updates.)
+        $hermesBin = "$InstallDir\bin"
+        New-Item -ItemType Directory -Force -Path $hermesBin | Out-Null
+        foreach ($launcher in @("hermes.exe", "hermes-acp.exe")) {
+            $src = "$InstallDir\venv\Scripts\$launcher"
+            if (Test-Path $src) {
+                Copy-Item -Force $src "$hermesBin\$launcher"
+            }
+        }
     }
     
     $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
 
-    # Migrate older layouts off the user PATH:
-    #   venv\Scripts     -- shadowed the user's python (#83797)
-    #   hermes-agent\bin -- lived inside the git checkout, where the update
-    #                       autostash could sweep the launchers off disk
-    # The hermes-agent\bin FILES are left in place on purpose: editor/ACP
-    # configs that captured absolute launcher paths keep working, and the
-    # dir is git-ignored so it cannot dirty the checkout.
-    if (-not $NoVenv) {
-        $legacyEntries = @("$InstallDir\venv\Scripts", "$InstallDir\bin")
-        $items = @(($currentPath -split ';') | Where-Object { $_ })
-        $cleaned = @($items | Where-Object { $legacyEntries -notcontains $_ })
-        if ($cleaned.Count -ne $items.Count) {
-            $currentPath = $cleaned -join ";"
-            [Environment]::SetEnvironmentVariable("Path", $currentPath, "User")
-            Write-Info "Removed legacy launcher entries from user PATH (kept hermes via $hermesBin)"
-        }
+    # Migrate installs that got venv\Scripts onto PATH from earlier
+    # installer versions -- remove it so the python shadowing stops.
+    $legacyBin = "$InstallDir\venv\Scripts"
+    if ((-not $NoVenv) -and $currentPath -like "*$legacyBin*") {
+        $cleaned = ($currentPath -split ';' | Where-Object { $_ -and $_ -ne $legacyBin }) -join ';'
+        [Environment]::SetEnvironmentVariable("Path", $cleaned, "User")
+        $currentPath = $cleaned
+        Write-Info "Removed legacy venv\Scripts from user PATH (kept hermes via $hermesBin)"
     }
     
     if ($currentPath -notlike "*$hermesBin*") {
@@ -3283,17 +2949,6 @@ You are Hermes Agent, an intelligent AI assistant created by Nous Research. You 
 }
 
 function Install-NodeDeps {
-    if (-not $HasNode) {
-        # Cross-process driver mode (Hermes-Setup.exe runs each -Stage NAME
-        # in a fresh powershell.exe) means $script:HasNode set by Stage-Node
-        # in the previous process isn't visible here. Re-probe rather than
-        # trust the stale global -- Stage-Node already ran successfully or
-        # the bootstrap would've aborted, so npm is reachable.
-        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-            Write-Info "Skipping Node.js dependencies (Node not installed)"
-            return
-        }
-    }
 
     # npm lifecycle scripts need node.exe on the PATH visible to child
     # cmd.exe processes.  Stage-Node may have run in a prior process, so
@@ -3456,106 +3111,13 @@ function Install-NodeDeps {
         $browserLog = "$env:TEMP\hermes-npm-browser-$(Get-Random).log"
         $browserNpmOk = _Run-NpmInstall "Browser tools" $InstallDir $browserLog $npmExe
 
-        # Install Playwright Chromium (mirrors scripts/install.sh behaviour for
-        # Linux).  Without this, tools/browser_tool.py::check_browser_requirements
-        # returns False (no Chromium under %LOCALAPPDATA%\ms-playwright), and the
-        # browser_* tools are silently filtered out of the agent's tool schema.
-        # System Chrome at "C:\Program Files\Google\Chrome\..." is NOT used by
-        # agent-browser -- it expects a Playwright-managed Chromium.
-        if ($browserNpmOk) {
-            Write-Info "Installing browser engine (Playwright Chromium)..."
-            # npx lives next to npm in the same bin dir.  Prefer .cmd to dodge
-            # the same execution-policy gotcha that affects npm.ps1 (see above).
-            $npmDir = Split-Path $npmExe -Parent
-            $npxExe = $null
-            foreach ($cand in @("npx.cmd", "npx.exe", "npx")) {
-                $try = Join-Path $npmDir $cand
-                if (Test-Path $try) { $npxExe = $try; break }
-            }
-            if (-not $npxExe) {
-                $npxCmd = Get-Command npx -ErrorAction SilentlyContinue
-                if ($npxCmd) { $npxExe = $npxCmd.Source }
-            }
-            if (-not $npxExe) {
-                Write-Warn "npx not found -- cannot install Playwright Chromium."
-                Write-Info "Run manually later: cd `"$InstallDir`"; npx playwright install chromium"
-            } else {
-                $pwLog = "$env:TEMP\hermes-playwright-install-$(Get-Random).log"
-                Push-Location $InstallDir
-                # Capture EAP outside the try block so the catch's restore call
-                # always has a meaningful value (see Install-Uv for the full
-                # rationale).
-                $prevEAP = $ErrorActionPreference
-                try {
-                    # Playwright Chromium is ~170MB compressed and the
-                    # download regularly takes 3-10 minutes on a fresh
-                    # VM.  Tee the output to console + log so the user
-                    # sees download progress in real time instead of
-                    # staring at a silent prompt that looks hung.  See
-                    # _Run-NpmInstall above for the same pattern and
-                    # the rationale behind 2>&1 before the pipe.
-                    Write-Info "(this can take several minutes -- streaming progress below)"
-                    # --yes auto-accepts npx's "Need to install playwright@X.Y.Z"
-                    # confirmation prompt.  Without it, npx 7+ blocks on stdin
-                    # waiting for a y/N answer that never comes when this is
-                    # invoked through a pipeline (Tee-Object disconnects stdin
-                    # from the user's TTY), and the install hangs indefinitely
-                    # after printing "Need to install the following packages:
-                    # playwright@X.Y.Z".
-                    #
-                    # Relax EAP around the playwright invocation: playwright
-                    # emits a "Chromium downloaded to ..." success banner to
-                    # stderr after a successful install.  The launcher merges
-                    # stderr into the log natively, but keep EAP relaxed so
-                    # stray plumbing stderr can't fire the catch block with a
-                    # mangled banner even though the install succeeded.  Check
-                    # the returned exit code instead, which is the reliable
-                    # signal.
-                    #
-                    # The wall-clock ceiling is the #76222 / #84614 fix: the
-                    # Chromium download reaches 100% and the extraction wedges
-                    # (or the registry fetch stalls), and without a bound the
-                    # installer sits on this line forever.  bash has carried
-                    # the same 600s guard via run_playwright_install since
-                    # #39219.
-                    $ErrorActionPreference = "Continue"
-                    $pwCode = _Invoke-NativeWithTimeout $npxExe "--yes playwright install chromium" `
-                        $InstallDir $pwLog $nodeDepsTimeoutSec
-                    $ErrorActionPreference = $prevEAP
-                    if ($pwCode -eq 0) {
-                        Write-Success "Playwright Chromium installed (browser tools ready)"
-                        Remove-Item -Force $pwLog -ErrorAction SilentlyContinue
-                    } elseif ($pwCode -eq 124) {
-                        Write-Warn "Playwright Chromium install timed out after $([math]::Round($nodeDepsTimeoutSec / 60)) minutes."
-                        Write-Warn "This usually means a stalled download or a wedged archive extraction (a locked previous browser version can also cause it)."
-                        Write-Warn "Browser tools will not work until Chromium is installed."
-                        if (Test-Path $pwLog) { Write-Info "  Partial log: $pwLog" }
-                        Write-Info "Run manually later: cd `"$InstallDir`"; npx playwright install chromium"
-                    } else {
-                        Write-Warn "Playwright Chromium install failed -- exit code $pwCode"
-                        Write-Warn "Browser tools will not work until Chromium is installed."
-                        if (Test-Path $pwLog) {
-                            $pwErr = Get-Content $pwLog -Raw -ErrorAction SilentlyContinue
-                            if ($pwErr) {
-                                $snippet = if ($pwErr.Length -gt 1200) { $pwErr.Substring(0, 1200) + "..." } else { $pwErr }
-                                Write-Info "  playwright output:"
-                                foreach ($line in $snippet -split "`n") {
-                                    Write-Host "    $line" -ForegroundColor DarkGray
-                                }
-                                Write-Info "  Full log: $pwLog"
-                            }
-                        }
-                        Write-Info "Run manually later: cd `"$InstallDir`"; npx playwright install chromium"
-                    }
-                } catch {
-                    if ($prevEAP) { $ErrorActionPreference = $prevEAP }
-                    Write-Warn "Playwright Chromium install could not be launched: $_"
-                    Write-Info "Run manually later: cd `"$InstallDir`"; npx playwright install chromium"
-                } finally {
-                    Pop-Location
-                }
-            }
-        }
+        # The Chromium BINARY is staged by the provisioner sweep
+        # (--extra agent-browser expands to the pinned Chromium pair via
+        # the pin table's requires edge, into the shared tool store) --
+        # the old `npx playwright install chromium` download into
+        # %LOCALAPPDATA%\ms-playwright is gone. Windows needs no system-
+        # library step: Chromium ships its dependencies on this platform.
+        [void]$browserNpmOk
     }
 
     # TUI
@@ -3567,7 +3129,6 @@ function Install-NodeDeps {
     }
 
     Install-BrowserUseCli
-    Install-CuaDriver
 }
 
 # The Browser Use CLI is the default browser backend when it is runnable
@@ -3615,128 +3176,6 @@ function Install-BrowserUseCli {
     }
 }
 
-function Test-CuaDriverRuntimeContract {
-    param([Parameter(Mandatory = $true)][string]$DriverPath)
-
-    try {
-        $versionOutput = (& $DriverPath --version 2>$null | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0) {
-            return $false
-        }
-        $versionMatch = [regex]::Match($versionOutput, '(\d+\.\d+\.\d+)')
-        if (-not $versionMatch.Success) {
-            return $false
-        }
-        if ([version]($versionMatch.Groups[1].Value) -lt [version]'0.20.0') {
-            return $false
-        }
-
-        $manifestOutput = (& $DriverPath manifest 2>$null | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or -not $manifestOutput) {
-            return $false
-        }
-        $manifest = $manifestOutput | ConvertFrom-Json
-        if (-not $manifest.mcp_invocation.args) {
-            return $false
-        }
-
-        $required = @{
-            mcp = @('--socket', '--grant')
-            serve = @(
-                '--socket', '--permission-mode', '--capability-manifest',
-                '--approve-capability-manifest', '--embedded'
-            )
-            stop = @('--socket')
-        }
-        foreach ($commandName in $required.Keys) {
-            $command = $manifest.subcommands | Where-Object { $_.name -eq $commandName }
-            if (-not $command) {
-                return $false
-            }
-            $argNames = @($command.args | ForEach-Object { $_.name })
-            foreach ($requiredArg in $required[$commandName]) {
-                if ($requiredArg -notin $argNames) {
-                    return $false
-                }
-            }
-        }
-        return $true
-    } catch {
-        return $false
-    }
-}
-
-# cua-driver powers the computer_use toolset (background desktop control).
-# Provision it at install time so enabling the tool later -- via `hermes
-# tools`, the dashboard, or the desktop app -- is a config flip, not a
-# surprise multi-minute binary fetch. Best-effort and non-fatal: the enable
-# paths still lazy-install via install_cua_driver() (hermes_cli/tools_config)
-# when this step was skipped or failed.
-function Install-CuaDriver {
-    if ($SkipComputerUse) {
-        Write-Info "Skipping Computer Use (cua-driver) install (-SkipComputerUse)"
-        return
-    }
-    $existingCuaDriver = Get-Command cua-driver -ErrorAction SilentlyContinue
-    if ($existingCuaDriver) {
-        if (Test-CuaDriverRuntimeContract -DriverPath $existingCuaDriver.Source) {
-            Write-Success "Computer Use driver (cua-driver) already installed and compatible"
-            return
-        }
-        Write-Warn "Existing cua-driver is old or incomplete; repairing it"
-    }
-
-    Write-Info "Installing Computer Use driver (cua-driver)..."
-    $prevEAP = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        # Same upstream installer `hermes computer-use install` runs. Bounded
-        # via a background job: the upstream installer serializes with its own
-        # lock (600s stale window), so the ceiling sits above that -- matching
-        # Hermes' _CUA_INSTALLER_TIMEOUT (660s).
-        $job = Start-Job -ScriptBlock {
-            Invoke-RestMethod -UseBasicParsing "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1" | Invoke-Expression
-        }
-        if (Wait-Job $job -Timeout 660) {
-            Receive-Job $job -ErrorAction SilentlyContinue | Out-Null
-            Remove-Job $job -Force -ErrorAction SilentlyContinue
-            $installedCuaDriver = Get-Command cua-driver -ErrorAction SilentlyContinue
-            if ($installedCuaDriver -and (Test-CuaDriverRuntimeContract -DriverPath $installedCuaDriver.Source)) {
-                Write-Success "Computer Use driver installed (enable via 'hermes tools' -> Computer Use)"
-            } else {
-                Write-Warn "Computer Use driver install did not produce a compatible runtime -- repair it before enabling the tool."
-                Write-Info "Install later with: hermes computer-use install"
-            }
-        } else {
-            Stop-Job $job -ErrorAction SilentlyContinue
-            Remove-Job $job -Force -ErrorAction SilentlyContinue
-            Write-Warn "Computer Use driver install timed out -- it will install on demand when you enable the tool."
-            Write-Info "Install later with: hermes computer-use install"
-        }
-    } catch {
-        Write-Warn "Computer Use driver install failed: $_"
-        Write-Info "Install later with: hermes computer-use install"
-    } finally {
-        $ErrorActionPreference = $prevEAP
-    }
-}
-
-# Clear the cached Electron download + any half-written unpacked output so the
-# next `npm run pack` re-downloads and re-stages from scratch. A corrupt zip in
-# the per-user Electron download cache - most often a partial download resumed
-# into the same file, leaving concatenated junk - makes electron-builder's
-# `app-builder unpack-electron` extract a tree MISSING the electron binary, so
-# the final `electron` -> `Hermes` rename dies with ENOENT and every re-run
-# repeats the broken extraction forever.
-#
-# We deliberately do not validate the zip ourselves: the common
-# prepended/concatenated-junk corruption slips past naive checks, so a
-# self-rolled gate would skip the real-world case. We unconditionally drop the
-# cached electron-*.zip (loose copy and any @electron/get hash-subdir copy) plus
-# the stale unpacked dir, then let the caller retry once - @electron/get
-# re-downloads with its own SHASUM verification, the real source of truth.
-#
-# Returns the removed paths. Best-effort: never throws.
 function Clear-ElectronBuildCache {
     param([string]$DesktopDir)
     $removed = @()
@@ -3885,17 +3324,13 @@ function Install-Desktop {
     # so an "unpacked" build (electron-builder --dir) is enough -- we
     # don't need to produce an NSIS/MSI artifact here.
 
-    # Always re-resolve Node here. Stages run in separate PowerShell processes,
-    # so $script:HasNode from Stage-Node isn't visible; more importantly Test-Node
-    # enforces the build floor (Node >=26) and prepends the Hermes-managed
-    # Node to PATH, so the build never runs on a too-old system Node -- the cause
-    # of the opaque "Build desktop app ... exit code 1" failure (Vite crashes on
-    # old Node).
-    Test-Node | Out-Null
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Warn "Skipping desktop build (Node.js / npm not on PATH)"
-        $script:_StageSkippedReason = "Node.js not available"
-        return
+    # Re-provision here. Stages run in separate PowerShell processes, so
+    # the PATH an earlier stage exported is gone; this is a no-op when the
+    # pins are already satisfied and it puts the managed tree back on PATH.
+    # The build must never run on a system Node -- Vite crashes on an old
+    # one, which surfaced as "Build desktop app ... exit code 1".
+    if (-not (Invoke-RuntimeProvisioning)) {
+        throw "Cannot build the desktop app: the managed runtimes are not available"
     }
 
     $desktopDir = "$InstallDir\apps\desktop"
@@ -3984,7 +3419,7 @@ function Install-Desktop {
     Pop-Location
 
     # 2. Build apps/desktop. `npm run pack` runs:
-    #      assert-root-install + write-build-stamp + stage-native-deps +
+    #      assert-root-install + write_install_stamp + stage-native-deps +
     #      tsc -b + vite build + electron-builder --dir
     # The --dir mode produces an unpacked Hermes.exe in
     # apps/desktop/release/win-unpacked/ without bundling NSIS/MSI;
@@ -4005,7 +3440,7 @@ function Install-Desktop {
     # for some other tool, electron-builder would still try to sign.
     Write-Info "Building desktop app (this takes 1-3 minutes)..."
     $buildLog = "$env:TEMP\hermes-desktop-build-$(Get-Random).log"
-    # Seed GITHUB_SHA for write-build-stamp.mjs. The stamp prefers CI env vars
+    # Seed GITHUB_SHA for scripts/write_install_stamp.py. The stamp prefers CI env vars
     # over `git rev-parse`, so this covers: (1) node can't find git.exe on PATH
     # even though this PowerShell session can, (2) ZIP/init trees that still
     # lack a HEAD after a failed post-extract fetch. Without it the desktop
@@ -4038,7 +3473,7 @@ function Install-Desktop {
         $shaPreview = if ($env:GITHUB_SHA.Length -ge 12) { $env:GITHUB_SHA.Substring(0, 12) } else { $env:GITHUB_SHA }
         Write-Info "Desktop build stamp: $shaPreview ($($env:GITHUB_REF_NAME))"
     } else {
-        Write-Warn "Could not resolve a git commit for the desktop stamp -- write-build-stamp will use its non-git fallback"
+        Write-Warn "Could not resolve a git commit for the desktop stamp -- write_install_stamp will use its non-git fallback"
     }
     Push-Location $desktopDir
     $prevEAP = $ErrorActionPreference
@@ -4489,18 +3924,6 @@ function Write-Completion {
     Write-Host "[*] Restart your terminal for PATH changes to take effect" -ForegroundColor Yellow
     Write-Host ""
     
-    if (-not $HasNode) {
-        Write-Host "Note: Node.js could not be installed automatically." -ForegroundColor Yellow
-        Write-Host "Browser tools need Node.js. Install manually:" -ForegroundColor Yellow
-        Write-Host "  https://nodejs.org/en/download/" -ForegroundColor Yellow
-        Write-Host ""
-    }
-    
-    if (-not $HasRipgrep) {
-        Write-Host "Note: ripgrep (rg) was not installed. For faster file search:" -ForegroundColor Yellow
-        Write-Host "  winget install BurntSushi.ripgrep.MSVC" -ForegroundColor Yellow
-        Write-Host ""
-    }
 }
 
 # ============================================================================
@@ -4577,12 +4000,16 @@ function Write-Completion {
 # stages; ``NeedsUserInput`` tells UIs "this stage prompts -- either skip it
 # or arrange to provide answers another way."
 $InstallStages = @(
-    @{ Name = "uv";               Title = "Installing uv package manager";        Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Uv" }
-    @{ Name = "python";           Title = "Verifying Python $PythonVersion";      Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Python" }
     @{ Name = "git";              Title = "Installing Git";                       Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Git" }
     @{ Name = "node";             Title = "Detecting Node.js";                    Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Node" }
-    @{ Name = "system-packages";  Title = "Installing ripgrep and ffmpeg";        Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-SystemPackages" }
+    @{ Name = "system-packages";  Title = "Installing ffmpeg";                    Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-SystemPackages" }
     @{ Name = "repository";       Title = "Cloning Hermes repository";            Category = "install";      NeedsUserInput = $false; Worker = "Stage-Repository" }
+    # uv + python run AFTER the clone: the pinned uv lands in the
+    # install-scoped runtime dir ($InstallDir\.hermes-runtime\uv), which
+    # exists only once the checkout does. Stage NAMES keep their protocol
+    # identity; only their position moved.
+    @{ Name = "uv";               Title = "Installing uv package manager";        Category = "install";      NeedsUserInput = $false; Worker = "Stage-Uv" }
+    @{ Name = "python";           Title = "Verifying Python $PythonVersion";      Category = "install";      NeedsUserInput = $false; Worker = "Stage-Python" }
     @{ Name = "venv";             Title = "Creating Python virtual environment";  Category = "install";      NeedsUserInput = $false; Worker = "Stage-Venv" }
     @{ Name = "dependencies";     Title = "Installing Python dependencies";       Category = "install";      NeedsUserInput = $false; Worker = "Stage-Dependencies" }
     @{ Name = "node-deps";        Title = "Installing Node.js dependencies";      Category = "install";      NeedsUserInput = $false; Worker = "Stage-NodeDeps" }
@@ -4630,15 +4057,28 @@ function Stage-Git              {
 # existing Write-Completion behavior that prints a "Note: Node.js could
 # not be installed" hint instead of aborting.
 function Stage-Node             {
-    if (-not (Test-Node)) {
-        $script:_StageSkippedReason = "Node.js not available; browser tools will be unavailable until node is installed manually from https://nodejs.org/en/download/"
-    }
+    # The pinned Node arrives with the other managed runtimes in
+    # Stage-NodeDeps, after the venv exists. Nothing to probe here: a system
+    # Node is not used, whatever version it happens to be.
 }
 function Stage-SystemPackages   { Install-SystemPackages }
 function Stage-Repository       { Install-Repository }
 function Stage-Venv             { Resolve-UvCmd; Install-Venv }
 function Stage-Dependencies     { Resolve-UvCmd; Install-Dependencies }
-function Stage-NodeDeps         { Install-NodeDeps }
+# Stage NAME is protocol (the GUI driver renders it); its body is now the
+# shared provisioner first, then the npm-installed browser tooling. If
+# provisioning fails, stop BEFORE any npm work: a system npm must never
+# stand in for the pinned one, and installing browser deps against a
+# missing/foreign toolchain only strands the user with a half-broken
+# node-deps state. Provisioning failure already printed the retry/failure
+# guidance; the stage reports failure so the JSON contract surfaces it.
+function Stage-NodeDeps {
+    if (-not (Invoke-RuntimeProvisioning)) {
+        Write-Err "Node.js dependencies skipped: managed runtime provisioning failed."
+        return
+    }
+    Install-NodeDeps
+}
 function Stage-Desktop          { Install-DesktopVoiceDeps; Install-Desktop }
 function Stage-Path             { Set-PathVariable }
 function Stage-ConfigTemplates  { Copy-ConfigTemplates }
@@ -4742,48 +4182,6 @@ function Invoke-AllStages {
     }
 }
 
-function Invoke-EnsureMode {
-    param([string]$Deps)
-    $depList = $Deps -split ","
-    foreach ($dep in $depList) {
-        $dep = $dep.Trim()
-        switch ($dep) {
-            "node" {
-                [void](Test-Node)
-                if (-not $script:HasNode) {
-                    Write-Err "Node.js could not be installed"
-                    exit 1
-                }
-            }
-            "browser" {
-                [void](Test-Node)
-                if ($script:HasNode) {
-                    Install-AgentBrowser
-                } else {
-                    Write-Err "Node.js is required for browser tools but could not be installed"
-                    exit 1
-                }
-            }
-            "ripgrep" {
-                Write-Info "ripgrep: install manually on Windows (scoop install ripgrep)"
-            }
-            "ffmpeg" {
-                Write-Info "ffmpeg: install manually on Windows (scoop install ffmpeg)"
-            }
-            default {
-                Write-Err "Unknown dependency: $dep"
-                exit 1
-            }
-        }
-    }
-}
-
-function Invoke-PostInstallMode {
-    Write-Info "Running post-install setup..."
-    Invoke-EnsureMode -Deps "node,browser"
-    Write-Info "Post-install complete"
-}
-
 function Main {
     Write-Banner
     Invoke-AllStages
@@ -4803,19 +4201,6 @@ function Main {
 # structured JSON error frame instead of a bare exception.
 
 try {
-    if ($Ensure -ne "") {
-        if ($PSBoundParameters.ContainsKey("Stage")) {
-            Write-Err "Cannot use -Ensure and -Stage simultaneously"
-            exit 1
-        }
-        Invoke-EnsureMode -Deps $Ensure
-        exit 0
-    }
-    if ($PostInstall) {
-        Invoke-PostInstallMode
-        exit 0
-    }
-
     if ($ProtocolVersion) {
         Write-Output $InstallStageProtocolVersion
         exit 0

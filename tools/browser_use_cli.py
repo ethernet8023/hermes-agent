@@ -291,8 +291,8 @@ def default_downgrade_notice() -> Optional[str]:
 
 
 def _managed_bin_dir() -> Optional[str]:
-    """Hermes' own bin dir ($HERMES_HOME/bin) — where install.sh puts uv/uvx
-    and where install_cli() links the browser-use binary."""
+    """Hermes' own bin dir ($HERMES_HOME/bin) — where install_cli() links
+    the browser-use binary (UV_TOOL_BIN_DIR)."""
     try:
         from hermes_constants import get_hermes_home
 
@@ -329,27 +329,33 @@ def _find_cli() -> Optional[List[str]]:
     (~/.local/bin / %APPDATA%\\uv\\bin, where a manual ``uv tool install``
     links binaries) are fallbacks for setups that never ran our install,
     and cover Desktop/TUI workers that spawn with a minimal PATH. The uvx
-    zero-install path (same probe order) is the final fallback.
-    """
+    zero-install path is the final fallback — the pinned uvx via
+    ``installation.uv`` (never a PATH probe: the registry names the
+    binary).
+"""
     probe_paths = (_managed_bin_dir(), None, _user_local_bin_dir())
     for probe_path in probe_paths:
         if probe_path is None or probe_path:
             direct = shutil.which("browser-use", path=probe_path)
             if direct:
                 return [direct]
-    for probe_path in probe_paths:
-        if probe_path is None or probe_path:
-            uvx = shutil.which("uvx", path=probe_path)
-            if uvx:
-                return [uvx, "browser-use"]
+    try:
+        from installation.uv import uvx_path
+
+        uvx = uvx_path()
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug("Could not resolve pinned uvx: %s", e)
+        uvx = None
+    if uvx is not None:
+        return [str(uvx), "browser-use"]
     return None
 
 
 def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
     """Install the browser-use CLI persistently via ``uv tool install``.
 
-    Resolution order for uv: Hermes' managed uv (bootstrapped on demand via
-    ``hermes_cli.managed_uv.ensure_uv``) → uv on PATH. The binary is linked
+    Resolution order for uv: the pinned uv (converged on demand via
+    ``installation.uv.ensure_uv``) → uv on PATH. The binary is linked
     into ``$HERMES_HOME/bin`` (``UV_TOOL_BIN_DIR``) so ``_find_cli()``
     resolves it for every profile without touching the user's PATH.
 
@@ -368,13 +374,11 @@ def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
 
     uv_bin: Optional[str] = None
     try:
-        from hermes_cli.managed_uv import ensure_uv
+        from installation.uv import ensure_uv
 
-        uv_bin = str(ensure_uv() or "") or None
+        uv_bin = ensure_uv()
     except Exception as e:
         logger.debug("Managed uv bootstrap unavailable: %s", e)
-    if not uv_bin:
-        uv_bin = shutil.which("uv")
     if not uv_bin:
         return False, (
             "uv is not available and could not be bootstrapped. Install uv "

@@ -40,14 +40,32 @@ RUN apt-get -o Acquire::Retries=3 update && \
     make -j"$(nproc)" && \
     make install
 
-FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b AS uv_source
+# ---------- Install stamp stages ----------
+# CI pre-builds install-stamp.json (scripts/write_install_stamp.py,
+# --distribution docker) with full git provenance before `docker build`.
+# The stamp is COPY'd into the image so version_info.py and
+# detect_install_method() can read it at runtime — .dockerignore excludes
+# .git, so no commit is resolvable inside the image, and the stamp's
+# `distribution` field is the only install-method marker the image carries.
+#
+# The stamp arrives via the bulk `COPY . .` below as
+# /opt/hermes/install-stamp.json — already at its canonical, code-scoped
+# path. It lives next to the code (NOT in $HERMES_HOME) so a host install
+# sharing the bind-mounted data volume can never read the container's
+# provenance as its own.
+#
+# If the file is absent (local `docker build` without CI), runtime falls
+# through to "unknown" provenance with no crash.
+
+# ---------- Base image ----------
 # Node 26 source stage. Debian trixie's bundled nodejs is pinned to 20.x
-# which reached EOL in April 2026 — we copy node + npm from the upstream
-# node:26 image instead (Hermes pins its toolchain to Node 26 everywhere).
-# Bookworm-based slim image used so the produced binary links
-# against glibc 2.36, which runs cleanly on our Debian 13 (trixie, glibc
-# 2.41) runtime.  Bumping to a new Node major is a one-line ARG change; see
-# #4977.
+# which reached EOL in April 2026 — but the runtime image's node does NOT
+# come from here anymore: it comes from installation/runtime-pins.json via
+# the provisioner (decision 8 — the uv_source stage this file used to have
+# had already drifted to 0.11.6 while the pin table said 0.12.3, which is
+# exactly the two-authorities failure the pin table exists to end). This
+# stage remains ONLY as a build-time fallback for platforms the pin table
+# does not cover; nothing COPYs from it into the runtime image today.
 FROM node:26-bookworm-slim@sha256:9e6f9357d371591e32ab6f2d8a26d63bdd0d17c29eee3f4f3e7e454d9634bf73 AS node_source
 FROM debian:13.4
 
@@ -57,9 +75,12 @@ FROM debian:13.4
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Store Playwright browsers outside the volume mount so the build-time
-# install survives the /opt/data volume overlay at runtime.
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
+# The pinned Chromium lives in the managed tool store, and
+# installation/env.py exports PLAYWRIGHT_BROWSERS_PATH at that store for
+# every subprocess Hermes spawns, but ONLY when a browser fact exists.
+# The image used to hard-code the variable here for an
+# `npx playwright install` that wrote to it. Setting it now would name a
+# directory nothing populates and would outrank the fact.
 
 # Install system dependencies in one layer, clear APT cache.
 # tini was previously PID 1 to reap orphaned zombie processes (MCP stdio
@@ -68,9 +89,18 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright
 # replaces tini with s6-overlay's /init (PID 1 = s6-svscan), which reaps
 # zombies non-blockingly on SIGCHLD and additionally supervises the main
 # hermes process, the dashboard, and per-profile gateways.
+#
+# The second list is the shared libraries the pinned Chromium links
+# against. `npx playwright install --with-deps` used to apt-install them
+# as a side effect; the provisioner stages the browser instead, and its
+# probe RUNS the binary, so these must be present before that step or the
+# build fails with "provisioned binary does not run". The list is the
+# `ldd ... | grep "not found"` set of the pinned chrome binary in this
+# base image, mapped to trixie package names.
 RUN apt-get -o Acquire::Retries=3 update && \
     apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-    ca-certificates curl iputils-ping python3 python-is-python3 ripgrep ffmpeg gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps git openssh-client docker-cli xz-utils && \
+    ca-certificates curl iputils-ping python3 python-is-python3 ffmpeg gcc g++ make cmake python3-dev python3-venv libffi-dev libolm-dev libatomic1 procps openssh-client docker-cli xz-utils \
+    libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 && \
     rm -rf /var/lib/apt/lists/*
 
 # Prefer the fixed SQLite over Debian's vulnerable libsqlite3.so.0. Keep the
@@ -149,22 +179,48 @@ COPY --chmod=0755 docker/tini-shim.sh /usr/bin/tini
 # Non-root user for runtime; UID can be overridden via HERMES_UID at runtime
 RUN useradd -u 10000 -m -d /opt/data hermes
 
-COPY --chmod=0755 --from=uv_source /usr/local/bin/uv /usr/local/bin/uvx /usr/local/bin/
-
-# Node 26: copy the node binary plus the bundled npm JS install from the
-# upstream image.  npm and npx are recreated as symlinks because they're
-# symlinks in the source image (and need to live on PATH).
+# ---------- Managed runtimes from the pin table (decision 8) ----------
+# The image used to assemble its tool set from three non-pin authorities
+# (node from a base image digest, git/ripgrep from apt, uv from an astral
+# image tag that had already drifted from the table). It is now a pin
+# consumer: the stdlib-only installation package runs the SAME provisioner
+# invocation the desktop payload staging uses, into a runtime dir that is
+# its own store (self-contained sealed layout — the desktop payload and
+# the Nix bundle have the identical shape). Digest-verified downloads,
+# gh included (previously absent from the image entirely).
 #
-# No corepack: Node unbundled it upstream, so node:26 ships only npm in
-# /usr/local/lib/node_modules.  Nothing here needs it — no package.json
-# declares a `packageManager`, and no build step shells out to yarn or pnpm.
-#
-# See node_source stage at the top of the file for the version-bump
-# rationale (#4977).
-COPY --chmod=0755 --from=node_source /usr/local/bin/node /usr/local/bin/
-COPY --from=node_source /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
-RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
-    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+# Placed BEFORE the npm layer: the node that builds web/ui-tui is the
+# pinned node, not a second authority. Layer-cached on the two files that
+# define the outcome: the pin table and the provisioner package.
+COPY installation/ /opt/hermes-build/installation/
+# The facts-publishing step lives in a checked-in script instead of a RUN
+# heredoc: hadolint cannot parse heredoc bodies and the docker-lint job
+# blocks on a Dockerfile parse error.
+COPY docker/publish_runtime_facts.py /opt/hermes-build/publish_runtime_facts.py
+# --extra agent-browser stages the browser driver and, through the pin
+# table's `requires` edges, the Chromium pair it drives. This replaces an
+# `npx playwright install --with-deps chromium` ladder that fetched
+# whatever revision the npm-resolved playwright wanted, unverified, and
+# recorded no fact -- so the container had a browser that the runtime
+# locator could not see. The image is a pin consumer for its browser now,
+# exactly as it already is for node, uv, gh and ripgrep.
+RUN PYTHONPATH=/opt/hermes-build python3 -m installation.provisioner \
+        --runtime-dir /opt/hermes/.hermes-runtime --extra agent-browser && \
+    PYTHONPATH=/opt/hermes-build python3 /opt/hermes-build/publish_runtime_facts.py
+ENV PYTHONPATH_HERMES_BUILD=/opt/hermes-build
+# The image BUILDS its runtime dir instead of provisioning at first run,
+# exactly as the Nix bundle and the desktop payload do, so bytes and facts
+# are one self-contained directory. Without this the runtime reads facts
+# from here and looks for the bytes in the machine-wide store
+# (~/.hermes/tools, i.e. the /opt/data volume), finds nothing, and every
+# managed tool resolves to None -- installation/paths.py::resolve_bases.
+ENV HERMES_RUNTIME_DIR=/opt/hermes/.hermes-runtime
+WORKDIR /opt/hermes-build
+RUN PYTHONPATH=/opt/hermes-build python3 -c "\
+from installation.provisioner import require_current_runtimes; \
+require_current_runtimes(project_root=__import__('pathlib').Path('/opt/hermes'), \
+    runtime_dir=__import__('pathlib').Path('/opt/hermes/.hermes-runtime'))" \
+    || (echo 'pinned runtimes drifted from the table' && exit 1)
 
 WORKDIR /opt/hermes
 
@@ -197,10 +253,6 @@ COPY apps/shared/ apps/shared/
 ENV npm_config_install_links=false
 
 RUN npm install --prefer-offline --no-audit --fetch-retries=5 && \
-    for i in 1 2 3; do \
-        npx playwright install --with-deps chromium --only-shell && break || \
-        { [ "$i" = 3 ] && exit 1; echo "playwright install failed (attempt $i); retrying in 10s"; sleep 10; }; \
-    done && \
     npm cache clean --force
 
 # ---------- Photon iMessage sidecar deps (baked, NS-606) ----------
@@ -291,47 +343,35 @@ COPY --link --chmod=a+rX,go-w . .
 # resolution or downloads.
 RUN uv pip install --no-cache-dir --no-deps -e "."
 
-# Wire the exec shim and install-method stamp.  Files under /opt/hermes are
+# Wire the exec shim.  Files under /opt/hermes are
 # already root-owned (COPY, uv sync, npm install all run as root) and
 # read-only for the hermes user (go-w from the --chmod above).
 
 USER root
 RUN mkdir -p /opt/hermes/bin && \
     cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \
-    chmod 0755 /opt/hermes /opt/hermes/bin/hermes && \
-    printf 'docker\n' > /opt/hermes/.install_method
-# The ``.install_method`` stamp is baked next to the running code (the install
-# tree), NOT into $HERMES_HOME. $HERMES_HOME (/opt/data) is a shared data
-# volume that is commonly bind-mounted from the host and even shared with a
-# host-side Desktop/CLI install; stamping it at boot used to clobber that
-# host install's marker and wrongly block its ``hermes update``. A code-scoped
-# stamp is read first by detect_install_method() and is immune to the share.
+    chmod 0755 /opt/hermes/bin/hermes
+
+# Guarantee the code-scoped install stamp exists. CI COPY'd a full-provenance
+# install-stamp.json in the bulk COPY above; a local build without CI gets a
+# minimal fallback so detect_install_method() still reads `docker` from the
+# `distribution` field. The stamp lives next to the code (NOT in $HERMES_HOME,
+# a shared data volume that may be bind-mounted from a host that has its own
+# install) — see hermes_cli/runtime_tree.py.
+#
+# updateMechanism is REQUIRED: both installation.tree.read_build_info() and
+# the stdlib fast path in hermes_cli/_startup_fast.py hard-fail on a stamp
+# that lacks it, so a fallback without the field made `hermes --version`
+# crash in every locally-built image. `external` is the truth for Docker —
+# the image is rebuilt and re-pulled, it never updates itself.
+RUN if [ ! -f /opt/hermes/install-stamp.json ]; then \
+        printf '{"schemaVersion":2,"commit":"0000000000000000000000000000000000000000","distribution":"docker","source":"fallback","updateMechanism":"external"}\n' \
+            > /opt/hermes/install-stamp.json; \
+    fi
 # Start as root so the s6-overlay stage2 hook can usermod/groupmod and chown
 # the data volume. Each supervised service then drops to the hermes user via
 # `s6-setuidgid hermes` in its run script. If HERMES_UID is unset, services
 # run as the default hermes user (UID 10000).
-
-# ---------- Bake build-time git revision ----------
-# .dockerignore excludes .git, so `git rev-parse HEAD` from inside the
-# container always returns nothing — meaning `hermes dump` reports
-# "(unknown)" and the startup banner drops its `· upstream <sha>` suffix.
-# That makes support triage from container bug reports impossible:
-# we can't tell which commit the user is actually running.
-#
-# Fix: write the commit SHA passed via the HERMES_GIT_SHA build-arg to
-# /opt/hermes/.hermes_build_sha at build time, and have
-# hermes_cli/build_info.py read it at runtime.  Both `hermes dump` and
-# banner.get_git_banner_state() try the baked SHA first, then fall back
-# to live `git rev-parse` for source installs (unchanged behaviour).
-#
-# The arg is optional — local `docker build` without --build-arg simply
-# omits the file, and the runtime falls back to live-git lookup.  CI
-# (.github/workflows/docker.yml) passes ${{ github.sha }} so
-# every published image has it.
-ARG HERMES_GIT_SHA=
-RUN if [ -n "${HERMES_GIT_SHA}" ]; then \
-        printf '%s\n' "${HERMES_GIT_SHA}" > /opt/hermes/.hermes_build_sha; \
-    fi
 
 # ---------- s6-overlay service wiring ----------
 # Static services declared at build time: main-hermes + dashboard.

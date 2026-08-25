@@ -86,11 +86,9 @@ def _sqlite_upgrade_hint(install_method: str | None = None) -> str:
     if method == "docker":
         command = recommended_update_command_for_method(method)
         action = f"run `{command}`, then recreate all Hermes containers"
-    elif is_nix_install_method(method):
+    elif method == "nix":
         # The Nix helper is prose guidance, not a literal shell command.
         action = recommended_update_command_for_method(method)
-    elif method == "apt":
-        action = f"run `{recommended_update_command_for_method(method)}`"
     else:
         action = "run `hermes update`"
     return (
@@ -235,6 +233,7 @@ def _safe_which(cmd: str) -> str | None:
     except Exception:
         return None
 
+    _check_channel_record_hygiene()
 
 
 def _check_channel_record_hygiene() -> None:
@@ -266,6 +265,207 @@ def _check_channel_record_hygiene() -> None:
         else:  # unclaimed
             detail = f"(no live install claims {sha16} — safe to remove update.installs.{sha16})"
         check_warn(f"Stale channel record: {sha16}", detail)
+
+
+def _managed_node_tool(tool: str) -> tuple[str | None, str]:
+    """Locate a pinned Node tool the way Hermes locates it, plus a label.
+
+    Hermes runs the pinned node and npm from this install's runtime dir, so
+    that is the first question. A PATH probe alone misreports a healthy
+    managed install as "not found" whenever the managed dirs are not on the
+    caller's PATH, which is the normal case: nothing puts them there for an
+    interactive shell.
+
+    PATH stays as the second rung, because doctor reports what is on the
+    machine and an unmanaged system copy is still worth naming.
+    """
+    from installation import nodejs
+
+    resolver = nodejs.npm_path if tool == "npm" else nodejs.node_path
+    try:
+        return str(resolver()), "managed"
+    except nodejs.NotProvisioned:
+        pass
+    system = _safe_which(tool)
+    return system, "system"
+
+
+def _check_managed_runtimes() -> None:
+    """Report the managed runtime tools from the registry's facts file.
+
+    The provisioner is the only writer of those facts, so doctor reads
+    them rather than re-deriving existence by probing paths (hermes-home
+    lifetime split, phase 3.10). Tools the registry does not know about
+    are still reported from PATH so a system copy is visible.
+
+    Drift is a WARNING in a git checkout and an ERROR in a sealed tree.
+    A checkout heals itself on the next `hermes update`; a sealed tree
+    cannot provision anything, so a mismatch there means the artifact was
+    built against a different pin table than the code it ships, and only
+    its steward can fix it.
+    """
+    try:
+        from installation.paths import resolve_bases
+        from installation.registry import is_optional, load_facts, load_pins
+        from installation.tree import Sealed, runtime_tree
+        from hermes_constants import get_install_root
+
+        facts_dir, store = resolve_bases()
+        pins = load_pins()
+        facts = load_facts(facts_dir)
+        tree = runtime_tree(get_install_root())
+    except Exception as exc:
+        check_warn("Managed runtimes unreadable", f"({exc})")
+        return
+
+    sealed = isinstance(tree, Sealed)
+    # What a user can actually do about it differs per install kind:
+    # a checkout runs an update, a sealed tree rebuilds with its steward.
+    remedy = (
+        f"(rebuild this {tree.steward} artifact — a sealed install cannot provision)"
+        if sealed
+        else "(reprovisioned on the next 'hermes update')"
+    )
+    report_drift = check_fail if sealed else check_warn
+
+    for tool, pin in pins.items():
+        fact = facts.get(tool)
+        if fact is None:
+            # An OPTIONAL tool nobody installed is a capability nobody
+            # asked for, not drift (same rule as provisioner.stale_tools).
+            # Say only what this sweep knows — that no PIN was staged. The
+            # capability itself may still resolve another way (agent-browser
+            # through npx, chromium through a system browser), and the
+            # capability checks further down own that verdict. A line here
+            # reading "not installed" contradicts the "✓ agent-browser"
+            # those checks print in the same run.
+            if is_optional(tool, pins):
+                check_info(f"{tool} not staged from the pin table (optional)")
+                continue
+            system = _safe_which("rg" if tool == "ripgrep" else tool)
+            if system:
+                check_ok(f"{tool} (system)", f"at {system}")
+            else:
+                report_drift(f"{tool} not provisioned", remedy)
+            continue
+        # A system-sourced fact records a machine tool accepted by the
+        # version-floor probe (decision 1) — its path is absolute and
+        # deliberately NOT at the pinned version.
+        if fact.source == "system":
+            if Path(fact.path).is_file():
+                check_ok(f"{tool} {fact.version} (system)", f"at {fact.path}")
+            else:
+                report_drift(f"{tool} (system) vanished from {fact.path}", remedy)
+            continue
+        # The fact's path is STORE-relative (§E): bytes live in the shared
+        # tool store, facts beside the install. Checking under the facts
+        # dir would misreport every store-provisioned tool as missing.
+        if not (store / fact.path).is_file():
+            report_drift(
+                f"{tool} recorded but missing",
+                "(runtime dir was modified) " + remedy if not sealed else remedy,
+            )
+            continue
+        # Exact pins make currency an equality check, not a range check —
+        # the same comparison stale_tools and the provisioner make.
+        if fact.version != pin["version"]:
+            report_drift(
+                f"{tool} {fact.version} does not match the pin {pin['version']}",
+                remedy,
+            )
+            continue
+        check_ok(f"{tool} {fact.version}", "(managed)")
+
+
+def _check_install_state_hygiene() -> None:
+    """Orphaned install-state folders and unreferenced tool-store entries.
+
+    Both are derived-state leaks, not breakage: a deleted worktree leaves
+    its ``installs/<sha16>/`` folder behind (nothing can ever claim it —
+    the key is the hash of a path that no longer exists), and a pin bump
+    strands the store entry of the version nobody's facts name anymore.
+    Doctor reports; the user deletes. No auto-delete from a diagnostic
+    command — the whole point of the shared store is that another install
+    might be mid-provision while doctor runs.
+    """
+    try:
+        from hermes_cli.boot_bootstrap import (
+            orphaned_installs,
+            orphaned_store_entries,
+        )
+        from hermes_cli.sizefmt import format_bytes
+
+        install_orphans = orphaned_installs()
+        store_orphans = orphaned_store_entries()
+    except Exception as exc:
+        check_warn("Install-state hygiene unreadable", f"({exc})")
+        return
+
+    if not install_orphans and not store_orphans:
+        check_ok("Install state", "(no orphaned folders or store entries)")
+        return
+
+    for folder, recorded in install_orphans:
+        check_warn(
+            f"Orphaned install state: {folder.name}",
+            f"(its install at {recorded} is gone — safe to delete {folder})",
+        )
+    if store_orphans:
+        total = sum(size for _entry, size in store_orphans)
+        names = ", ".join(entry.name for entry, _size in store_orphans[:4])
+        more = f" +{len(store_orphans) - 4} more" if len(store_orphans) > 4 else ""
+        check_warn(
+            f"{len(store_orphans)} unreferenced tool-store "
+            f"entr{'y' if len(store_orphans) == 1 else 'ies'} "
+            f"({format_bytes(total)})",
+            f"({names}{more} — no install's facts name them; safe to delete)",
+        )
+
+    _check_channel_record_hygiene()
+
+
+def _check_lazy_features() -> None:
+    """Opt-in backends this install has activated, and their state.
+
+    A lazy feature has two halves that can disagree: the record of what
+    the user activated, and the packages in this install's overlay. The
+    updater's view (``active_features``) drops every row where the two
+    disagree, so nothing else reports them — a feature the user selected
+    and no longer has looks identical to one they never selected.
+    """
+    try:
+        from tools.lazy_deps import feature_report
+
+        report = feature_report()
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must not raise
+        check_warn("Optional backends unreadable", f"({exc})")
+        return
+
+    if not report:
+        check_ok("Optional backends", "(none activated)")
+        return
+
+    installed = [f for f, state in report if state == "installed"]
+    if installed:
+        shown = ", ".join(installed[:6])
+        more = f" +{len(installed) - 6} more" if len(installed) > 6 else ""
+        check_ok(f"{len(installed)} optional backend(s) installed", f"({shown}{more})")
+
+    for feature, state in report:
+        if state == "stale":
+            check_warn(
+                f"Optional backend out of date: {feature}",
+                "(a pin moved — `hermes update` refreshes it)",
+            )
+        elif state == "missing":
+            check_warn(
+                f"Optional backend recorded but absent: {feature}",
+                "(its packages are not in this install — re-run the feature to reinstall)",
+            )
+        elif state == "unsupported":
+            check_info(f"Optional backend unavailable on this host: {feature}")
+        elif state == "unknown":
+            check_info(f"Optional backend no longer exists: {feature} (record is stale)")
 
 
 def _has_provider_env_config(content: str) -> bool:
@@ -797,6 +997,77 @@ def _check_s6_supervision(issues: list[str]) -> None:
         f"Per-profile gateways: {up_count}/{len(profiles)} supervised up"
         + (f" ({', '.join(sorted(profiles))})" if len(profiles) <= 8 else "")
     )
+
+
+def check_legacy_desktop_checkout() -> None:
+    """Report the unused legacy checkout under an embedded desktop install.
+
+    Before the embedded runtime existed, the desktop app installed a git
+    checkout at $HERMES_HOME/hermes-agent. An embedded app never uses it,
+    so it sits on disk (1-2 GB of tree + venv). Doctor reports it and
+    suggests deletion ONLY when the tree is demonstrably untouched: clean
+    status, on main, no stashes. A false "dirty" is safe (the user keeps a
+    clean tree); a false "pristine" is not (the suggestion could cost
+    local work). Doctor never deletes anything itself.
+    """
+    from installation.tree import Sealed, runtime_tree
+
+    try:
+        from hermes_cli.main import PROJECT_ROOT
+    except Exception:
+        return
+
+    tree = runtime_tree(Path(PROJECT_ROOT))
+    if not (isinstance(tree, Sealed) and tree.steward == "desktop-app"):
+        return
+
+    checkout = HERMES_HOME / "hermes-agent"
+    if not (checkout / ".git").exists():
+        return
+
+    _section("Legacy Desktop Checkout")
+
+    def _git(*args: str):
+        try:
+            return subprocess.run(
+                ["git", "-C", str(checkout), *args],
+                capture_output=True, text=True, encoding="utf-8", timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    status = _git("status", "--porcelain")
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    stashes = _git("stash", "list")
+
+    # Conservative pristineness: every probe must succeed AND come back
+    # clean. Any probe failure counts as "has local work".
+    pristine = (
+        status is not None and status.returncode == 0 and status.stdout.strip() == ""
+        and branch is not None and branch.returncode == 0 and branch.stdout.strip() == "main"
+        and stashes is not None and stashes.returncode == 0 and stashes.stdout.strip() == ""
+    )
+
+    size_note = ""
+    try:
+        total = sum(f.stat().st_size for f in checkout.rglob("*") if f.is_file())
+        size_note = f" (~{total / 1_000_000_000:.1f} GB)"
+    except OSError:
+        pass
+
+    if pristine:
+        check_warn(
+            f"Unused checkout at {_DHH}/hermes-agent{size_note}",
+            "(the desktop app runs embedded and does not use it)",
+        )
+        print(f"    The tree is pristine. You can delete it to free the space:")
+        print(f"      rm -rf {checkout}")
+    else:
+        check_info(
+            f"A checkout exists at {_DHH}/hermes-agent but holds local work "
+            "(changes, a branch, or stashes). The desktop app does not use "
+            "it; review it before you remove anything."
+        )
 
 
 def check_certificates(should_fix: bool = False, issues: "list | None" = None) -> None:
@@ -1772,6 +2043,8 @@ def run_doctor(args):
     except Exception:
         pass
 
+    check_legacy_desktop_checkout()
+
     _section("Directory Structure")
     hermes_home = HERMES_HOME
     if hermes_home.exists():
@@ -2071,19 +2344,32 @@ def run_doctor(args):
                     issues.append(f"Missing {_cmd_link_display}/hermes symlink — run 'hermes doctor --fix'")
 
     _section("External Tools")
-    # Git
-    if _safe_which("git"):
-        check_ok("git")
+    # Git. git_path() answers with the git Hermes would actually run:
+    # the managed one, else a system one that clears the flag floor and
+    # is not the macOS xcode-select shim. A bare PATH probe says "found"
+    # for both of those, and then Hermes fails on the real call.
+    from installation.git import git_install_guidance, git_path
+
+    _git_bin = git_path()
+    if _git_bin is not None:
+        check_ok("git", f"({_git_bin})")
     else:
-        check_warn("git not found", "(optional)")
+        check_warn("no usable git", f"(optional) {git_install_guidance()}")
     
-    # ripgrep (optional, for faster file search)
-    if _safe_which("rg"):
-        check_ok("ripgrep (rg)", "(faster file search)")
-    else:
-        check_warn("ripgrep (rg) not found", "(file search uses grep fallback)")
-        check_info(f"Install for faster search: {_system_package_install_cmd('ripgrep')}")
-    
+    # Managed runtimes: what the registry says this install provisioned.
+    # A tool that is missing here is not a "go install it yourself"
+    # problem — the provisioner owns it and retries on the next update.
+    _check_managed_runtimes()
+
+    # Derived-state leaks: orphaned installs/<sha16>/ folders and
+    # tool-store entries nobody's facts reference (§B store GC, report-only).
+    _check_install_state_hygiene()
+
+    # Opt-in backends: what the user activated, and whether this install
+    # actually holds the packages (the record and the overlay are
+    # separate halves and can disagree).
+    _check_lazy_features()
+
     # Docker (optional)
     terminal_env = os.getenv("TERMINAL_ENV", "local")
     try:
@@ -2281,8 +2567,9 @@ def run_doctor(args):
                     _fail_and_issue(_label, _detail, _detail.strip("()"), issues)
 
     # Node.js + agent-browser (for browser automation tools)
-    if _safe_which("node"):
-        check_ok("Node.js")
+    _node_bin, _node_source = _managed_node_tool("node")
+    if _node_bin:
+        check_ok("Node.js", f"({_node_source}: {_node_bin})")
         # agent-browser is no longer a root package.json dependency (#43564)
         # — it resolves lazily via npx (or a global/Hermes-managed install)
         # at first use. Mirror tools.browser_tool._find_agent_browser's own
@@ -2361,21 +2648,14 @@ def run_doctor(args):
                             "Playwright Chromium not installed",
                             "(browser_* tools will be hidden from the agent)",
                         )
-                        if sys.platform == "win32":
-                            check_info(
-                                f"Install with: cd {PROJECT_ROOT} && "
-                                "npx playwright install chromium"
-                            )
-                        else:
-                            check_info(
-                                f"Install with: cd {PROJECT_ROOT} && "
-                                "npx playwright install --with-deps chromium"
-                            )
+                        from installation.browser import browser_install_guidance
+
+                        check_info(browser_install_guidance())
     else:
         check_warn("Node.js not found", "(optional, needed for browser tools)")
     
     # npm audit for all Node.js packages
-    _npm_bin = _safe_which("npm")
+    _npm_bin, _ = _managed_node_tool("npm")
     if _npm_bin:
         # Each entry: (cwd, label, extra_audit_args)
         # PROJECT_ROOT is audited with --workspaces=false so that the apps/*
@@ -2407,9 +2687,14 @@ def run_doctor(args):
             try:
                 # Use resolved absolute path so Windows can execute
                 # npm.cmd (CreateProcessW can't run bare .cmd names).
+                # The managed env travels with it: the npm shim starts with
+                # "#!/usr/bin/env node" and resolves its interpreter on PATH.
+                from installation import env as runtime_env
+
                 audit_result = subprocess.run(
                     [_npm_bin, "audit", "--json", *audit_extra],
                     cwd=str(npm_dir),
+                    env=runtime_env.with_managed_runtimes(),
                     capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
                 )
                 import json as _json

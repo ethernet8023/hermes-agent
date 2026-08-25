@@ -91,4 +91,6 @@ def test_fast_version_reports_install_method_stamp(tmp_path):
     home.mkdir()
     result = _run_version({"HERMES_HOME": str(home)})
     assert result.returncode == 0, result.stderr
-    assert "Install method: git" in result.stdout
+    # An unstamped checkout in a temp dir is a `source` working tree, not a
+    # stamped `git` install — the stamp model classifies by the code tree.
+    assert "Install method: source" in result.stdout

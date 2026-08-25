@@ -2030,62 +2030,46 @@ def _tui_need_npm_install(root: Path) -> bool:
 
 
 def _ensure_tui_node() -> None:
-    """Make sure `node` + `npm` are on PATH for the TUI.
+    """Make sure the pinned `node` + `npm` are provisioned, and on PATH.
 
-    If either is missing and scripts/lib/node-bootstrap.sh is available, source
-    it and call `ensure_node` (fnm/nvm/proto/brew/bundled cascade). After
-    install, capture the resolved node binary path from the bash subprocess
-    and prepend its directory to os.environ["PATH"] so shutil.which finds the
-    new binaries in this Python process — regardless of which version manager
-    was used (nvm, fnm, proto, brew, or the bundled fallback).
+    The TUI runs on the pinned Node this install provisions, never on a
+    system one: that is what the pin is for. So the question here is whether
+    the managed tools are in this install's runtime dir, which the registry
+    facts answer. A PATH probe answers a different question — it says yes to
+    any node of any version, and saying yes skips the provisioning that would
+    have installed the right one.
 
-    Idempotent no-op when node+npm are already discoverable. Set
-    ``HERMES_SKIP_NODE_BOOTSTRAP=1`` to disable auto-install.
+    The managed bin dirs go on this process's PATH either way, because the
+    TUI child and everything it spawns inherit that PATH and must reach the
+    same toolchain the parent resolved.
+
+    Set ``HERMES_SKIP_NODE_BOOTSTRAP=1`` to refuse the auto-install. The TUI
+    then fails at the point of use, naming the tool it could not find.
     """
-    if shutil.which("node") and shutil.which("npm"):
-        return
-    if os.environ.get("HERMES_SKIP_NODE_BOOTSTRAP"):
-        return
+    from installation import registry
 
-    helper = PROJECT_ROOT / "scripts" / "lib" / "node-bootstrap.sh"
-    if not helper.is_file():
-        return
+    if not all(registry.tool_path(tool) for tool in ("node", "npm")):
+        if os.environ.get("HERMES_SKIP_NODE_BOOTSTRAP"):
+            return
+        try:
+            from installation.provisioner import provision_tool
 
-    from hermes_constants import get_hermes_home
+            # npm extends node, so provisioning npm brings both. Each tool
+            # already at its pin takes the no-op fast path.
+            result = provision_tool("npm")
+        except Exception as exc:  # noqa: BLE001 — reported, then left to the caller
+            print(f"Could not provision the pinned Node toolchain: {exc}")
+            return
+        if not result.ok:
+            print(f"Could not provision the pinned Node toolchain: {result.detail}")
+            return
 
-    hermes_home = str(get_hermes_home())
-    try:
-        # Helper writes logs to stderr; we ask bash to print `command -v node`
-        # on stdout once ensure_node succeeds. Subshell PATH edits don't leak
-        # back into Python, so the stdout capture is the bridge.
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f'source "{helper}" >&2 && ensure_node >&2 && command -v node',
-            ],
-            env={**os.environ, "HERMES_HOME": hermes_home},
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return
+    from installation.env import managed_path_dirs
 
     parts = os.environ.get("PATH", "").split(os.pathsep)
-    extras: list[Path] = []
-
-    resolved = (result.stdout or "").strip()
-    if resolved:
-        extras.append(Path(resolved).resolve().parent)
-
-    extras.extend([Path(hermes_home) / "node" / "bin", Path.home() / ".local" / "bin"])
-
-    for extra in extras:
+    for extra in managed_path_dirs():
         s = str(extra)
-        if extra.is_dir() and s not in parts:
+        if s not in parts:
             parts.insert(0, s)
     os.environ["PATH"] = os.pathsep.join(parts)
 
@@ -2109,12 +2093,14 @@ def _restore_tui_workspace(tui_dir: Path) -> bool:
     or the restore leaves the directory still missing — the caller then prints
     the manual-recovery message.
     """
-    git = shutil.which("git")
-    if not git or not (tui_dir.parent / ".git").exists():
+    from installation.git import git_path
+
+    git = git_path()
+    if git is None or not (tui_dir.parent / ".git").exists():
         return False
     try:
         subprocess.run(
-            [git, "restore", "--", tui_dir.name],
+            [str(git), "restore", "--", tui_dir.name],
             cwd=str(tui_dir.parent),
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
@@ -2174,22 +2160,14 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             env_node = os.environ.get("HERMES_NODE")
             if env_node and os.path.isfile(env_node) and os.access(env_node, os.X_OK):
                 return env_node
-        # find_node_executable() prefers the managed $HERMES_HOME/node tree,
-        # which is not on PATH — a bare which() would declare "node not found"
-        # and exit on an install whose only Node is the one Hermes installed,
-        # and would pick a system Node over the managed one when both exist.
-        from hermes_constants import find_node_executable
+        # The pinned tool, not a PATH lookup: the managed tree is not on
+        # PATH, and a system Node would be the wrong version anyway.
+        from installation import nodejs
 
-        path = find_node_executable(bin)
-        if not path and bin == "node":
-            try:
-                from hermes_cli.dep_ensure import ensure_dependency
-                if ensure_dependency("node"):
-                    path = find_node_executable("node")
-            except Exception:
-                pass
-        if not path:
-            print(f"{bin} not found — install Node.js to use the TUI.")
+        try:
+            path = str(nodejs.npm_path() if bin == "npm" else nodejs.node_path())
+        except nodejs.NotProvisioned as exc:
+            print(f"{exc}")
             sys.exit(1)
         return path
 
@@ -2263,37 +2241,18 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             "--progress=false",
         ]
 
-        def _run_tui_install() -> subprocess.CompletedProcess:
-            from hermes_constants import with_hermes_node_path
+        from installation import nodejs
 
-            # Managed tree first on PATH: if the EBADENGINE repair below
-            # provisioned a managed Node, npm's shebang/lifecycle scripts must
-            # resolve that node, not the mismatched system one.
-            return subprocess.run(
-                npm_install_cmd,
-                cwd=str(npm_cwd),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=_npm_lifecycle_env(with_hermes_node_path()),
-            )
-
-        result = _run_tui_install()
-        if result.returncode != 0:
-            # An npm outside the root package.json's `engines.npm` range fails
-            # here before doing any work; repair once (upgrade a Hermes-managed
-            # npm in place, or provision a managed runtime when the npm belongs
-            # to the user) and retry rather than dumping EBADENGINE at the user.
-            from hermes_cli.npm_engine import maybe_repair_npm_engine
-
-            combined_output = f"{result.stdout or ''}\n{result.stderr or ''}"
-            repaired_npm = maybe_repair_npm_engine(npm, combined_output)
-            if repaired_npm:
-                npm = repaired_npm
-                npm_install_cmd[0] = repaired_npm
-                result = _run_tui_install()
+        result = nodejs.run_npm(
+            npm_install_cmd[1:],
+            cwd=npm_cwd,
+            # The full lifecycle env, not a bare {"CI": "1"}: run_npm treats
+            # a given mapping as the ENTIRE child env (plus managed dirs), so
+            # a minimal dict would drop HOME/PATH. _npm_lifecycle_env also
+            # scrubs ESBUILD_BINARY_PATH — an inherited override makes the
+            # pinned esbuild's postinstall abort (#87405).
+            env=_npm_lifecycle_env(),
+        )
         if result.returncode != 0:
             combined = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
             preview = "\n".join(combined.splitlines()[-30:])
@@ -2341,6 +2300,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_npm_lifecycle_env(),
     )
     if result.returncode != 0:
         combined = f"{result.stdout or ''}{result.stderr or ''}".strip()
@@ -3103,7 +3063,7 @@ def cmd_whatsapp(args):
     """Set up WhatsApp: choose mode, configure, install bridge, pair via QR."""
     _require_tty("whatsapp")
     from hermes_cli.config import get_env_value, save_env_value
-    from hermes_constants import find_node_executable, with_hermes_node_path
+    from installation import env as runtime_env, nodejs
 
     print()
     print("⚕ WhatsApp Setup")
@@ -3218,9 +3178,10 @@ def cmd_whatsapp(args):
         print(
             "\n→ Installing WhatsApp bridge dependencies (this can take a few minutes)..."
         )
-        npm = find_node_executable("npm")
-        if not npm:
-            print("  ✗ npm not found on PATH — install Node.js first")
+        try:
+            npm = str(nodejs.npm_path())
+        except nodejs.NotProvisioned as exc:
+            print(f"  ✗ {exc}")
             return
         try:
             result = subprocess.run(
@@ -3231,7 +3192,7 @@ def cmd_whatsapp(args):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=with_hermes_node_path(),
+                env=runtime_env.with_managed_runtimes(),
             )
         except KeyboardInterrupt:
             print("\n  ✗ Install cancelled")
@@ -3286,17 +3247,27 @@ def cmd_whatsapp(args):
     print("─" * 50)
     print()
 
+    # The step-5 npm guard is skipped when node_modules already exists, so
+    # this node_path() call can be the first one to see an unprovisioned
+    # runtime dir — resolve it before the spawn instead of crashing the
+    # pairing wizard with a traceback.
+    try:
+        _pair_node = str(nodejs.node_path())
+    except nodejs.NotProvisioned as exc:
+        print(f"  ✗ {exc}")
+        return
+
     try:
         subprocess.run(
             [
-                find_node_executable("node") or "node",
+                _pair_node,
                 str(bridge_script),
                 "--pair-only",
                 "--session",
                 str(session_dir),
             ],
             cwd=str(bridge_dir),
-            env=with_hermes_node_path(),
+            env=runtime_env.with_managed_runtimes(),
         )
     except KeyboardInterrupt:
         pass
@@ -4738,6 +4709,10 @@ _LAZY_COMMAND_EXPORTS = {
         "_resume_windows_gateways_after_update",
         "_run_logged_subprocess",
         "_run_pre_update_backup",
+        "_cron_script_holder_pids",
+        "_wait_for_cron_script_holders",
+        "_run_update_phase_inline",
+        "_spawn_post_update_phase",
         "_service_unit_supports_graceful_sigusr1_restart",
         "_should_skip_upstream_prompt",
         "_stash_apply_failed_only_on_existing_untracked",
@@ -5523,10 +5498,62 @@ def cmd_import(args):
 
 
 def _print_version_info(*, check_updates: bool = True) -> None:
-    # Single source of truth for version output — shared with the
-    # `hermes --version` pre-import fast path (the `version` subcommand
-    # was consolidated into `--version`).
-    _startup_fast.print_fast_version_info(check_updates=check_updates)
+    from hermes_cli.slash_exec import CommandContext, execute_command
+    from hermes_cli.version_info import get_version_info
+
+    # Core version line is registry-owned (shared with the gateway /version);
+    # the install/python/SDK detail below is CLI-only decoration.
+    print(execute_command("version", CommandContext(surface="cli")).text)
+    version_info = get_version_info()
+    if version_info.branch:
+        print(f"Branch: {version_info.branch}")
+    if version_info.commit:
+        print(f"Commit: {version_info.commit}")
+    print(f"Working tree: {'dirty' if version_info.dirty else 'clean'}")
+    print(f"Source: {version_info.source}")
+    if version_info.distribution:
+        print(f"Distribution: {version_info.distribution}")
+    print(f"Install directory: {PROJECT_ROOT}")
+
+    # Show Python version
+    print(f"Python: {sys.version.split()[0]}")
+
+    # Check for key dependencies.  Use importlib.metadata rather than
+    # ``import openai`` — the SDK drags in ~800ms of pydantic-backed type
+    # modules just to expose ``__version__``.  Metadata lookup is ~2ms.
+    try:
+        from importlib.metadata import version as _pkg_version, PackageNotFoundError
+
+        try:
+            print(f"OpenAI SDK: {_pkg_version('openai')}")
+        except PackageNotFoundError:
+            print("OpenAI SDK: Not installed")
+    except ImportError:
+        print("OpenAI SDK: Not installed")
+
+    if not check_updates:
+        return
+
+    # Show update status (synchronous — acceptable since user asked for version info)
+    try:
+        from hermes_cli.banner import UPDATE_AVAILABLE_NO_COUNT, check_for_updates
+        from hermes_cli.config import recommended_update_command
+
+        behind = check_for_updates()
+        if behind == UPDATE_AVAILABLE_NO_COUNT:
+            print(
+                f"Update available — run '{recommended_update_command()}'"
+            )
+        elif behind and behind > 0:
+            commits_word = "commit" if behind == 1 else "commits"
+            print(
+                f"Update available: {behind} {commits_word} behind — "
+                f"run '{recommended_update_command()}'"
+            )
+        elif behind == 0:
+            print("Up to date")
+    except Exception:
+        pass
 
 
 def cmd_version(args):
@@ -5535,13 +5562,23 @@ def cmd_version(args):
 
 
 def cmd_uninstall(args):
-    """Uninstall Hermes Agent (or just the Chat GUI with --gui)."""
+    """Uninstall Hermes Agent (or just the Chat GUI / user data)."""
     # Machine-readable install snapshot for the desktop app's uninstall UI.
     # Must run before any TTY gate — it's called from a non-interactive child.
     if getattr(args, "gui_summary", False):
         from hermes_cli.gui_uninstall import gui_install_summary
 
         print(json.dumps(gui_install_summary()))
+        return
+
+    # Data-only removal. Valid on every install kind (source, bundled
+    # desktop app, Nix, Docker) — it never touches code.
+    if getattr(args, "data", False):
+        if not getattr(args, "yes", False):
+            _require_tty("uninstall --data")
+        from hermes_cli.uninstall import run_data_uninstall
+
+        run_data_uninstall(args)
         return
 
     # GUI-only uninstall. The desktop app shells out to this non-interactively
@@ -5640,6 +5677,15 @@ def _sweep_stale_bytecode_if_checkout_changed() -> None:
     ``hermes`` entry point compares the checkout fingerprint (cheap file
     reads, no git subprocess) against the last-validated stamp and sweeps
     the bytecode cache once when they diverge.
+
+    Scope (two-axis model): the sweep runs wherever ``.git`` exists —
+    managed installs AND dev trees. Dev trees accept the tradeoff on
+    purpose: the sweep writes ``.bytecode-fingerprint`` (gitignored) into
+    the tree and deletes ``__pycache__`` dirs, and skipping dev trees
+    would reopen the stale-pyc hole for everyone who lives in a checkout.
+    Sealed trees (embedded desktop, docker, nix) are exempt by
+    construction: no ``.git`` means no fingerprint, and the embedded app
+    also points PYTHONPYCACHEPREFIX outside its sealed resources.
 
     Never raises — a failure here must not block launch.
     """
@@ -5937,136 +5983,6 @@ def _nixos_build_env() -> dict[str, str] | None:
         pass  # nix-shell not available — caller will get None
 
     return None
-def _run_npm_install_deterministic(
-    npm: str,
-    cwd: Path,
-    *,
-    extra_args: tuple[str, ...] = (),
-    capture_output: bool = True,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess:
-    """Run a deterministic npm install that does not mutate ``package-lock.json``.
-
-    Prefers ``npm ci`` (strict, lockfile-preserving) when a lockfile is present;
-    falls back to ``npm install`` only if ``npm ci`` fails (e.g. lockfile out of
-    sync on a WIP checkout).  Without this, ``npm install`` on npm ≥ 10 silently
-    rewrites committed lockfiles (stripping ``"peer": true`` etc.), which leaves
-    the working tree dirty and causes the next ``hermes update`` to stash the
-    lockfile — repeatedly.
-
-    ``--include=dev`` is forced on every invocation: the callers are frontend
-    builds (web UI / TUI / desktop workspaces), and those builds need the dev
-    toolchain (``tsc``, ``vite``, ``electron-builder`` — all
-    ``devDependencies``).  If the caller's environment has
-    ``NODE_ENV=production`` (or npm config ``omit=dev``) — which leaks in from
-    a shell profile, a container image, or the bundled TUI launcher that sets
-    ``NODE_ENV=production`` on its subprocess env — npm silently omits
-    devDependencies (exit 0, no error), so the build toolchain never installs
-    and the subsequent build dies with ``tsc: command not found`` (exit 127).
-    The flag overrides both the env var and npm config, unlike scrubbing
-    ``NODE_ENV`` from the environment which only fixes the env-leak case.
-
-    ``--no-save`` on the ``npm install`` fallback keeps it true to this
-    function's contract: never mutate ``package-lock.json``.  Without it, an
-    out-of-sync lockfile gets rewritten by the fallback, which drifts the
-    committed lockfile and makes every future ``npm ci`` fail — a
-    self-reinforcing cycle where web devDeps never install and a stale dist
-    is served on every update (PR #65595).
-    """
-    # unicode-animations' postinstall animates to /dev/tty (bypasses
-    # --silent/capture_output). It no-ops when CI is set — same as the TUI
-    # install path and nix/lib.nix npm ci hooks.
-    run_env = _npm_lifecycle_env(env)
-
-    def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-        return _run_npm_watching_for_engine_failure(
-            cmd,
-            cwd=cwd,
-            env=run_env,
-            capture_output=capture_output,
-        )
-
-    def _attempt(npm_exe: str) -> subprocess.CompletedProcess:
-        lockfile = cwd / "package-lock.json"
-        if lockfile.exists():
-            ci_result = _run([npm_exe, "ci", "--include=dev", *extra_args])
-            if ci_result.returncode == 0:
-                return ci_result
-            # Fall through to `npm install` — lockfile may be out of sync on a
-            # WIP fork/branch, or `npm ci` may not be available on very old npm.
-        return _run([npm_exe, "install", "--no-save", "--include=dev", *extra_args])
-
-    result = _attempt(npm)
-    if result.returncode == 0:
-        return result
-
-    # An npm outside the root package.json's `engines.npm` range fails every
-    # command here identically (the `npm install` fallback included), so the
-    # failure is worth exactly one repair attempt. `maybe_repair_npm_engine`
-    # returns the npm to retry with — the same one after an in-place upgrade
-    # of a Hermes-managed install, or a freshly provisioned managed npm when
-    # the failing npm belongs to the user's own toolchain.
-    from hermes_cli.npm_engine import maybe_repair_npm_engine
-
-    combined = f"{result.stdout or ''}\n{result.stderr or ''}"
-    repaired_npm = maybe_repair_npm_engine(npm, combined)
-    if not repaired_npm:
-        return result
-    # The repaired npm may be a freshly provisioned managed one whose shebang
-    # and lifecycle scripts resolve `node` from PATH — put the managed tree
-    # first so they find the managed Node, not the mismatched system one.
-    from hermes_constants import with_hermes_node_path
-
-    run_env["PATH"] = with_hermes_node_path(run_env)["PATH"]
-    return _attempt(repaired_npm)
-
-
-def _run_npm_watching_for_engine_failure(
-    cmd: list[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-    capture_output: bool,
-) -> subprocess.CompletedProcess:
-    """Run *cmd*, always retaining stderr so ``EBADENGINE`` stays detectable.
-
-    ``capture_output=False`` callers stream npm's progress live and would
-    otherwise hand back a ``CompletedProcess`` with ``stderr=None``, leaving the
-    engine-failure recovery nothing to read. Tee stderr instead: each line is
-    forwarded to this process's stderr as it arrives (so live output is
-    unchanged) and accumulated for the caller.
-    """
-    if capture_output:
-        return subprocess.run(
-            cmd,
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-
-    captured: list[str] = []
-    with subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=env,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    ) as proc:
-        if proc.stderr is not None:
-            for line in proc.stderr:
-                captured.append(line)
-                sys.stderr.write(line)
-            sys.stderr.flush()
-        returncode = proc.wait()
-    return subprocess.CompletedProcess(cmd, returncode, None, "".join(captured))
-
-
 def _missing_web_build_tool(output: str) -> str | None:
     """Return the build tool a failed ``npm run build`` could not resolve.
 
@@ -6159,7 +6075,7 @@ def _do_build_web_ui(web_dir: Path, *, fatal: bool = False) -> bool:
             encoding = getattr(sys.stdout, "encoding", None) or "ascii"
             print(text.encode(encoding, errors="replace").decode(encoding, errors="replace"))
 
-    from hermes_constants import with_hermes_node_path
+    from installation import env as runtime_env, nodejs
 
     npm = _resolve_node_runtime_npm()
     if not npm:
@@ -6167,7 +6083,11 @@ def _do_build_web_ui(web_dir: Path, *, fatal: bool = False) -> bool:
             _say("Web UI frontend not built and npm is not available.")
             _say("Install Node.js, then run:  cd web && npm install && npm run build")
         return not fatal
-    build_env = _npm_lifecycle_env(with_hermes_node_path())
+    build_env = runtime_env.with_managed_runtimes()
+    # esbuild treats this as an executable override; an inherited one makes
+    # the pinned esbuild's postinstall abort (#87405). Scrub it from the
+    # whole build environment — install and vite build alike.
+    build_env.pop("ESBUILD_BINARY_PATH", None)
     _say("→ Building web UI...")
 
     def _relay(result: "subprocess.CompletedProcess") -> None:
@@ -6212,8 +6132,9 @@ def _do_build_web_ui(web_dir: Path, *, fatal: bool = False) -> bool:
         if (npm_cwd / "ui-tui" / "package.json").exists():
             npm_workspace_args = ("--workspace", "ui-tui", *npm_workspace_args)
     def _install_web_deps(*, silent: bool) -> "subprocess.CompletedProcess":
-        return _run_npm_install_deterministic(
-            npm,
+        from installation import nodejs
+
+        return nodejs.npm_install(
             npm_cwd,
             extra_args=(*npm_workspace_args, "--silent", "--prefer-offline") if silent else (*npm_workspace_args, "--prefer-offline"),
             env=build_env,
@@ -6480,6 +6401,10 @@ def _desktop_build_needed(desktop_dir: Path, project_root: Path, *, source_mode:
     if stamp_data.get("sourceMode") != source_mode:
         return True
 
+    # If the variant changed, force a rebuild
+    if stamp_data.get("variant") != os.environ.get("HERMES_DESKTOP_VARIANT", ""):
+        return True
+
     saved_hash = stamp_data.get("contentHash")
     if not saved_hash:
         return True
@@ -6499,6 +6424,7 @@ def _write_desktop_build_stamp(project_root: Path, *, source_mode: bool) -> None
             "contentHash": content_hash,
             "sourceMode": source_mode,
             "builtAt": datetime.now(timezone.utc).isoformat(),
+            "variant": os.environ.get("HERMES_DESKTOP_VARIANT", "")
         }
         stamp_file.write_text(json.dumps(stamp_data, indent=2) + "\n", encoding="utf-8")
     except Exception as exc:
@@ -6510,19 +6436,24 @@ def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
     """Return the current platform's unpacked Electron app executable."""
     release_dir = desktop_dir / "release"
     if sys.platform == "darwin":
-        candidates = list(release_dir.glob("mac*/Hermes.app/Contents/MacOS/Hermes"))
+        candidates = list(release_dir.glob("mac*/Hermes*.app/Contents/MacOS/Hermes*"))
     elif sys.platform == "win32":
         candidates = [
             release_dir / "win-unpacked" / "Hermes.exe",
+            release_dir / "win-unpacked" / "Hermes Light.exe",
             release_dir / "win-ia32-unpacked" / "Hermes.exe",
+            release_dir / "win-ia32-unpacked" / "Hermes Light.exe",
             release_dir / "win-arm64-unpacked" / "Hermes.exe",
+            release_dir / "win-arm64-unpacked" / "Hermes Light.exe",
         ]
     else:
         candidates = [
             release_dir / "linux-unpacked" / "hermes",
             release_dir / "linux-unpacked" / "Hermes",
+            release_dir / "linux-unpacked" / "Hermes Light",
             release_dir / "linux-arm64-unpacked" / "hermes",
             release_dir / "linux-arm64-unpacked" / "Hermes",
+            release_dir / "linux-arm64-unpacked" / "Hermes Light",
         ]
 
     existing = [p for p in candidates if p.exists()]
@@ -6986,9 +6917,7 @@ def _electron_dir(project_root: Path) -> Path:
     ``apps/desktop/node_modules`` instead of hoisting them to the repo root.
     Which layout you get depends on the npm version and what else is installed,
     so a build path that assumes one or the other breaks intermittently across
-    machines. ``apps/desktop/package.json`` points electron-builder's
-    ``electronDist`` at ``node_modules/electron/dist`` relative to the desktop
-    project, so prefer the workspace-local package and fall back to the root
+    machines. Prefer the workspace-local package and fall back to the root
     hoist when that's where npm landed it.
     """
     desktop_local = project_root / "apps" / "desktop" / "node_modules" / "electron"
@@ -7000,9 +6929,8 @@ def _electron_dir(project_root: Path) -> Path:
 def _electron_dist_binary(project_root: Path) -> Path:
     """Return the path to the Electron main binary inside the installed package.
 
-    electron-builder reads the binary from ``build.electronDist`` since #38673,
-    so this is the exact file whose absence makes a pack fail with "The
-    specified electronDist does not exist". The basename differs per OS (the
+    This is the file whose absence marks a blocked/partial electron postinstall
+    (`npm run dev` launches from this dist). The basename differs per OS (the
     platform Electron is named for the host the build runs on).
     """
     dist = _electron_dir(project_root) / "dist"
@@ -7051,10 +6979,11 @@ def _redownload_electron_dist(
     installer = electron_dir / "install.js"
     if not installer.is_file():
         return False
-    from hermes_constants import find_node_executable, with_hermes_node_path
+    from installation import env as runtime_env, nodejs
 
-    node = find_node_executable("node")
-    if not node:
+    try:
+        node = str(nodejs.node_path())
+    except nodejs.NotProvisioned:
         return False
 
     dist_dir = electron_dir / "dist"
@@ -7064,7 +6993,7 @@ def _redownload_electron_dist(
     except OSError:
         pass
 
-    dl_env = with_hermes_node_path(env)
+    dl_env = runtime_env.with_managed_runtimes(env)
     if mirror:
         dl_env["ELECTRON_MIRROR"] = mirror
     try:
@@ -7613,29 +7542,72 @@ def _desktop_launch_options() -> tuple[list[str], str, str, str]:
     return flags, disable_gpu, password_store, ozone_hint
 
 
-def _register_linux_desktop_entry() -> None:
-    """Install the XDG desktop entry for Hermes Desktop (Linux only, best-effort).
+def _launch_bundled_desktop(
+    args: argparse.Namespace, env: dict, electron_flags: list[str]
+) -> None:
+    """Start the desktop app this CLI ships inside, then exit.
 
-    Gives the Electron app a launcher presence: a menu item and an icon.
-    ``Exec`` and ``Icon`` are absolute, so the entry works outside a login
-    shell. ``hermes uninstall --gui`` removes it.
+    A bundled install has no source tree to build: the app is a signed,
+    read-only artifact and this Python is a passenger in its resources.
+    So the whole build ladder below is skipped and the launcher is started
+    DETACHED — the user ran a CLI command, and the app must outlive the
+    terminal it was typed into. The app's own single-instance lock turns a
+    second run into "focus the running window".
+
+    Never returns.
     """
-    try:
-        from hermes_cli.linux_desktop_entry import install_desktop_entry, is_supported
+    from hermes_cli.bundled_app import NotBundledApp, launch_detached, resolve_bundle_layout
 
-        if not is_supported():
-            return
-        entry = install_desktop_entry(PROJECT_ROOT)
-        if entry:
-            print(f"✓ Desktop launcher entry installed: {entry}")
-    except Exception as exc:  # never block a launch on launcher plumbing
-        print(f"⚠ Could not install the desktop launcher entry: {exc}")
+    refused = [
+        flag
+        for flag, name in (
+            ("--source", "source"),
+            ("--build-only", "build_only"),
+            ("--force-build", "force_build"),
+        )
+        if getattr(args, name, False)
+    ]
+    if refused:
+        print(f"✗ {', '.join(refused)} cannot apply to a bundled Hermes install.")
+        print("  This app ships prebuilt and has no desktop source tree to build.")
+        sys.exit(2)
+
+    try:
+        layout = resolve_bundle_layout(PROJECT_ROOT)
+    except NotBundledApp as exc:
+        # The stamp says bundled, so a tree that is not one is a damaged or
+        # mispackaged install. Report it — degrading to the build ladder
+        # would run npm inside the app's own resources.
+        print(f"✗ This Hermes is stamped as a bundled desktop install, but {exc}.")
+        print("  The install is damaged — reinstall Hermes from the website.")
+        sys.exit(1)
+
+    if layout.launcher is None:
+        print(f"✗ Found no Hermes Desktop launcher in {layout.app_root}.")
+        print("  The install is damaged — reinstall Hermes from the website.")
+        sys.exit(1)
+
+    launch_command = [str(layout.launcher)]
+    if not _desktop_linux_sandbox_fixup(layout.launcher):
+        if _desktop_linux_needs_no_sandbox() and _desktop_linux_sandbox_helper_is_regular_file(layout.launcher):
+            print("⚠ Falling back to --no-sandbox because this Linux host restricts unprivileged user namespaces and the Electron sandbox helper could not be configured.")
+            launch_command.append("--no-sandbox")
+        else:
+            sys.exit(1)
+
+    launch_command.extend(electron_flags)
+    pid = launch_detached(launch_command, env=env, cwd=layout.app_root)
+    print(f"→ Launched Hermes Desktop: {' '.join(launch_command)} (pid {pid})")
+    sys.exit(0)
 
 
 def cmd_gui(args: argparse.Namespace):
     """Build and launch the native Electron desktop GUI."""
+    from installation.tree import is_bundled_payload
+
     desktop_dir = PROJECT_ROOT / "apps" / "desktop"
-    if not (desktop_dir / "package.json").exists():
+    bundled = is_bundled_payload(PROJECT_ROOT)
+    if not bundled and not (desktop_dir / "package.json").exists():
         print(f"Desktop GUI source not found at: {desktop_dir}")
         sys.exit(1)
 
@@ -7645,10 +7617,10 @@ def cmd_gui(args: argparse.Namespace):
     except Exception:
         pass
 
-    from hermes_constants import with_hermes_node_path
+    from installation import env as runtime_env, nodejs
 
-    # with_hermes_node_path() copies os.environ when called with no arg.
-    env = with_hermes_node_path()
+    # runtime_env.with_managed_runtimes() copies os.environ when called with no arg.
+    env = runtime_env.with_managed_runtimes()
     if getattr(args, "fake_boot", False):
         env["HERMES_DESKTOP_BOOT_FAKE"] = "1"
     if getattr(args, "ignore_existing", False):
@@ -7659,6 +7631,9 @@ def cmd_gui(args: argparse.Namespace):
         env["HERMES_DESKTOP_CWD"] = str(Path(args.cwd).expanduser().resolve())
     else:
         env["HERMES_DESKTOP_CWD"] = os.getcwd()
+
+    # allow building variants
+    env["HERMES_DESKTOP_VARIANT"] = os.environ.get("HERMES_DESKTOP_VARIANT", "")
 
     # Desktop launch options from config.yaml (`desktop.electron_flags`,
     # `desktop.disable_gpu`, `desktop.ozone_platform_hint`). The GPU policy
@@ -7692,6 +7667,13 @@ def cmd_gui(args: argparse.Namespace):
     source_mode = getattr(args, "source", False)
     skip_build = getattr(args, "skip_build", False)
     force_build = getattr(args, "force_build", False)
+
+    # A bundled install IS the app: no source tree, no build, and the
+    # launcher is a sibling of this payload rather than something we
+    # produce. Every rung below assembles a checkout build, so the sealed
+    # shape leaves here with the env it just built.
+    if bundled:
+        _launch_bundled_desktop(args, env, config_electron_flags)
 
     packaged_executable = _desktop_packaged_executable(desktop_dir)
 
@@ -7744,8 +7726,11 @@ def cmd_gui(args: argparse.Namespace):
             # hermes update) loses shell PATH customizations. Wrapping the
             # NixOS build env keeps its PYTHON hint while restoring managed Node
             # ahead of a bare PATH (same idiom as the `hermes update` path).
-            nixos_env = with_hermes_node_path(_nixos_build_env())
-            install_result = _run_npm_install_deterministic(npm, PROJECT_ROOT, capture_output=False, env=nixos_env)
+            from installation import nodejs
+
+            install_result = nodejs.npm_install(
+                PROJECT_ROOT, capture_output=False, env=_nixos_build_env()
+            )
             if install_result.returncode != 0:
                 if not _electron_pkg_staged_missing_dist(PROJECT_ROOT):
                     print("✗ Desktop dependency install failed")
@@ -7859,10 +7844,9 @@ def cmd_gui(args: argparse.Namespace):
             # Build succeeded — write the stamp so next run can skip
             _write_desktop_build_stamp(PROJECT_ROOT, source_mode=source_mode)
 
-    # Linux: register the app in the desktop launcher, so Hermes shows up
-    # in the application menu with its icon. Best-effort and idempotent.
-    # A failure must never stop the app from launching.
-    _register_linux_desktop_entry()
+    # (The Linux launcher entry is installed by the Electron app itself on
+    # startup — electron/linux-desktop-entry.ts — from the entry baked at
+    # build time. No Python-side registration.)
 
     # --build-only: produce the artifact but do NOT launch. The installer's
     # --update flow drives the rebuild headlessly and then launches the desktop
@@ -8471,7 +8455,14 @@ def _recover_lazy_refresh_marker_locked() -> None:
         "⚠ A previous lazy-backend refresh may have left the venv unhealthy — "
         "running import-based package repair..."
     )
-    install_prefix, install_env = _default_venv_install_target()
+    target = _default_venv_install_target()
+    if target is None:
+        print(
+            "  ⚠ No managed uv — cannot repair packages. "
+            "Run: python -m installation.provisioner"
+        )
+        return
+    install_prefix, install_env = target
     status = _repair_venv_via_import_probes(install_prefix, env=install_env)
     if status in ("healthy", "repaired"):
         _clear_lazy_refresh_incomplete_marker()
@@ -8515,13 +8506,15 @@ def _recover_core_update_marker_locked() -> None:
     # must NEVER clear this core marker on its own (#58004 review).
     self_locked = _windows_running_hermes_launcher_locked()
     if self_locked:
-        install_prefix, install_env = _default_venv_install_target()
-        print(
-            "  → Running from hermes.exe; applying package-only first aid, "
-            "then quarantined full reinstall (core marker stays until that "
-            "succeeds)..."
-        )
-        _repair_venv_via_import_probes(install_prefix, env=install_env)
+        target = _default_venv_install_target()
+        if target is not None:
+            install_prefix, install_env = target
+            print(
+                "  → Running from hermes.exe; applying package-only first aid, "
+                "then quarantined full reinstall (core marker stays until that "
+                "succeeds)..."
+            )
+            _repair_venv_via_import_probes(install_prefix, env=install_env)
 
     try:
         from hermes_cli import _install_repair as _ir
@@ -8529,23 +8522,20 @@ def _recover_core_update_marker_locked() -> None:
         # ensure_uv bootstraps the installer itself when missing (the early
         # pass's stdlib-only lookup cannot); keeping it here means the late
         # path still self-heals a venv whose uv vanished mid-update.
-        from hermes_cli.managed_uv import ensure_uv
+        from installation.uv import ensure_uv
 
         ensure_uv()
 
-        uv_bin = ensure_uv()
-        if uv_bin:
-            uv_env = {**os.environ, "VIRTUAL_ENV": str(PROJECT_ROOT / "venv")}
-            _install_python_dependencies_with_optional_fallback(
-                [uv_bin, "pip"],
-                env=uv_env,
-                group="all",
-            )
-        else:
-            _install_python_dependencies_with_optional_fallback(
-                [sys.executable, "-m", "pip"],
-                group="all",
-            )
+        # Delegate the install itself to the shared executor so both this
+        # late path and the pre-import early pass run exactly the same
+        # reinstall (uv-only: run_core_install raises when no managed uv is
+        # found, with the provisioning command in the message). Called
+        # inside the same stdout→stderr redirect already established by
+        # _recover_from_interrupted_install, so run_core_install's own
+        # redirect nests harmlessly.
+        from hermes_cli import _install_repair as _ir
+
+        _ir.run_core_install(PROJECT_ROOT)
 
         _clear_update_incomplete_marker()
         print("✓ Dependency installation recovered — your install is healthy again.")
@@ -8561,14 +8551,13 @@ def _recover_core_update_marker_locked() -> None:
                 "different terminal, then run:"
             )
             print(f'    cd /d "{PROJECT_ROOT}"')
-            print(
-                f'    "{sys.executable}" -m pip install -e ".[all]"'
-            )
+            print(f'    "{sys.executable}" -m installation.provisioner')
+            print('    uv pip install -e ".[all]"')
         else:
             print("  Recover manually with:")
             print(f"    cd {PROJECT_ROOT}")
-            print(f"    {sys.executable} -m ensurepip --upgrade")
-            print(f"    {sys.executable} -m pip install -e '.[all]'")
+            print(f"    {sys.executable} -m installation.provisioner")
+            print("    uv pip install -e '.[all]'")
 
 
 def _norm_exe_path(path) -> str:
@@ -8728,21 +8717,23 @@ def _reexec_dependency_sync_off_windows_shim() -> bool:
     return False
 
 
-def _default_venv_install_target() -> tuple[list[str], dict[str, str] | None]:
-    """Return ``(install_cmd_prefix, env)`` for the project venv when possible."""
+def _default_venv_install_target() -> tuple[list[str], dict[str, str] | None] | None:
+    """Return ``(install_cmd_prefix, env)`` for the project venv.
+
+    Returns None when there is no managed uv. There is no pip tier: pip
+    resolves without uv policy, so an unprovisioned tree must report a
+    provisioning fault instead of installing a different dependency set.
+    """
     try:
-        from hermes_cli.managed_uv import ensure_uv
+        from installation.uv import ensure_uv
 
         uv_bin = ensure_uv()
     except Exception:
         uv_bin = None
-    if uv_bin:
-        from hermes_constants import project_venv_dir
-
-        venv_dir = project_venv_dir(PROJECT_ROOT) or PROJECT_ROOT / "venv"
-        env = {**os.environ, "VIRTUAL_ENV": str(venv_dir)}
-        return [uv_bin, "pip"], env
-    return [sys.executable, "-m", "pip"], None
+    if not uv_bin:
+        return None
+    env = {**os.environ, "VIRTUAL_ENV": str(PROJECT_ROOT / "venv")}
+    return [uv_bin, "pip"], env
 
 
 def _run_install_with_heartbeat(
@@ -9859,41 +9850,24 @@ def _is_windows_npm_path(npm_path: str) -> bool:
 
 
 def _resolve_node_runtime_npm() -> str | None:
-    """Resolve an npm executable that belongs to the host's Node runtime.
+    """The pinned npm.
 
-    On WSL/Linux ``shutil.which("npm")`` may resolve a Windows npm exposed
-    through PATH interop. Running that Windows npm against the Linux checkout
-    operates over ``\\wsl.localhost\\...`` UNC paths and fails with EISDIR /
-    symlink errors in symlink-heavy trees like ``ui-tui`` (#30271). Refuse a
-    Windows npm on a POSIX host and re-scan PATH (skipping ``/mnt/*`` interop
-    entries) for a Linux-native npm. Returns the npm path, or ``None`` when
-    no suitable npm is reachable.
+    This used to reject a Windows npm reached through WSL's PATH interop and
+    re-scan for a Linux-native one: running that npm against the Linux
+    checkout operates over \\\\wsl.localhost UNC paths and fails with EISDIR
+    in symlink-heavy trees like ui-tui (#30271). None of that can happen to a
+    path this install provisioned for its own platform, so the resolution is
+    a lookup and the WSL guard is gone with it.
+
+    Still returns Optional: a damaged runtime dir is a real state, and the
+    callers already degrade rather than crash.
     """
-    from hermes_constants import find_node_executable
+    from installation import nodejs
 
-    npm = find_node_executable("npm")
-
-    # On native Windows the platform npm (``npm.cmd``) is exactly what we
-    # want — only reject Windows shims when we're a POSIX/WSL process.
-    if _is_windows():
-        return npm
-
-    if not npm:
+    try:
+        return str(nodejs.npm_path())
+    except nodejs.NotProvisioned:
         return None
-
-    if not _is_windows_npm_path(npm):
-        return npm
-
-    # The first resolution was a Windows npm. Re-scan PATH skipping the
-    # ``/mnt/*`` Windows drive mounts WSL injects, so a Linux-native npm that
-    # came later on PATH is still found.
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        if not directory or directory.lower().startswith("/mnt/"):
-            continue
-        candidate = shutil.which("npm", path=directory)
-        if candidate and not _is_windows_npm_path(candidate):
-            return candidate
-    return None
 
 
 class _UpdateOutputStream:
@@ -10103,48 +10077,130 @@ def cmd_update(args):
     runs the update, then restores stdio on the way out (even on
     ``sys.exit`` or unhandled exceptions).
     """
-    from hermes_cli.config import (
-        detect_install_method,
-        format_docker_update_message,
-        is_managed,
-        is_nix_install_method,
-        managed_error,
-        recommended_update_command_for_method,
-    )
+    from hermes_cli.config import detect_install_method
 
-    if is_managed():
-        managed_error("update Hermes Agent")
-        return
+    # A pre-stamp managed install (main-era curl|sh checkout at a blessed
+    # root) classifies as "source" until step_adopt_blessed_checkout writes
+    # its stamp. Adoption normally runs from the boot bootstrap (CLI loop,
+    # gateway, serve), but `hermes update` can be the FIRST command a user
+    # runs on post-restack code — without this call the update would refuse
+    # its own managed install and point at `git pull`. The step is
+    # idempotent and self-gating (blessed root + .git + no stamp only), so
+    # calling it here costs a few stat calls on already-stamped installs.
+    try:
+        from hermes_cli.post_update import step_adopt_blessed_checkout
 
-    # --plan is read-only and deployment-kind aware, so it runs BEFORE the
-    # docker/nix/apt refusal gates: on an image-managed or package-managed
-    # install the plan itself reports "not updatable in place" plus the
-    # right mechanism — strictly more useful than the bare refusal text.
-    if getattr(args, "plan", False):
-        # Read-only plan phase (#91277 Phase 2): inventory every running
-        # Hermes runtime across profiles, its supervisor, and its running
-        # code version — without mutating anything. Safe on a live fleet.
-        from hermes_cli.update_inventory import (
-            collect_runtime_inventory,
-            print_update_plan,
-        )
+        step_adopt_blessed_checkout()
+    except Exception:
+        logger.debug("blessed-checkout adoption skipped", exc_info=True)
 
-        print_update_plan(collect_runtime_inventory())
-        return
-
-    # Docker users can't ``git pull`` — the image excludes ``.git`` from
-    # the build context.  Bail with a friendly explanation pointing at
-    # ``docker pull`` BEFORE any of the apply-path / check-path branches
-    # below get a chance to error out with misleading "Not a git
-    # repository" text.  See format_docker_update_message() for the full
-    # rationale and tag-pinning / config-persistence notes.
+    # Sealed trees (docker, nix, desktop-app — any steward) can't `git
+    # pull`: the steward replaces the tree wholesale. ONE refusal table
+    # (installation.tree.STEWARD_UPDATE_MESSAGES) answers all of them,
+    # BEFORE any apply-path branch below can error out with misleading
+    # "Not a git repository" text. recommended_update_command_for_method
+    # stays a separate surface on purpose: it is the one-line command hint
+    # (doctor, /version), not the full refusal.
     install_method = detect_install_method(PROJECT_ROOT)
-    if install_method == "docker":
-        print(format_docker_update_message())
+    if install_method in ("docker", "nix"):
+        from installation.tree import steward_update_message
+
+        print(steward_update_message(install_method))
         sys.exit(1)
 
-    if is_nix_install_method(install_method):
-        print(recommended_update_command_for_method(install_method))
+    # A random source checkout (a .git tree outside the managed install
+    # roots) is somebody's working tree. `hermes update` would stash local
+    # changes and yank it to the update branch — refuse and point at git.
+    if install_method == "source":
+        print(f"✗ This is a git checkout at {PROJECT_ROOT},")
+        print("  not the managed install. Update it like any working tree:")
+        print("    git pull")
+        sys.exit(1)
+
+    # --install-id / --set-channel work on any non-external install and
+    # never touch the tree — handle them before the sealed refusal so the
+    # desktop About page and channel switching work from a bundled CLI.
+    if getattr(args, "install_id", False):
+        from hermes_cli.update_channel import install_id
+
+        print(f"{install_id(PROJECT_ROOT)} ({PROJECT_ROOT})")
+        sys.exit(0)
+
+    if getattr(args, "set_channel", None):
+        from hermes_cli.update_channel import (
+            CHANNEL_NIGHTLY,
+            CHANNEL_STABLE,
+            nightly_normalized_note,
+            set_install_channel,
+        )
+
+        try:
+            sha16 = set_install_channel(args.set_channel, PROJECT_ROOT)
+        except ValueError as exc:
+            print(f"✗ {exc}")
+            sys.exit(1)
+        print(f"✓ Channel '{args.set_channel}' recorded for install {sha16}.")
+        if args.set_channel == CHANNEL_NIGHTLY:
+            if install_method == "git":
+                print(nightly_normalized_note())
+            else:
+                print("⚠ Nightly builds move fast: expect forward-incompatible")
+                print("  state — data written by newer code may not load in stable.")
+        elif args.set_channel == CHANNEL_STABLE:
+            # Honest wait: a nightly build outversions today's stable, and
+            # the updater never downgrades. Say when the switch takes
+            # effect, and where the impatient path is.
+            from installation.tree import read_build_info
+
+            try:
+                version = read_build_info(Path(PROJECT_ROOT)).get("displayVersion") or ""
+            except RuntimeError:
+                version = ""
+            if "-nightly." in version:
+                base = version.split("-nightly.")[0]
+                print(f"→ You are on {version}. Stable updates resume once a")
+                print(f"  stable release reaches v{base} — until then this install")
+                print("  stays where it is. To switch now, reinstall stable:")
+                print("  https://hermes-agent.nousresearch.com/")
+                print("  (Nightly state may not load in older stable builds.)")
+        sys.exit(0)
+
+    # The sealed desktop payload runs the agent out of the app's signed
+    # resources; `hermes update` must never git-mutate it (kshitijk4poor's
+    # live repro: a manifest-keyed guard defaulted a missing manifest to
+    # "source" and staged 107 MB of *.hermes-update-staging debris INTO
+    # the signed app resources). But refusing outright is a dead end for
+    # CLI-first users — on win32 electron-updater artifacts, drive the
+    # same motion the in-app updater would: check the release feed,
+    # download + sha512-verify the new installer, then hand off to a
+    # detached helper that stops every Hermes process (this one included),
+    # runs the installer silently, and relaunches the GUI iff it was
+    # running. Anything that path cannot serve (non-Windows, no feed,
+    # offline, weird artifacts) raises SealedUpdateUnavailable and falls
+    # back to the steward refusal. The gate is the stamp alone — the
+    # mechanism field says electron-updater owns this artifact.
+    if install_method == "desktop-app":
+        from installation.tree import read_build_info, steward_update_message
+
+        try:
+            mechanism = read_build_info(Path(PROJECT_ROOT)).get("updateMechanism")
+        except RuntimeError:
+            mechanism = None
+        if mechanism == "electron-updater":
+            from hermes_cli.sealed_update import (
+                SealedUpdateUnavailable,
+                cmd_update_sealed_desktop,
+            )
+
+            try:
+                sys.exit(cmd_update_sealed_desktop(args, Path(PROJECT_ROOT)))
+            except SealedUpdateUnavailable as exc:
+                logger.debug("sealed self-update unavailable: %s", exc)
+            except Exception as exc:
+                # Feed/network/download failures must not strand the user
+                # with a stack trace; say what failed, then the steward answer.
+                print(f"⚠ Could not self-update from the release feed: {exc}")
+        print(steward_update_message("desktop-app"))
         sys.exit(1)
 
     if getattr(args, "check", False):
@@ -13001,17 +13057,16 @@ def main():
     )
     computer_use_sub = computer_use_parser.add_subparsers(dest="computer_use_action")
 
-    computer_use_install = computer_use_sub.add_parser(
+    computer_use_sub.add_parser(
         "install",
-        help="Install or repair the cua-driver binary (macOS/Windows/Linux)",
-    )
-    computer_use_install.add_argument(
-        "--upgrade",
-        action="store_true",
-        help=(
-            "Re-run the upstream installer even if cua-driver is already on "
-            "PATH. The upstream install.sh always pulls the latest release, "
-            "so this performs an in-place upgrade."
+        help="Stage the pinned cua-driver binary (macOS/Windows/Linux)",
+        description=(
+            "Provision the cua-driver version pinned in\n"
+            "installation/runtime-pins.json: download, verify its sha256,\n"
+            "publish it into the shared tool store, and record the fact.\n"
+            "Already at the pin? This is a no-op. To move to a NEWER\n"
+            "driver, bump the pin and run `hermes update` — the version is\n"
+            "a code-reviewed decision, not whatever upstream tagged today."
         ),
     )
     computer_use_sub.add_parser(
@@ -13086,21 +13141,21 @@ def main():
         if action == "install":
             from hermes_cli.tools_config import (
                 _cua_driver_contract_status,
-                install_cua_driver,
+                provision_cua_driver,
             )
-            if not install_cua_driver(upgrade=bool(getattr(args, "upgrade", False))):
+            if not provision_cua_driver():
                 return 1
             return 0 if _cua_driver_contract_status().get("ready") else 1
         if action == "status":
             import os as _os
             import subprocess
-            from hermes_cli.tools_config import _cua_driver_contract_status
-            from tools.computer_use.cua_backend import (
-                cua_driver_update_check,
-                resolve_cua_driver_cmd,
+            from hermes_cli.tools_config import (
+                _cua_driver_contract_status,
+                _pinned_cua_driver_version,
             )
-            # Must match the runtime resolver: Desktop/TUI processes can omit
-            # ~/.local/bin even though the official installer put the driver there.
+            from tools.computer_use.cua_backend import resolve_cua_driver_cmd
+            # Must match the runtime resolver: the managed fact, or an
+            # explicit HERMES_CUA_DRIVER_CMD override.
             path = resolve_cua_driver_cmd()
             override = _os.environ.get("HERMES_CUA_DRIVER_CMD", "").strip()
             if path:
@@ -13134,24 +13189,18 @@ def main():
                     if override:
                         print(
                             "    Update the binary selected by HERMES_CUA_DRIVER_CMD, or unset "
-                            "the override and run: hermes computer-use install --upgrade"
+                            "the override and run: hermes computer-use install"
                         )
                     else:
                         print("    Run: hermes computer-use install")
                     return 1
-                try:
-                    st = cua_driver_update_check()
-                    if st and st.get("update_available"):
-                        latest = st.get("latest_version") or "?"
-                        print(f"  ⬆ Update available: cua-driver {latest}.")
-                        print("    Run: hermes computer-use install --upgrade")
-                    elif st:
-                        print("  ✓ Up to date.")
-                    else:
-                        # Older driver (no check-update verb) or offline.
-                        print("  Refresh to latest: hermes computer-use install --upgrade")
-                except Exception:
-                    print("  Refresh to latest: hermes computer-use install --upgrade")
+                # No GitHub update poll: the pin table names the version this
+                # install is supposed to run, so "is there something newer
+                # upstream?" is a question for a pin bump under code review,
+                # not for a per-status network round-trip that would nag the
+                # user toward a driver Hermes has not qualified.
+                if not override:
+                    print(f"  ✓ At the pinned version ({_pinned_cua_driver_version()}).")
                 return 0
             print("cua-driver: not installed")
             print("  Run: hermes computer-use install")

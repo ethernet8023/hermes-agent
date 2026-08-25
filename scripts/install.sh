@@ -57,7 +57,6 @@ else
     INSTALL_DIR_EXPLICIT=false
 fi
 PYTHON_VERSION="3.11"
-NODE_VERSION="26"
 
 # FHS-style root install layout (set by resolve_install_layout when applicable):
 #   code at /usr/local/lib/hermes-agent, command at /usr/local/bin/hermes,
@@ -75,7 +74,6 @@ NO_SKILLS=false
 BRANCH="main"
 INSTALL_COMMIT=""
 FORCE_COMMIT=false
-ENSURE_DEPS=""
 
 MANIFEST_MODE=false
 STAGE_NAME=""
@@ -156,10 +154,6 @@ while [[ $# -gt 0 ]]; do
             HERMES_HOME="$2"
             shift 2
             ;;
-        --ensure)
-            ENSURE_DEPS="$2"
-            shift 2
-            ;;
 
         -h|--help)
             echo "Hermes Agent Installer"
@@ -169,7 +163,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --no-venv      Don't create virtual environment"
             echo "  --skip-setup   Skip interactive setup wizard"
-            echo "  --skip-browser Skip Playwright/Chromium install (browser tools won't work)"
+            echo "  --skip-browser Skip staging the pinned browser (browser tools won't work)"
             echo "  --skip-computer-use  Skip the cua-driver (Computer Use) install"
             echo "  --no-skills    Start with a blank slate — seed no bundled skills, and"
             echo "                   write \$HERMES_HOME/.no-bundled-skills so future"
@@ -197,9 +191,6 @@ while [[ $# -gt 0 ]]; do
             echo "  (default /root/.hermes).  This keeps Docker bind-mounted volumes"
             echo "  small and ensures the command is on PATH for all shells."
             echo "  Existing installs at \$HERMES_HOME/hermes-agent are preserved in-place."
-            echo "  --ensure DEPS  Install only specified deps (comma-separated)"
-            echo "                   Supported: node, browser, ripgrep, ffmpeg"
-            echo "                   Does NOT clone repo or create venv"
 
             exit 0
             ;;
@@ -457,25 +448,6 @@ get_command_link_display_dir() {
     fi
 }
 
-# Point a Hermes-managed Node's `npm install -g` at a directory that is on
-# PATH. npm's default global prefix for a bundled Node is the Node dir itself,
-# so global package binaries land in $HERMES_HOME/node/bin — which is NOT on
-# PATH (only the command link dir is) and is wiped on every Node upgrade.
-# Redirecting the prefix to the link dir's parent makes global bins resolve to
-# the command link dir (node/npm/npx live there too, already on PATH) and
-# survive upgrades. Scoped to the managed Node via its prefix-local global
-# npmrc, so the user's other Node installs and their ~/.npmrc are untouched.
-# Hermes's own global installs pass an explicit --prefix and are unaffected.
-# Idempotent and a no-op when there is no Hermes-managed npm, so calling it on
-# every install run repairs pre-existing installs, not just fresh ones.
-configure_managed_node_npm_prefix() {
-    [ -x "$HERMES_HOME/node/bin/npm" ] || return 0
-    local link_dir
-    link_dir="$(get_command_link_dir)"
-    mkdir -p "$HERMES_HOME/node/etc"
-    printf 'prefix=%s\n' "$(dirname "$link_dir")" > "$HERMES_HOME/node/etc/npmrc"
-}
-
 get_hermes_command_path() {
     local link_dir
     link_dir="$(get_command_link_dir)"
@@ -531,488 +503,319 @@ detect_os() {
 # Dependency checks
 # ============================================================================
 
+# --- BEGIN GENERATED: bootstrap pins (scripts/gen-bootstrap-pins.py) ---
+# Derived from installation/runtime-pins.json. DO NOT EDIT BY HAND:
+# run scripts/gen-bootstrap-pins.py after a pin bump.
+UV_PIN_VERSION="0.12.3"
+PYTHON_PIN_VERSION="3.11.15"
+
+# Sets UV_PIN_URL + UV_PIN_SHA256 for a <os>-<arch> target key.
+uv_bootstrap_pin() {
+    case "$1" in
+        linux-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101"
+            ;;
+        linux-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2"
+            ;;
+        darwin-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="4c9f52262a14da336e4a42ed24992d12d0c956acde87619e4611d321dffa602b"
+            ;;
+        darwin-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="546f7f8a6c70ff13a3a9d2bc958db3427298cebf3e0cb756f9177133b7068843"
+            ;;
+        *)
+            UV_PIN_URL=""
+            UV_PIN_SHA256=""
+            return 1
+            ;;
+    esac
+}
+# --- END GENERATED: bootstrap pins ---
+
+# Map this host to a pin-table target key (<os>-<arch>, Node spellings).
+uv_bootstrap_target() {
+    local _arch
+    case "$(uname -m)" in
+        arm64|aarch64) _arch="arm64" ;;
+        x86_64|amd64)  _arch="x64" ;;
+        *) return 1 ;;
+    esac
+    case "$OS" in
+        linux)  echo "linux-$_arch" ;;
+        macos)  echo "darwin-$_arch" ;;
+        *) return 1 ;;
+    esac
+}
+
 install_uv() {
-    # Hermes owns its own uv at $HERMES_HOME/bin/uv.  Always install there —
-    # no PATH probing, no conda guards, no multi-location resolution chains.
-    # The runtime update path (hermes_cli/managed_uv.py) looks in the same
-    # place, so install.sh and `hermes update` stay in sync.
-    local _managed_uv="$HERMES_HOME/bin/uv"
+    # Hermes owns its own uv at $INSTALL_DIR/.hermes-runtime/uv/uv — the
+    # SAME install-scoped location managed_uv.managed_uv_path() resolves,
+    # so the binary this installer stages is the one every later
+    # `hermes update` / ensure_uv() finds. No PATH probing, no conda
+    # guards, no second copy in $HERMES_HOME/bin.
+    # The binary is the EXACT artifact pinned in installation/runtime-pins.json
+    # (URL + sha256 via the generated fragment above): the same authority the
+    # provisioner uses for every other managed tool. No astral-latest.
+    # Runs AFTER clone_repo: the install dir must exist to hold it.
+    require_install_dir
+    local _uv_dir="$INSTALL_DIR/.hermes-runtime/uv"
+    local _managed_uv="$_uv_dir/uv"
 
     if [ -x "$_managed_uv" ]; then
-        UV_CMD="$_managed_uv"
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        log_success "Managed uv found ($UV_VERSION)"
-        return 0
+        UV_VERSION=$($_managed_uv --version 2>/dev/null)
+        # Keep it only when it IS the pinned version — a pin bump must
+        # propagate, and a stale binary predating the pin is unverified.
+        case "$UV_VERSION" in
+            *" $UV_PIN_VERSION"*|"uv $UV_PIN_VERSION")
+                UV_CMD="$_managed_uv"
+                log_success "Managed uv found ($UV_VERSION)"
+                return 0
+                ;;
+            *)
+                log_info "Managed uv is ${UV_VERSION:-unreadable}, pin is $UV_PIN_VERSION — replacing"
+                ;;
+        esac
     fi
 
-    log_info "Installing managed uv into $HERMES_HOME/bin ..."
-    mkdir -p "$HERMES_HOME/bin"
-
-    # Two-stage: download the installer, then run it.  Piping
-    # `curl | sh` masks curl failures (sh exits 0 on empty stdin)
-    # and conflates network errors with installer errors.
-    local _uv_install_log _uv_installer
-    _uv_install_log="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-install.$$.log")"
-    _uv_installer="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-installer.$$.sh")"
-    if ! curl -LsSf https://astral.sh/uv/install.sh -o "$_uv_installer" 2>"$_uv_install_log"; then
-        log_error "Failed to download uv installer from https://astral.sh/uv/install.sh"
-        log_info "curl output:"
-        sed 's/^/    /' "$_uv_install_log" >&2
+    local _target
+    if ! _target="$(uv_bootstrap_target)"; then
+        log_error "No pinned uv build for this platform ($(uname -s) $(uname -m))"
         log_info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
-        rm -f "$_uv_install_log" "$_uv_installer"
         exit 1
     fi
-    # UV_UNMANAGED_INSTALL tells the astral installer to place the binary
-    # directly into $HERMES_HOME/bin instead of ~/.local/bin.
-    if UV_UNMANAGED_INSTALL="$HERMES_HOME/bin" sh "$_uv_installer" >>"$_uv_install_log" 2>&1; then
-        rm -f "$_uv_installer"
-        if [ -x "$_managed_uv" ]; then
-            UV_CMD="$_managed_uv"
-        else
-            log_error "uv installer reported success but binary not found at $_managed_uv"
-            log_info "Installer output:"
-            sed 's/^/    /' "$_uv_install_log" >&2
-            rm -f "$_uv_install_log"
-            exit 1
-        fi
-        rm -f "$_uv_install_log"
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        log_success "Managed uv installed ($UV_VERSION)"
+    uv_bootstrap_pin "$_target"
+
+    log_info "Installing pinned uv $UV_PIN_VERSION into $_uv_dir ..."
+    mkdir -p "$_uv_dir"
+
+    local _uv_tmp
+    _uv_tmp="$(mktemp -d 2>/dev/null || echo "/tmp/hermes-uv-bootstrap.$$")"
+    mkdir -p "$_uv_tmp"
+
+    if ! curl -LsSf "$UV_PIN_URL" -o "$_uv_tmp/uv.tar.gz"; then
+        log_error "Failed to download pinned uv from $UV_PIN_URL"
+        log_info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
+        rm -rf "$_uv_tmp"
+        exit 1
+    fi
+
+    # Digest check BEFORE extraction — a mismatched archive is deleted,
+    # never unpacked. sha256sum on Linux, shasum -a 256 on macOS.
+    local _digest
+    if command -v sha256sum >/dev/null 2>&1; then
+        _digest="$(sha256sum "$_uv_tmp/uv.tar.gz" | cut -d' ' -f1)"
     else
-        log_error "Failed to install uv"
-        log_info "Installer output:"
-        sed 's/^/    /' "$_uv_install_log" >&2
-        log_info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
-        rm -f "$_uv_install_log" "$_uv_installer"
+        _digest="$(shasum -a 256 "$_uv_tmp/uv.tar.gz" | cut -d' ' -f1)"
+    fi
+    if [ "$_digest" != "$UV_PIN_SHA256" ]; then
+        log_error "uv download digest mismatch (expected $UV_PIN_SHA256, got $_digest)"
+        log_info "The download may be corrupted or tampered with. Re-run the installer."
+        rm -rf "$_uv_tmp"
         exit 1
     fi
+
+    # The tarball nests everything under one versioned dir (uv-<triple>/).
+    # Move uv AND uvx — browser tooling resolves uvx from the same dir.
+    if ! tar -xzf "$_uv_tmp/uv.tar.gz" -C "$_uv_tmp"; then
+        log_error "Failed to extract uv archive"
+        rm -rf "$_uv_tmp"
+        exit 1
+    fi
+    local _unpacked
+    _unpacked="$(find "$_uv_tmp" -mindepth 1 -maxdepth 2 -name uv -type f | head -n1)"
+    if [ -z "$_unpacked" ]; then
+        log_error "uv binary not found inside the downloaded archive"
+        rm -rf "$_uv_tmp"
+        exit 1
+    fi
+    mv "$_unpacked" "$_managed_uv"
+    if [ -f "$(dirname "$_unpacked")/uvx" ]; then
+        mv "$(dirname "$_unpacked")/uvx" "$_uv_dir/uvx"
+        chmod +x "$_uv_dir/uvx"
+    fi
+    chmod +x "$_managed_uv"
+    rm -rf "$_uv_tmp"
+
+    UV_CMD="$_managed_uv"
+    UV_VERSION=$($UV_CMD --version 2>/dev/null)
+    if [ -z "$UV_VERSION" ]; then
+        log_error "Pinned uv staged but does not run on this host"
+        exit 1
+    fi
+    log_success "Managed uv installed ($UV_VERSION)"
 }
 
 check_python() {
     log_info "Checking Python $PYTHON_VERSION..."
 
+    # Decision 3: the exact interpreter comes from the generated pin
+    # fragment, unconditionally — the fragment ships in the same commit
+    # as this script, and gen-bootstrap-pins.py refuses to generate one
+    # without the pin. PYTHON_VERSION (the family) survives only for the
+    # log line above.
+    local _py_pin="$PYTHON_PIN_VERSION"
+
     # Let uv handle Python — it can download and manage Python versions
-    # First check if a suitable Python is already available
-    if PYTHON_PATH="$("$UV_CMD" python find "$PYTHON_VERSION" 2>/dev/null)"; then
+    # First check if the PINNED interpreter is already available
+    if PYTHON_PATH="$("$UV_CMD" python find "$_py_pin" 2>/dev/null)"; then
         PYTHON_FOUND_VERSION="$("$PYTHON_PATH" --version 2>/dev/null)"
         log_success "Python found: $PYTHON_FOUND_VERSION"
         return 0
     fi
 
     # Python not found — use uv to install it (no sudo needed!)
-    log_info "Python $PYTHON_VERSION not found, installing via uv..."
-    if "$UV_CMD" python install "$PYTHON_VERSION"; then
-        PYTHON_PATH="$("$UV_CMD" python find "$PYTHON_VERSION")"
+    log_info "Python $_py_pin not found, installing via uv..."
+    if "$UV_CMD" python install "$_py_pin"; then
+        PYTHON_PATH="$("$UV_CMD" python find "$_py_pin")"
         PYTHON_FOUND_VERSION="$("$PYTHON_PATH" --version 2>/dev/null)"
         log_success "Python installed: $PYTHON_FOUND_VERSION"
     else
-        log_error "Failed to install Python $PYTHON_VERSION"
-        log_info "Install Python $PYTHON_VERSION manually, then re-run this script"
+        log_error "Failed to install Python $_py_pin"
+        log_info "Install Python $_py_pin manually, then re-run this script"
         exit 1
     fi
 }
 
-# Best-effort automatic git provisioning, mirroring install.ps1's Install-Git
-# (which downloads PortableGit on Windows). git is required to clone the repo,
-# and a fresh "normie" machine with no developer tools won't have it. Returns 0
-# if git is available afterwards, non-zero otherwise (caller prints manual
-# instructions and aborts).
-attempt_install_git() {
-    case "$OS" in
-        macos)
-            # Prefer Homebrew — fully headless when present.
-            if command -v brew >/dev/null 2>&1; then
-                log_info "Installing Git via Homebrew..."
-                brew install git >/dev/null 2>&1 || true
-                command -v git >/dev/null 2>&1 && return 0
-            fi
-            # Fall back to Apple Command Line Tools, which provide git AND the
-            # compiler some Python wheels need. `xcode-select --install` pops a
-            # system dialog (Apple gates CLT behind it — it cannot be fully
-            # silent without MDM), so we trigger it and poll for git to appear.
-            if command -v xcode-select >/dev/null 2>&1; then
-                log_info "Requesting Apple Command Line Tools (provides git + compiler)..."
-                log_info "If a macOS dialog appears, click \"Install\" and accept the license."
-                xcode-select --install >/dev/null 2>&1 || true
-                local waited=0
-                local timeout=900
-                while [ "$waited" -lt "$timeout" ]; do
-                    if command -v git >/dev/null 2>&1 && git --version >/dev/null 2>&1; then
-                        return 0
-                    fi
-                    sleep 5
-                    waited=$((waited + 5))
-                    if [ $((waited % 60)) -eq 0 ]; then
-                        log_info "Still waiting for Command Line Tools install ($((waited / 60))m)..."
-                    fi
-                done
-            fi
-            return 1
-            ;;
-        linux)
-            local sudo_cmd=""
-            if [ "$(id -u 2>/dev/null || echo 1000)" -ne 0 ]; then
-                command -v sudo >/dev/null 2>&1 && sudo_cmd="sudo"
-            fi
-            case "$DISTRO" in
-                ubuntu|debian)
-                    log_info "Installing Git via apt..."
-                    $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
-                    $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git >/dev/null 2>&1 || true
-                    ;;
-                fedora)
-                    log_info "Installing Git via dnf..."
-                    $sudo_cmd dnf install -y git >/dev/null 2>&1 || true
-                    ;;
-                arch)
-                    log_info "Installing Git via pacman..."
-                    $sudo_cmd pacman -S --noconfirm git >/dev/null 2>&1 || true
-                    ;;
-                *)
-                    return 1
-                    ;;
-            esac
-            command -v git >/dev/null 2>&1 && return 0
-            return 1
-            ;;
-    esac
-    return 1
-}
-
+# git is required to clone the repo. macOS and Linux use the machine's git
+# by design: a 147MB dugite download to run `git clone` is the wrong trade
+# where git is one package-manager command away, so this reports the fix
+# instead of bundling one. Windows is different and install.ps1 owns it:
+# git bash ships inside PortableGit there.
 check_git() {
     log_info "Checking Git..."
 
-    # On fresh macOS /usr/bin/git is a stub that exits non-zero until CLT is installed.
+    # A working system git is enough for the clone — decision 1
+    # (system-git-first): the provisioner later records it as a fact and
+    # the pinned dugite git only exists for boxes with none. On fresh
+    # macOS /usr/bin/git is the xcode-select shim: a stub that exits
+    # non-zero AND pops a system dialog if invoked carelessly, so the
+    # `git --version` probe below must be the only thing we run.
     if command -v git &> /dev/null && git --version &> /dev/null; then
         GIT_VERSION=$(git --version | awk '{print $3}')
         log_success "Git $GIT_VERSION found"
         return 0
     fi
 
-    log_error "Git not found"
-
-    # Try to install it automatically before giving up (parity with install.ps1).
-    log_info "Attempting to install Git automatically..."
-    if attempt_install_git; then
-        GIT_VERSION=$(git --version | awk '{print $3}')
-        log_success "Git $GIT_VERSION installed"
-        return 0
-    fi
-
-    log_warn "Could not install Git automatically. Please install it manually:"
-
+    log_error "Git not found. Install it and re-run:"
     case "$OS" in
         linux)
-            case "$DISTRO" in
-                ubuntu|debian)
-                    log_info "  sudo apt update && sudo apt install git"
-                    ;;
-                fedora)
-                    log_info "  sudo dnf install git"
-                    ;;
-                arch)
-                    log_info "  sudo pacman -S git"
-                    ;;
-                *)
-                    log_info "  Use your package manager to install git"
-                    ;;
-            esac
-            ;;
-        android)
-            log_info "  pkg install git"
+            log_info "  Debian/Ubuntu: sudo apt-get install git"
+            log_info "  Fedora:        sudo dnf install git"
+            log_info "  Arch:          sudo pacman -S git"
             ;;
         macos)
-            log_info "  xcode-select --install"
-            log_info "  Or: brew install git"
+            log_info "  brew install git    (or xcode-select --install)"
             ;;
     esac
-
     exit 1
 }
 
-# Node deps below (install_node_deps) build native addons — most notably
-# node-pty, which every install needs — via node-gyp. node-gyp needs a C/C++
-# toolchain (make + a compiler); Python and make are already covered by
-# check_python/check_node's prerequisites, but the compiler itself was never
-# checked, so a missing g++/clang++ only surfaced as a wall of node-gyp/make
-# output deep inside `npm install`, with no earlier, actionable warning.
-# Best-effort like install_system_packages: warns and lets the caller decide
-# whether to proceed rather than aborting the whole install (unlike git,
-# which is hard-required much earlier for clone_repo).
-check_cxx_compiler() {
-    log_info "Checking for a C++ compiler (needed to build native Node modules like node-pty)..."
+provision_managed_runtimes() {
+    # THE dep engine, shared with `hermes update`: one implementation of
+    # "download the pinned tools", in Python, reading runtime-pins.json.
+    #
+    # Run with `uv run --no-project`, NOT the venv python. The installation
+    # package is stdlib-only by contract (tests/test_installation_stdlib_only.py
+    # runs it under an interpreter with no site-packages), so provisioning
+    # does not need the venv and must not wait for it: uv is the one thing
+    # bootstrapped before this point, and the tools installed here are what
+    # later stages build with.
+    #
+    # FATAL on failure. Hermes runs its own toolchain -- the versions in
+    # runtime-pins.json are the ones every `npm ci` and every managed
+    # subprocess uses, and `engine-strict=true` means a system Node that
+    # happens to be present is not a substitute. An install that continues
+    # without them produces a Hermes that cannot build the web UI, cannot
+    # run browser tools, and reports no error until the user hits one of
+    # those. Better to fail here, where the cause is on screen.
+    log_info "Provisioning managed runtimes (node, npm, uv, git, gh, ripgrep)..."
 
-    if command -v g++ &> /dev/null || command -v clang++ &> /dev/null; then
-        log_success "C++ compiler found"
-        HAS_CXX_COMPILER=true
-        return 0
-    fi
-
-    HAS_CXX_COMPILER=false
-    log_warn "No C++ compiler found"
-
-    case "$OS" in
-        macos)
-            # Same Command Line Tools path as attempt_install_git — CLT provides
-            # git AND a compiler, so this is usually already satisfied by the
-            # check_git step above. Handles the case where git was present
-            # without CLT (e.g. installed via Homebrew) so CLT never triggered.
-            log_info "Attempting to install Xcode Command Line Tools (provides a C++ compiler)..."
-            log_info "If a macOS dialog appears, click \"Install\" and accept the license."
-            xcode-select --install >/dev/null 2>&1 || true
-            local waited=0
-            local timeout=900
-            while [ "$waited" -lt "$timeout" ]; do
-                if command -v g++ &> /dev/null || command -v clang++ &> /dev/null; then
-                    log_success "C++ compiler installed"
-                    HAS_CXX_COMPILER=true
-                    return 0
-                fi
-                sleep 5
-                waited=$((waited + 5))
-                if [ $((waited % 60)) -eq 0 ]; then
-                    log_info "Still waiting for Command Line Tools install ($((waited / 60))m)..."
-                fi
-            done
-            ;;
-        linux)
-            local sudo_cmd=""
-            if [ "$(id -u 2>/dev/null || echo 1000)" -ne 0 ]; then
-                command -v sudo >/dev/null 2>&1 && sudo_cmd="sudo"
-            fi
-            log_info "Attempting to install a C++ compiler automatically..."
-            case "$DISTRO" in
-                ubuntu|debian)
-                    log_info "Installing build-essential via apt..."
-                    $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
-                    $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential >/dev/null 2>&1 || true
-                    ;;
-                fedora)
-                    log_info "Installing gcc-c++ via dnf..."
-                    $sudo_cmd dnf install -y gcc-c++ >/dev/null 2>&1 || true
-                    ;;
-                arch)
-                    log_info "Installing base-devel via pacman..."
-                    $sudo_cmd pacman -S --noconfirm base-devel >/dev/null 2>&1 || true
-                    ;;
-            esac
-            if command -v g++ &> /dev/null || command -v clang++ &> /dev/null; then
-                log_success "C++ compiler installed"
-                HAS_CXX_COMPILER=true
-                return 0
-            fi
-            ;;
-    esac
-
-    log_warn "Could not install a C++ compiler automatically."
-    log_warn "Node steps that compile native modules (e.g. node-pty) will fail below until one is installed."
-    log_info "Install it manually, then re-run this installer:"
-    case "$OS" in
-        linux)
-            case "$DISTRO" in
-                ubuntu|debian) log_info "  sudo apt install build-essential" ;;
-                fedora)        log_info "  sudo dnf install gcc-c++" ;;
-                arch)          log_info "  sudo pacman -S base-devel" ;;
-                *)             log_info "  Install a C++ compiler (g++/gcc-c++) via your package manager" ;;
-            esac
-            ;;
-        android)
-            log_info "  pkg install clang"
-            ;;
-        macos)
-            log_info "  xcode-select --install"
-            ;;
-    esac
-    return 1
-}
-
-# The dependency tree's real Node floor is >=22.22.0, set by react-router 8.3.0
-# (`engines.node`), with Vite ^8 next at `^20.19 || >=22.12`. Keep this in sync
-# with the root package.json — a gate looser than the manifest lets an install
-# proceed to a `npm ci` that then dies with EBADENGINE, and a gate stricter than
-# the manifest replaces a working user toolchain for nothing. Returns 0 when the
-# given `node --version` string clears the floor; anything below it is replaced
-# with the Hermes-managed Node $NODE_VERSION.
-node_satisfies_build() {
-    local ver="${1#v}"
-    local major="${ver%%.*}"
-    local minor="${ver#*.}"; minor="${minor%%.*}"
-    case "$major" in ''|*[!0-9]*) return 1 ;; esac
-    case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
-    if [ "$major" -ge 22 ] && { [ "$major" -gt 22 ] || [ "$minor" -ge 22 ]; }; then return 0; fi
-    return 1
-}
-
-# npm 11.10.0–11.16.x honor `min-release-age` but ignore
-# `min-release-age-exclude`, both of which `.npmrc` sets. That combination
-# applies the 14-day age gate to packages we deliberately exempted, so every
-# install fails ETARGET on a freshly published dependency. The root
-# package.json excludes that band via `engines.npm`, and `engine-strict=true`
-# makes it fatal — so a system npm in the band cannot install this repo, no
-# matter how new its Node is. Returns 0 when the npm is usable.
-npm_supports_npmrc() {
-    local ver="${1#v}"
-    local major="${ver%%.*}"
-    local minor="${ver#*.}"; minor="${minor%%.*}"
-    case "$major" in ''|*[!0-9]*) return 1 ;; esac
-    case "$minor" in ''|*[!0-9]*) minor=0 ;; esac
-    # The bad band is 11.10.0 through 11.16.x.
-    if [ "$major" -eq 11 ] && [ "$minor" -ge 10 ] && [ "$minor" -le 16 ]; then
+    if [ ! -d "$INSTALL_DIR/installation" ]; then
+        log_error "No installation package at $INSTALL_DIR/installation"
+        log_error "The repository download did not complete."
         return 1
     fi
-    return 0
-}
+    # Stages run in separate processes, so $UV_CMD from an earlier stage is
+    # gone. install_uv reuses the managed binary when it is already there,
+    # so this is a no-op in the common case.
+    if [ -z "$UV_CMD" ]; then
+        install_uv
+    fi
+    if [ -z "$UV_CMD" ]; then
+        log_error "uv is not available -- cannot run the provisioner"
+        return 1
+    fi
 
-check_node() {
-    log_info "Checking Node.js (for browser tools)..."
-
-    # Repair pre-existing Hermes-managed installs where `npm install -g` lands
-    # off PATH. No-op when there's no managed Node, so this is safe to run on
-    # every install — including re-runs that skip the Node (re)install below.
-    configure_managed_node_npm_prefix
-
-    # The system toolchain is only usable when BOTH halves work: a Node new
-    # enough for the desktop build AND an npm that can read our .npmrc. A
-    # bad-band npm (see npm_supports_npmrc) fails `npm ci` outright, and the
-    # managed Node we install instead bundles one that works.
+    # Downloads fail transiently: a dropped connection, a slow mirror, a
+    # registry hiccup. Retrying costs seconds; failing the install costs the
+    # user a reinstall. The provisioner is idempotent and skips tools that
+    # are already at their pinned version, so a retry only re-fetches what
+    # is still missing.
     #
-    # npm must actually be reachable, not just node: a stray `node` symlink
-    # without a sibling npm (leftover from a node version manager) makes
-    # `command -v node` succeed while every later `npm install` silently
-    # fails and the desktop build dies with an opaque "Node.js / npm
-    # unavailable" (#77003). Node only counts as found when npm resolves on
-    # the same PATH.
-    if command -v node &> /dev/null && command -v npm &> /dev/null \
-        && node_satisfies_build "$(node --version)"; then
-        if npm_supports_npmrc "$(npm --version 2>/dev/null)"; then
-            log_success "Node.js $(node --version) found"
-            HAS_NODE=true
+    # The browser rides the same sweep: --extra agent-browser stages the
+    # driver AND (through the pin table's requires edge) the pinned
+    # Chromium pair, digest-verified into the shared store — replacing the
+    # old `npx playwright install` download into ~/.cache/ms-playwright.
+    # System LIBRARIES for that Chromium stay in the script (see the
+    # browser-deps lane): root-privileged OS package work is not the
+    # provisioner's business.
+    #
+    # cua-driver rides it too. It used to arrive through its own
+    # `curl | bash` stage (install_computer_use_driver), which fetched
+    # whatever release upstream had tagged, unverified by us, and left an
+    # installer home + lock + symlink farm behind. As a pinned optional
+    # tool it is one more --extra: exact version, digest checked before
+    # extraction, and `hermes update` carries a pin bump from then on.
+    local -a provisioner_args=()
+    if [ "$SKIP_BROWSER" != true ]; then
+        provisioner_args+=(--extra agent-browser)
+    fi
+    if [ "$SKIP_COMPUTER_USE" != true ]; then
+        provisioner_args+=(--extra cua-driver)
+    fi
+    local attempt
+    for attempt in 1 2 3; do
+        if (cd "$INSTALL_DIR" && "$UV_CMD" run --no-project python -m installation.provisioner "${provisioner_args[@]}"); then
+            log_success "Managed runtimes provisioned"
+            # PATH for the REST OF THIS INSTALLER RUN (npm for browser deps,
+            # node for ui-tui build). The provisioner publishes tool BYTES
+            # into the machine-wide store (~/.hermes/tools/<tool>-<ver>-<target>/)
+            # and records install-scoped FACTS in .hermes-runtime/runtimes.json;
+            # ask the same reader every runtime consumer uses
+            # (installation.env.managed_path_dirs) instead of hardcoding a
+            # directory shape — the old literal
+            # "$INSTALL_DIR/.hermes-runtime/node/bin" does not exist under the
+            # store split, so npm was never found and the node-deps stage died
+            # with "npm: command not found".
+            local managed_dirs
+            managed_dirs=$(cd "$INSTALL_DIR" && "$UV_CMD" run --no-project python -c '
+import os
+from installation import env
+print(os.pathsep.join(str(d) for d in env.managed_path_dirs()))
+' 2>/dev/null) || managed_dirs=""
+            if [ -n "$managed_dirs" ]; then
+                export PATH="$managed_dirs:$PATH"
+            else
+                log_warn "Could not resolve managed tool PATH from runtimes.json"
+            fi
             return 0
         fi
-        log_warn "npm $(npm --version) cannot honor this repo's .npmrc (npm 11.10-11.16 ignore"
-        log_warn "min-release-age-exclude) — installing Hermes-managed Node $NODE_VERSION instead..."
-        install_node
-        return
-    fi
+        if [ "$attempt" -lt 3 ]; then
+            log_warn "Provisioning attempt $attempt failed -- retrying..."
+            sleep $((attempt * 2))
+        fi
+    done
 
-    # Prefer a Hermes-managed Node from a previous run over a too-old system one.
-    if [ -x "$HERMES_HOME/node/bin/node" ] && [ -x "$HERMES_HOME/node/bin/npm" ] \
-        && node_satisfies_build "$("$HERMES_HOME/node/bin/node" --version)"; then
-        export PATH="$HERMES_HOME/node/bin:$PATH"
-        log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed)"
-        HAS_NODE=true
-        return 0
-    fi
-
-    if command -v node &> /dev/null && ! command -v npm &> /dev/null; then
-        log_warn "node found but npm is not on PATH (stray node symlink?) — installing Hermes-managed Node $NODE_VERSION LTS..."
-    elif command -v node &> /dev/null; then
-        log_warn "Node.js $(node --version) is too old (Hermes requires Node >=26) — installing Hermes-managed Node $NODE_VERSION..."
-    else
-        log_info "Node.js not found — installing Node.js $NODE_VERSION LTS..."
-    fi
-    install_node
-}
-
-install_node() {
-    local arch=$(uname -m)
-    local node_arch
-    case "$arch" in
-        x86_64)        node_arch="x64"    ;;
-        aarch64|arm64) node_arch="arm64"  ;;
-        armv7l)        node_arch="armv7l" ;;
-        *)
-            log_warn "Unsupported architecture ($arch) for Node.js auto-install"
-            log_info "Install manually: https://nodejs.org/en/download/"
-            HAS_NODE=false
-            return 0
-            ;;
-    esac
-
-    local node_os
-    case "$OS" in
-        linux) node_os="linux"  ;;
-        macos) node_os="darwin" ;;
-        *)
-            log_warn "Unsupported OS for Node.js auto-install"
-            HAS_NODE=false
-            return 0
-            ;;
-    esac
-
-    # Resolve the latest v${NODE_VERSION}.x.x tarball name from the index page
-    local index_url="https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
-    local tarball_name
-    tarball_name=$(curl -fsSL "$index_url" \
-        | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" \
-        | head -1)
-
-    # Fallback to .tar.gz if .tar.xz not available
-    if [ -z "$tarball_name" ]; then
-        tarball_name=$(curl -fsSL "$index_url" \
-            | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz" \
-            | head -1)
-    fi
-
-    if [ -z "$tarball_name" ]; then
-        log_warn "Could not find Node.js $NODE_VERSION binary for $node_os-$node_arch"
-        log_info "Install manually: https://nodejs.org/en/download/"
-        HAS_NODE=false
-        return 0
-    fi
-
-    local download_url="${index_url}${tarball_name}"
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-
-    log_info "Downloading $tarball_name..."
-    if ! curl -fsSL "$download_url" -o "$tmp_dir/$tarball_name"; then
-        log_warn "Download failed"
-        rm -rf "$tmp_dir"
-        HAS_NODE=false
-        return 0
-    fi
-
-    log_info "Extracting to ~/.hermes/node/..."
-    if [[ "$tarball_name" == *.tar.xz ]]; then
-        tar xf "$tmp_dir/$tarball_name" -C "$tmp_dir"
-    else
-        tar xzf "$tmp_dir/$tarball_name" -C "$tmp_dir"
-    fi
-
-    local extracted_dir
-    extracted_dir=$(ls -d "$tmp_dir"/node-v* 2>/dev/null | head -1)
-
-    if [ ! -d "$extracted_dir" ]; then
-        log_warn "Extraction failed"
-        rm -rf "$tmp_dir"
-        HAS_NODE=false
-        return 0
-    fi
-
-    # Place into ~/.hermes/node/ and symlink binaries into the same bin dir
-    # the hermes command uses (get_command_link_dir): /usr/local/bin for root
-    # FHS installs, ~/.local/bin otherwise.
-    rm -rf "$HERMES_HOME/node"
-    mkdir -p "$HERMES_HOME"
-    mv "$extracted_dir" "$HERMES_HOME/node"
-    rm -rf "$tmp_dir"
-
-    local node_link_dir
-    node_link_dir="$(get_command_link_dir)"
-    mkdir -p "$node_link_dir"
-    ln -sf "$HERMES_HOME/node/bin/node" "$node_link_dir/node"
-    ln -sf "$HERMES_HOME/node/bin/npm"  "$node_link_dir/npm"
-    ln -sf "$HERMES_HOME/node/bin/npx"  "$node_link_dir/npx"
-
-    configure_managed_node_npm_prefix
-
-    export PATH="$HERMES_HOME/node/bin:$PATH"
-
-    local installed_ver
-    installed_ver=$("$HERMES_HOME/node/bin/node" --version 2>/dev/null)
-    log_success "Node.js $installed_ver installed to ~/.hermes/node/"
-    HAS_NODE=true
+    log_error "Could not provision the managed runtimes after 3 attempts."
+    log_error "Hermes needs its own pinned Node, npm, git, gh and ripgrep;"
+    log_error "a system copy is not a substitute (engine-strict=true)."
+    log_info "Check your network and re-run the installer."
+    return 1
 }
 
 check_network_prerequisites() {
@@ -1066,17 +869,20 @@ check_network_prerequisites() {
 
 install_system_packages() {
     # Detect what's missing
-    HAS_RIPGREP=false
     HAS_FFMPEG=false
-    local need_ripgrep=false
     local need_ffmpeg=false
+    local need_libatomic=false
 
-    log_info "Checking ripgrep (fast file search)..."
-    if command -v rg &> /dev/null; then
-        log_success "$(rg --version | head -1) found"
-        HAS_RIPGREP=true
-    else
-        need_ripgrep=true
+    # Node >= 24 on arm64 Linux links against libatomic.so.1, which minimal
+    # cloud/container images (Ubuntu 24.04 minimal, Debian slim) do not ship.
+    # Without it the provisioner's verify-by-running step fails with
+    # "error while loading shared libraries: libatomic.so.1" AFTER a correct
+    # download+sha256, which reads like corruption. Only Linux needs the
+    # probe; macOS links atomics from libSystem.
+    if [ "$OS" = "linux" ]; then
+        if ! ldconfig -p 2>/dev/null | grep -q "libatomic.so.1"; then
+            need_libatomic=true
+        fi
     fi
 
     log_info "Checking ffmpeg (TTS voice messages)..."
@@ -1089,30 +895,38 @@ install_system_packages() {
     fi
 
     # Nothing to install — done
-    if [ "$need_ripgrep" = false ] && [ "$need_ffmpeg" = false ]; then
+    if [ "$need_ffmpeg" = false ] && [ "$need_libatomic" = false ]; then
         return 0
     fi
 
     # Build a human-readable description + package list
     local desc_parts=()
     local pkgs=()
-    if [ "$need_ripgrep" = true ]; then
-        desc_parts+=("ripgrep for faster file search")
-        pkgs+=("ripgrep")
-    fi
     if [ "$need_ffmpeg" = true ]; then
         desc_parts+=("ffmpeg for TTS voice messages")
         pkgs+=("ffmpeg")
     fi
+    if [ "$need_libatomic" = true ]; then
+        desc_parts+=("libatomic1 for the pinned Node runtime")
+        case "$DISTRO" in
+            fedora) pkgs+=("libatomic") ;;
+            arch)   ;;  # part of gcc-libs, always present
+            *)      pkgs+=("libatomic1") ;;
+        esac
+    fi
     local description
     description=$(IFS=" and "; echo "${desc_parts[*]}")
+    # Everything needed is already covered (e.g. arch: libatomic ships in
+    # gcc-libs) — nothing to install after all.
+    if [ ${#pkgs[@]} -eq 0 ]; then
+        return 0
+    fi
 
     # ── macOS: brew ──
     if [ "$OS" = "macos" ]; then
         if command -v brew &> /dev/null; then
             log_info "Installing ${pkgs[*]} via Homebrew..."
             if brew install "${pkgs[@]}"; then
-                [ "$need_ripgrep" = true ] && HAS_RIPGREP=true && log_success "ripgrep installed"
                 [ "$need_ffmpeg" = true ]  && HAS_FFMPEG=true  && log_success "ffmpeg installed"
                 return 0
             fi
@@ -1142,7 +956,6 @@ install_system_packages() {
         if [ "$(id -u)" -eq 0 ]; then
             log_info "Installing ${pkgs[*]}..."
             if $install_cmd; then
-                [ "$need_ripgrep" = true ] && HAS_RIPGREP=true && log_success "ripgrep installed"
                 [ "$need_ffmpeg" = true ]  && HAS_FFMPEG=true  && log_success "ffmpeg installed"
                 return 0
             fi
@@ -1150,7 +963,6 @@ install_system_packages() {
         elif command -v sudo &> /dev/null && sudo -n true 2>/dev/null; then
             log_info "Installing ${pkgs[*]}..."
             if sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a $install_cmd; then
-                [ "$need_ripgrep" = true ] && HAS_RIPGREP=true && log_success "ripgrep installed"
                 [ "$need_ffmpeg" = true ]  && HAS_FFMPEG=true  && log_success "ffmpeg installed"
                 return 0
             fi
@@ -1162,7 +974,6 @@ install_system_packages() {
                 log_info "Hermes Agent itself does not require or retain root access."
                 if prompt_yes_no "Install ${description}? (requires sudo)" "no"; then
                     if sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a $install_cmd; then
-                        [ "$need_ripgrep" = true ] && HAS_RIPGREP=true && log_success "ripgrep installed"
                         [ "$need_ffmpeg" = true ]  && HAS_FFMPEG=true  && log_success "ffmpeg installed"
                         return 0
                     fi
@@ -1178,7 +989,6 @@ install_system_packages() {
                 log_info "Hermes Agent itself does not require or retain root access."
                 if prompt_yes_no "Install ${description}?" "yes"; then
                     if sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a $install_cmd < /dev/tty; then
-                        [ "$need_ripgrep" = true ] && HAS_RIPGREP=true && log_success "ripgrep installed"
                         [ "$need_ffmpeg" = true ]  && HAS_FFMPEG=true  && log_success "ffmpeg installed"
                         return 0
                     fi
@@ -1190,22 +1000,7 @@ install_system_packages() {
         fi
     fi
 
-    # ── Fallback for ripgrep: cargo ──
-    if [ "$need_ripgrep" = true ] && [ "$HAS_RIPGREP" = false ]; then
-        if command -v cargo &> /dev/null; then
-            log_info "Trying cargo install ripgrep (no sudo needed)..."
-            if cargo install ripgrep; then
-                log_success "ripgrep installed via cargo"
-                HAS_RIPGREP=true
-            fi
-        fi
-    fi
-
     # ── Show manual instructions for anything still missing ──
-    if [ "$HAS_RIPGREP" = false ] && [ "$need_ripgrep" = true ]; then
-        log_warn "ripgrep not installed (file search will use grep fallback)"
-        show_manual_install_hint "ripgrep"
-    fi
     if [ "$HAS_FFMPEG" = false ] && [ "$need_ffmpeg" = true ]; then
         log_warn "ffmpeg not installed (TTS voice messages will be limited)"
         show_manual_install_hint "ffmpeg"
@@ -1423,6 +1218,16 @@ EOF
     fi
 
     log_success "Repository ready"
+
+    # The installer owns this checkout: record `updateMechanism: self` in
+    # the stamp so the stamp-pure ladder (installation/tree.py) classifies
+    # it as managed. Keep an existing stamp — re-running the installer on
+    # an already-stamped install must not clobber richer provenance.
+    if [ ! -f "$INSTALL_DIR/install-stamp.json" ]; then
+        printf '{\n  "schemaVersion": 2,\n  "updateMechanism": "self",\n  "source": "installer"\n}\n' \
+            > "$INSTALL_DIR/install-stamp.json"
+        log_info "Wrote install stamp (updateMechanism: self)"
+    fi
 }
 
 setup_venv() {
@@ -2245,49 +2050,47 @@ install_node_deps() {
         rm -f "$npm_log"
         log_success "Node.js dependencies installed"
 
-        # Install Playwright browser + system dependencies.
-        # Playwright's --with-deps only supports apt-based systems natively.
-        # For Arch/Manjaro we install the system libs via pacman first.
-        # Other systems must install Chromium dependencies manually.
+        # Chromium system LIBRARIES. The browser BINARY itself is staged by
+        # the provisioner sweep above (--extra agent-browser expands to the
+        # pinned Chromium pair via the pin table's requires edge), so the
+        # download half of the old lane is gone — this lane now owns only
+        # the root-privileged OS package work a pinned browser still needs
+        # (a staged Chromium without libnss3 does not launch any more than
+        # a downloaded one did; nix/runtime-pins.nix runs autoPatchelfHook
+        # for exactly this reason).
         if [ "$SKIP_BROWSER" = true ]; then
-            log_info "Skipping Playwright/Chromium install (--skip-browser)"
+            log_info "Skipping browser setup (--skip-browser)"
             log_info "Browser tools will be unavailable until you run manually:"
-            log_info "  cd $INSTALL_DIR && npx playwright install chromium"
+            log_info "  cd $INSTALL_DIR && $UV_CMD run --no-project python -m installation.provisioner --extra agent-browser"
             log_info "On apt-based systems, an admin also needs to run:"
             log_info "  sudo npx playwright install-deps chromium"
         else
-        log_info "Installing browser engine (Playwright Chromium)..."
+        log_info "Setting up browser engine system libraries..."
         strip_snap_browser_override
         DETECTED_BROWSER_EXECUTABLE="$(find_system_browser 2>/dev/null || true)"
         if [ -n "$DETECTED_BROWSER_EXECUTABLE" ]; then
             log_success "Using explicit browser override: $DETECTED_BROWSER_EXECUTABLE"
-            log_info "Skipping bundled Chromium download (AGENT_BROWSER_EXECUTABLE_PATH is set)."
+            log_info "The system browser's libraries are already present (AGENT_BROWSER_EXECUTABLE_PATH is set)."
         else
             case "$DISTRO" in
                 ubuntu|debian|raspbian|pop|linuxmint|elementary|zorin|kali|parrot)
-                    # Use --with-deps only when sudo is available non-interactively
-                    # (root, or a user with passwordless sudo). Non-sudo users
-                    # — typical for systemd service accounts and unprivileged
-                    # operator users — would otherwise get blocked on an
-                    # interactive sudo prompt that they can't satisfy. Fall back
-                    # to the browser-only install in that case, and print the
-                    # exact command the admin needs to run separately.
+                    # install-deps shells apt, so it needs root or
+                    # passwordless sudo. Non-sudo users — typical for systemd
+                    # service accounts and unprivileged operator users —
+                    # would otherwise get blocked on an interactive sudo
+                    # prompt that they can't satisfy; print the exact command
+                    # the admin needs to run separately instead.
                     if [ "$(id -u)" -eq 0 ] || (command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null); then
-                        log_info "Installing Playwright Chromium with system dependencies..."
-                        cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install --with-deps chromium || {
-                            log_warn "Playwright browser installation failed — browser tools will not work."
-                            log_warn "Try running manually: cd $INSTALL_DIR && npx playwright install --with-deps chromium"
+                        log_info "Installing Chromium system dependencies (playwright install-deps)..."
+                        cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install-deps chromium || {
+                            log_warn "System-library install failed — browser tools may not work."
+                            log_warn "Try running manually: sudo npx playwright install-deps chromium"
                         }
                     else
-                        log_warn "No sudo available — skipping system-library install (--with-deps)."
+                        log_warn "No sudo available — skipping system-library install (install-deps)."
                         log_info "Ask an administrator to run, one time, as root:"
                         log_info "  sudo npx playwright install-deps chromium"
                         log_info "  (from $INSTALL_DIR, after Node.js deps are installed)"
-                        log_info "Installing Chromium binary into this user's Playwright cache..."
-                        cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
-                            log_warn "Playwright browser installation failed — browser tools will not work."
-                            log_warn "Try running manually: cd $INSTALL_DIR && npx playwright install chromium"
-                        }
                     fi
                     ;;
                 arch|manjaro|cachyos|endeavouros|garuda)
@@ -2304,32 +2107,20 @@ install_node_deps() {
                             log_warn "  sudo pacman -S nss atk at-spi2-core cups libdrm libxkbcommon mesa pango cairo alsa-lib"
                         fi
                     fi
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
-                        log_warn "Playwright browser installation failed — browser tools will not work."
-                    }
                     ;;
                 fedora|rhel|centos|rocky|alma)
                     log_warn "Playwright does not support automatic dependency installation on RPM-based systems."
                     log_info "Install Chromium system dependencies manually before using browser tools:"
                     log_info "  sudo dnf install nss atk at-spi2-core cups-libs libdrm libxkbcommon mesa-libgbm pango cairo alsa-lib"
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
-                        log_warn "Playwright browser installation failed — install dependencies above and retry."
-                    }
                     ;;
                 opensuse*|sles)
                     log_warn "Playwright does not support automatic dependency installation on zypper-based systems."
                     log_info "Install Chromium system dependencies manually before using browser tools:"
                     log_info "  sudo zypper install mozilla-nss libatk-1_0-0 at-spi2-core cups-libs libdrm2 libxkbcommon0 Mesa-libgbm1 pango cairo libasound2"
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
-                        log_warn "Playwright browser installation failed — install dependencies above and retry."
-                    }
                     ;;
                 *)
                     log_warn "Playwright does not support automatic dependency installation on $DISTRO."
-                    log_info "Install Chromium/browser system dependencies for your distribution, then run:"
-                    log_info "  cd $INSTALL_DIR && npx playwright install chromium"
-                    log_info "Browser tools will not work until dependencies are installed."
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || true
+                    log_info "Install Chromium/browser system dependencies for your distribution before using browser tools."
                     ;;
             esac
         fi
@@ -2398,83 +2189,6 @@ install_browser_use_cli() {
         log_warn "Browser Use CLI install failed — browser automation falls back to built-in tools."
         log_info "Install later with: $UV_CMD tool install browser-use  (or via 'hermes tools')"
     fi
-}
-
-cua_driver_runtime_compatible() {
-    local driver_path version_output manifest_output
-    local major minor
-    driver_path="$(command -v cua-driver 2>/dev/null)" || return 1
-    version_output="$("$driver_path" --version 2>/dev/null)" || return 1
-    if [[ ! "$version_output" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-        return 1
-    fi
-    major="${BASH_REMATCH[1]}"
-    minor="${BASH_REMATCH[2]}"
-    if (( major == 0 && minor < 20 )); then
-        return 1
-    fi
-    manifest_output="$("$driver_path" manifest 2>/dev/null)" || return 1
-    local required
-    for required in \
-        '"mcp_invocation"' \
-        '"--socket"' \
-        '"--grant"' \
-        '"--permission-mode"' \
-        '"--capability-manifest"' \
-        '"--approve-capability-manifest"' \
-        '"--embedded"'; do
-        case "$manifest_output" in
-            *"$required"*) ;;
-            *) return 1 ;;
-        esac
-    done
-    return 0
-}
-
-install_computer_use_driver() {
-    # cua-driver powers the computer_use toolset (background desktop control).
-    # Provision it at install time so enabling the tool later — via
-    # `hermes tools`, the dashboard, or the desktop app — is a config flip,
-    # not a surprise multi-minute binary fetch (the confusion this fixes:
-    # users had to discover `hermes computer-use install` on their own).
-    # Best-effort and non-fatal: the enable paths still lazy-install via
-    # install_cua_driver() when this step was skipped or failed.
-    if [ "$SKIP_COMPUTER_USE" = true ]; then
-        log_info "Skipping Computer Use (cua-driver) install (--skip-computer-use)"
-        return 0
-    fi
-    if command -v cua-driver >/dev/null 2>&1; then
-        if cua_driver_runtime_compatible; then
-            log_success "Computer Use driver (cua-driver) already installed and compatible"
-            return 0
-        fi
-        log_warn "Existing cua-driver is old or incomplete; repairing it"
-    fi
-    # Non-admin macOS accounts can't receive the CuaDriver.app bundle in
-    # /Applications; skip cleanly instead of failing loudly (#47865 class).
-    if [ "$(uname -s)" = "Darwin" ] && [ -d /Applications ] && [ ! -w /Applications ]; then
-        log_info "Skipping Computer Use driver (cua-driver): /Applications is not writable"
-        return 0
-    fi
-
-    log_info "Installing Computer Use driver (cua-driver)..."
-    # Same upstream installer `hermes computer-use install` runs; time-boxed
-    # so a stalled GitHub download can't hang the Hermes install. The
-    # upstream installer serializes with its own lock (600s stale window),
-    # so give it a ceiling above that — matching Hermes'
-    # _CUA_INSTALLER_TIMEOUT (660s).
-    local cua_log
-    cua_log="$(mktemp)"
-    if run_with_timeout 660 /bin/bash -c \
-        'curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh | /bin/bash' \
-        >"$cua_log" 2>&1; then
-        log_success "Computer Use driver installed (enable via 'hermes tools' → Computer Use)"
-    else
-        log_warn "Computer Use driver install failed — it will install on demand when you enable the tool."
-        log_info "Install later with: hermes computer-use install"
-        tail -n 5 "$cua_log" >&2 || true
-    fi
-    rm -f "$cua_log"
 }
 
 run_setup_wizard() {
@@ -2688,115 +2402,7 @@ print_success() {
         echo ""
     fi
 
-    # Show Node.js warning if auto-install failed
-    if [ "$HAS_NODE" = false ]; then
-        echo -e "${YELLOW}"
-        echo "Note: Node.js could not be installed automatically."
-        echo "Browser tools need Node.js. Install manually:"
-        echo "  https://nodejs.org/en/download/"
-        echo -e "${NC}"
-    fi
-
-    # Show ripgrep note if not installed
-    if [ "$HAS_RIPGREP" = false ]; then
-        echo -e "${YELLOW}"
-        echo "Note: ripgrep (rg) was not found. File search will use"
-        echo "grep as a fallback. For faster search in large codebases,"
-        echo "install ripgrep: sudo apt install ripgrep (or brew install ripgrep)"
-        echo -e "${NC}"
-    fi
 }
-
-ensure_browser() {
-    if ! command -v node >/dev/null 2>&1; then
-        local node_bin="$HERMES_HOME/node/bin/node"
-        if [ -x "$node_bin" ]; then
-            export PATH="$HERMES_HOME/node/bin:$PATH"
-        else
-            log_error "Node.js not found. Run with --ensure node first."
-            return 1
-        fi
-    fi
-
-    local npm_bin
-    npm_bin="$(command -v npm 2>/dev/null || echo "$HERMES_HOME/node/bin/npm")"
-    if [ ! -x "$npm_bin" ]; then
-        log_error "npm not found"
-        return 1
-    fi
-
-    # agent-browser itself is intentionally NOT installed here (#43564 /
-    # PR #44772 review): it resolves lazily via `npx agent-browser` instead,
-    # which every consumer (tools/browser_tool.py, `hermes update`'s npx
-    # cache warm) already goes through. Eagerly npm-installing a second,
-    # separately version-pinned copy here -- only reachable via this
-    # explicit --ensure browser fallback in the first place -- was redundant
-    # complexity and an extra credential/supply-chain surface for a path
-    # npx already covers.
-    log_info "Installing camofox browser server..."
-    local log_file
-    log_file="$(mktemp)"
-    # Time-boxed (#39219): a stalled npm registry fetch here would otherwise
-    # hang the installer with no progress, same class as the desktop build.
-    if ! run_with_timeout "$NODE_DEPS_TIMEOUT" "$npm_bin" install -g --prefix "$HERMES_HOME/node" --silent --ignore-scripts \
-        "@askjo/camofox-browser@^1.5.2" \
-        >"$log_file" 2>&1; then
-        log_error "npm install failed or timed out:"
-        cat "$log_file" >&2
-        rm -f "$log_file"
-        return 1
-    fi
-    rm -f "$log_file"
-    export PATH="$HERMES_HOME/node/bin:$PATH"
-
-    strip_snap_browser_override
-    local sys_browser
-    sys_browser="$(find_system_browser 2>/dev/null || true)"
-    if [ -n "$sys_browser" ]; then
-        configure_browser_env_from_system_browser "$sys_browser"
-        log_info "Explicit browser override set -- Chromium download will be skipped when agent-browser installs on demand"
-    fi
-
-    return 0
-}
-
-ensure_mode() {
-    detect_os
-
-    IFS=',' read -ra DEPS <<< "$ENSURE_DEPS"
-    for dep in "${DEPS[@]}"; do
-        dep="$(echo "$dep" | tr -d '[:space:]')"
-        case "$dep" in
-            node)
-                check_node
-                ;;
-            browser)
-                check_node
-                if [ "$HAS_NODE" = true ]; then
-                    ensure_browser
-                fi
-                ;;
-            ripgrep)
-                if ! command -v rg &>/dev/null; then
-                    HAS_RIPGREP=false
-                    HAS_FFMPEG=true
-                    install_system_packages
-                fi
-                ;;
-            ffmpeg)
-                if ! command -v ffmpeg &>/dev/null; then
-                    HAS_FFMPEG=false
-                    HAS_RIPGREP=true
-                    install_system_packages
-                fi
-                ;;
-            *)
-                log_warn "Unknown dependency: $dep"
-                ;;
-        esac
-    done
-}
-
 
 # Clear the cached Electron download + any half-written unpacked output so the
 # next `npm run pack` re-downloads and re-stages from scratch. A corrupt zip in
@@ -2992,17 +2598,12 @@ install_desktop() {
     # (--include-desktop / 'desktop' stage), so a missing toolchain is a hard
     # failure, not a silent skip — a silent skip yields a "complete" install
     # with no app and a confusing "couldn't find a built desktop" at launch.
-    # Always re-resolve Node here. Stages run in separate processes, so we can't
-    # trust an earlier check; more importantly check_node now enforces the build
-    # floor (Node >=26) and prepends the Hermes-managed Node to PATH, so
-    # the build never runs on a too-old system Node — the cause of the opaque
-    # "Build desktop app … exit code 1" failure (Vite crashes on old Node).
-    check_node
-    if ! command -v npm >/dev/null 2>&1; then
-        log_error "Cannot build desktop app: Node.js / npm unavailable"
-        log_info "Install Node.js and retry: cd $desktop_dir && npm run pack"
-        return 1
-    fi
+    # Re-provision here. Stages run in separate processes, so the PATH an
+    # earlier stage exported is gone; this is a no-op when the pins are
+    # already satisfied and it puts the managed tree back on PATH. The
+    # build must never run on a system Node — Vite crashes on an old one,
+    # which surfaced as the opaque "Build desktop app … exit code 1".
+    provision_managed_runtimes || return
     if [ ! -f "$desktop_dir/package.json" ]; then
         log_warn "Skipping desktop build (apps/desktop not present in checkout)"
         return 0
@@ -3223,11 +2824,10 @@ run_stage_body() {
             print_banner
             detect_os
             resolve_install_layout
-            install_uv
-            check_python
+            # uv + python move to the venv stage: the pinned uv lands in
+            # the install-scoped runtime dir, which exists only after the
+            # repository stage clones the checkout.
             check_git
-            check_node
-            check_cxx_compiler
             check_network_prerequisites
             install_system_packages
             ;;
@@ -3257,11 +2857,11 @@ run_stage_body() {
             detect_os
             resolve_install_layout
             require_install_dir
-            check_node
-            install_node_deps || return
-            install_uv
-            install_browser_use_cli
-            install_computer_use_driver
+            # Stage NAME is protocol (the GUI driver renders it); its body is
+            # now the shared provisioner. Managed runtimes first, then the
+            # npm-installed browser tooling that needs a working node.
+            provision_managed_runtimes || return
+            install_node_deps
             ;;
         path)
             detect_os
@@ -3291,11 +2891,12 @@ run_stage_body() {
             detect_os
             resolve_install_layout
             require_install_dir
-            # Each stage runs in its own process, so the Hermes-managed Node
-            # provisioned during prerequisites/node-deps (at $HERMES_HOME/node/bin)
-            # isn't on PATH here. check_node re-adds it (or installs if missing)
-            # so install_desktop can find npm instead of silently skipping.
-            check_node
+            # Each stage runs in its own process, so the managed Node
+            # provisioned during node-deps (in the install root's
+            # .hermes-runtime) isn't on PATH here. Re-provisioning is a
+            # cheap no-op when the pin is already satisfied, and it puts
+            # the tree back on PATH so install_desktop finds npm.
+            provision_managed_runtimes || return
             install_desktop_voice_deps
             install_desktop
             ;;
@@ -3304,12 +2905,6 @@ run_stage_body() {
             resolve_install_layout
             print_success
             write_bootstrap_marker
-            # Code-scoped stamp: write next to the install tree, not into
-            # $HERMES_HOME. $HERMES_HOME is a shared data dir (it can be
-            # bind-mounted into a Docker gateway too), so a stamp there gets
-            # clobbered by the container's 'docker' stamp and wrongly blocks
-            # 'hermes update' on this host install. See detect_install_method().
-            echo "git" > "$INSTALL_DIR/.install_method"
             ;;
         *)
             log_error "Unknown stage: $stage"
@@ -3366,21 +2961,30 @@ main() {
 
     detect_os
     resolve_install_layout
-    install_uv
-    check_python
     check_git
-    check_node
-    check_cxx_compiler
     check_network_prerequisites
     install_system_packages
 
     clone_repo
+    # AFTER the clone: the pinned uv lives in the install-scoped runtime
+    # dir ($INSTALL_DIR/.hermes-runtime/uv/), which exists once the
+    # checkout does. git is the only true pre-clone prerequisite.
+    install_uv
+    check_python
+    # Before the venv: the provisioner is stdlib-only and runs under
+    # `uv run --no-project`, and the tools it installs (node, npm, git) are
+    # what the steps below build with.
+    provision_managed_runtimes || return
     setup_venv
     install_deps
+    # The hermes command exists as soon as install_deps finishes — link it
+    # NOW. When a later optional stage fails (browser deps needing npm, the
+    # cua driver download), the user still gets a working `hermes` plus a
+    # clear warning, instead of a complete install whose only symptom is
+    # "command not found" because the symlink stage was never reached.
+    setup_path
     install_node_deps || return
     install_browser_use_cli
-    install_computer_use_driver
-    setup_path
     copy_config_templates
     run_setup_wizard
     maybe_start_gateway
@@ -3393,21 +2997,12 @@ main() {
     print_success
 
     write_bootstrap_marker
-
-    # Code-scoped stamp: write next to the install tree, not into $HERMES_HOME.
-    # $HERMES_HOME is a shared data dir (it can be bind-mounted into a Docker
-    # gateway too), so a stamp there gets clobbered by the container's 'docker'
-    # stamp and wrongly blocks 'hermes update' on this host install.
-    # See detect_install_method().
-    echo "git" > "$INSTALL_DIR/.install_method"
 }
 
 if [ "$MANIFEST_MODE" = true ]; then
     emit_manifest
 elif [ -n "$STAGE_NAME" ]; then
     run_stage_protocol "$STAGE_NAME"
-elif [ -n "$ENSURE_DEPS" ]; then
-    ensure_mode
 else
     main
 fi

@@ -903,9 +903,15 @@ class CheckpointManager:
             return False
 
         if self._git_available is None:
-            self._git_available = shutil.which("git") is not None
+            from installation.git import git_path
+
+            # git_path() rejects the macOS xcode-select shim, which would
+            # otherwise pop a modal install dialog from this background
+            # path, and rejects a git below the flag floor, which would
+            # accept the probe and then fail on a real checkpoint call.
+            self._git_available = git_path() is not None
             if not self._git_available:
-                logger.debug("Checkpoints disabled: git not found")
+                logger.debug("Checkpoints disabled: no usable git")
         if not self._git_available:
             return False
 

@@ -272,8 +272,10 @@ _LOCAL_PROBE_DISK_TTL_SECONDS = 300.0
 
 
 def _local_probe_disk_cache_path() -> Path:
-    from hermes_constants import get_hermes_home
-    return get_hermes_home() / "cache" / "local_endpoint_probes.json"
+    # Install-scoped: regenerable probe results whose shape this install's
+    # code owns (hermes-home lifetime split).
+    from installation.env import runtime_cache_dir
+    return runtime_cache_dir() / "local_endpoint_probes.json"
 
 
 def _load_local_probe_disk_cache() -> Dict[str, Any]:
@@ -321,9 +323,13 @@ def _local_probe_disk_put(kind: str, key: str, value: Any) -> None:
 
 
 def _get_model_metadata_cache_path() -> Path:
-    """Return path to the OpenRouter model metadata disk cache."""
-    from hermes_constants import get_hermes_home
-    return get_hermes_home() / "cache" / "openrouter_model_metadata.json"
+    """Return path to the OpenRouter model metadata disk cache.
+
+    Install-scoped (hermes-home lifetime split): regenerable, and its
+    shape belongs to the code that wrote it.
+    """
+    from installation.env import runtime_cache_dir
+    return runtime_cache_dir() / "openrouter_model_metadata.json"
 
 
 def _model_metadata_disk_cache_age_seconds() -> Optional[float]:

@@ -190,31 +190,36 @@ def _run_setup() -> None:
 
 
 def _run_setup_browser(assume_yes: bool = False) -> int:
-    """Bootstrap agent-browser + Chromium.
+    """Stage the pinned agent-browser CLI and its Chromium.
 
-    Routes through dep_ensure -> install.{sh,ps1} --ensure, sharing code
-    with the runtime lazy installer.
+    The pin table records the engine pair as the driver's ``requires``, so
+    one provision walks the closure and brings up both, digest-verified.
+    No Node is involved: the driver is a native binary.
 
     Returns 0 on success, 1 on failure.
     """
-    from hermes_cli.dep_ensure import ensure_dependency
+    from installation.browser import browser_install_guidance, driver_path, provision_driver
 
-    try:
-        node_ok = ensure_dependency("node", interactive=not assume_yes)
-        if not node_ok:
-            print("Node.js installation failed — cannot proceed with browser tools.",
-                  file=sys.stderr)
-            return 1
-
-        browser_ok = ensure_dependency("browser", interactive=not assume_yes)
-        if not browser_ok:
-            print("Browser tools installation failed.", file=sys.stderr)
-            return 1
-
+    if driver_path() is not None:
         return 0
-    except OSError as exc:
-        print(f"Browser bootstrap failed: {exc}", file=sys.stderr)
+
+    if not assume_yes and sys.stdin.isatty():
+        try:
+            reply = input(
+                "Browser tools need agent-browser and Chromium (~170MB). Install now? [Y/n] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return 1
+        if reply not in ("", "y", "yes"):
+            return 1
+
+    if not provision_driver():
+        print(
+            f"Browser tools installation failed. {browser_install_guidance()}",
+            file=sys.stderr,
+        )
         return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -650,12 +650,12 @@ def _get_code_identity_fields() -> dict[str, Any]:
     Never raises; degrades to absent fields.
     """
     try:
-        from hermes_cli.build_info import get_code_identity
+        from hermes_cli.version_info import get_version_info
 
-        identity = get_code_identity()
+        identity = get_version_info()
         return {
-            "code_sha": identity.get("sha"),
-            "code_version": identity.get("version"),
+            "code_sha": identity.commit,
+            "code_version": identity.derived_version,
         }
     except Exception:
         return {}

@@ -119,7 +119,7 @@ dependencies = [
   # without an explicit dependency here (and in the `web` extra below).
   "python-multipart>=0.0.9,<1",
   "ptyprocess>=0.7.0,<1; sys_platform != 'win32'",
-  "pywinpty>=2.0.0,<3; sys_platform == 'win32'",
+  "pywinpty>=3.0.5,<4; sys_platform == 'win32'",  # 3.x ships the windows arm64 wheel
   # Desktop SSH's Windows remote runtime (hermes_cli/windows_ssh_runtime.py)
   # imports win32security/win32file/etc. directly — declare pywin32 rather than
   # relying on the concurrent-log-handler → portalocker transitive chain.
@@ -184,7 +184,16 @@ daytona = ["daytona==0.155.0"]
 vercel = ["vercel==0.7.2"]
 hindsight = ["hindsight-client==0.6.1"]
 dev = ["debugpy==1.8.20", "pytest==9.1.1", "pytest-asyncio==1.3.0", "mcp==2.0.0", "httpx2==2.7.0", "starlette==1.3.1", "ty==0.0.21", "ruff==0.15.10", "setuptools==83.0.0"]  # starlette: CVE-2026-48710; setuptools: 83 (torch >=2.13 requires setuptools 83)
-messaging = ["python-telegram-bot[webhooks]==22.8", "discord.py[voice]==2.7.1", "aiohttp==3.14.3", "brotlicffi==1.2.0.1", "slack-bolt==1.30.0", "slack-sdk==3.43.0", "qrcode==7.4.2"]  # aiohttp 3.14.3: prior CVEs + GHSA-cq5v-8q36-5273/GHSA-mfx4-hv73-q22v/GHSA-mq44-7p77-q5h7
+telegram = ["python-telegram-bot[webhooks]==22.8"]
+# brotlicffi gives aiohttp a working 2-arg Decompressor.process() for
+# Discord CDN's Brotli-encoded attachments. Without it, aiohttp falls back
+# to google's `Brotli` package (1-arg API), and any .txt/.md/.doc uploaded
+# to the Discord gateway fails to decode at att.read() with "Can not decode
+# content-encoding: br" — see #12511 / #15744. aiohttp pinned because
+# discord.py only caps it transitively (>=3.7.4,<4), which a vulnerable
+# installed copy still satisfies.
+discord = ["discord.py[voice]==2.7.1", "brotlicffi==1.2.0.1", "aiohttp==3.14.3"]  # aiohttp 3.14.3: prior CVEs + GHSA-cq5v-8q36-5273/GHSA-mfx4-hv73-q22v/GHSA-mq44-7p77-q5h7
+messaging = ["hermes-agent[telegram]", "hermes-agent[discord]", "hermes-agent[slack]", "qrcode==7.4.2"]
 cron = []  # croniter is now a core dependency; this extra kept for back-compat
 slack = ["slack-bolt==1.30.0", "slack-sdk==3.43.0", "aiohttp==3.14.3"]
 matrix = ["mautrix[encryption]==0.21.1", "aiosqlite==0.22.1", "asyncpg==0.31.0", "aiohttp-socks==0.11.0", "aiohttp==3.14.3"]  # aiohttp 3.14.3: prior CVEs + GHSA-cq5v-8q36-5273/GHSA-mfx4-hv73-q22v/GHSA-mq44-7p77-q5h7 (mautrix/aiohttp-socks only cap aiohttp<4 / >=3.10, so pin the patched floor directly)
@@ -195,32 +204,44 @@ matrix = ["mautrix[encryption]==0.21.1", "aiosqlite==0.22.1", "asyncpg==0.31.0",
 # here to keep the dependency local to wecom_callback's threat model.
 wecom = ["defusedxml==0.7.1"]
 tts-premium = ["elevenlabs==1.59.0"]
+# Microphone/playback stack shared by the STT and wake-word features. Its
+# own extra so lazy_deps features can compose it (hermes-agent[audio-io])
+# without repeating the pins.
+audio-io = ["sounddevice==0.5.5", "numpy==2.4.3"]
+# Local STT model runner alone — no microphone stack. The gateway uses it
+# for voice notes that arrive over the network; [voice] composes it with
+# audio-io for local mic transcription.
+stt-whisper = ["faster-whisper==1.2.1"]
+# Tencent SILK voice-note decoding (WeChat/QQ voice messages).
+silk = ["pilk==0.2.4"]
 voice = [
-  # Local STT pulls in wheel-only transitive deps (ctranslate2, onnxruntime).
-  "faster-whisper==1.2.1",
-  "sounddevice==0.5.5",
-  "numpy==2.4.3",
+  "hermes-agent[stt-whisper]",
+  "hermes-agent[audio-io]",
 ]
 # "Hey Hermes" wake word — on-device hotword detection. All engines are
 # optional; openWakeWord (ONNX) is the free default, sherpa-onnx adds
 # open-vocabulary phrases (any typed phrase, zero training), Porcupine is
 # the premium alternative. Desktop installs ([--include-desktop]) eager-install
 # [wake]+[voice] so the ear works instantly; CLI-only installs lazy-install on
-# first /wake; mirrored in tools/lazy_deps.py.
+# first /wake; per-engine extras below are what tools/lazy_deps.py installs.
+wake-openwakeword = ["hermes-agent[audio-io]", "openwakeword==0.6.0", "onnxruntime==1.27.0"]
+# openWakeWord's onnx embedding model scores near-zero on macOS ARM64
+# (dscripka/openWakeWord#336), so the wake word runs on tflite there.
+# Upstream declares tflite-runtime for Linux only; ai-edge-litert is the
+# macOS equivalent, bridged in tools/wake_word.py.
+wake-tflite = ["ai-edge-litert==2.1.6; platform_system == 'Darwin'"]
+wake-sherpa = ["hermes-agent[audio-io]", "sherpa-onnx==1.13.5", "sentencepiece==0.2.2"]
+wake-porcupine = ["hermes-agent[audio-io]", "pvporcupine==4.0.3"]
 wake = [
-  "openwakeword==0.6.0",
-  "onnxruntime==1.27.0",
-  "sherpa-onnx==1.13.4",
-  "sentencepiece==0.2.2",
-  "pvporcupine==4.0.3",
-  "sounddevice==0.5.5",
-  "numpy==2.4.3",
-  # openWakeWord's onnx embedding model scores near-zero on macOS ARM64
-  # (dscripka/openWakeWord#336), so the wake word runs on tflite there.
-  # Upstream declares tflite-runtime for Linux only; ai-edge-litert is the
-  # macOS equivalent, bridged in tools/wake_word.py.
-  "ai-edge-litert==2.1.6; platform_system == 'Darwin'",
+  "hermes-agent[wake-openwakeword]",
+  "hermes-agent[wake-sherpa]",
+  "hermes-agent[wake-porcupine]",
+  "hermes-agent[wake-tflite]",
 ]
+# Trajectory upload to HuggingFace (save_trajectories + hermes trace push).
+trace-upload = ["huggingface-hub==1.24.0"]
+# Document text extraction for read_file (PDF, legacy Office, EPUB, ...).
+doc-extract = ["firecrawl-anydoc==0.1.6"]
 honcho = ["honcho-ai==2.2.0"]
 # Cloud memory providers — opt-in, lazy-installed via tools/lazy_deps.py
 # (memory.supermemory / memory.mem0) at first use. Exact pins MUST match the
@@ -228,7 +249,7 @@ honcho = ["honcho-ai==2.2.0"]
 # excluded from [all] like honcho/hindsight so a quarantined upstream release
 # can't break fresh installs.
 supermemory = ["supermemory==3.50.0"]
-mem0 = ["mem0ai==2.0.10"]
+mem0 = ["mem0ai==2.0.10; sys_platform != 'win32' or platform_machine != 'ARM64'"]
 # Image resize recovery for the vision tools. Pillow is now a CORE dependency
 # (see the main `dependencies` list above) since the byte/pixel shrink paths are on
 # the default vision-embed path and the mid-session lazy install deadlocked the
@@ -259,6 +280,18 @@ mcp = ["mcp==2.0.0", "httpx2==2.7.0", "starlette==1.3.1"]  # starlette: CVE-2026
 # Backwards-compatible no-op alias. Relay is a core dependency on supported
 # wheel targets and intentionally unavailable on other platforms.
 nemo-relay = []
+# Google Chat gateway adapter (plugins/platforms/google_chat). It contains
+# [google] for the API and auth stack, and adds the Pub/Sub client for the
+# optional pull-subscription transport.
+#
+# Declare each of these packages here, not only in a list inside the plugin.
+# `uv audit` and the OSV-Scanner CI job read uv.lock. A package that the
+# plugin installs at run time, but that pyproject.toml does not declare,
+# never reaches uv.lock, and no scanner examines it.
+google-chat = [
+  "hermes-agent[google]",
+  "google-cloud-pubsub==2.39.0",
+]
 homeassistant = ["aiohttp==3.14.3"]
 sms = ["aiohttp==3.14.3"]
 teams = ["microsoft-teams-apps==2.0.13.4", "aiohttp==3.14.3"]  # aiohttp 3.14.3: prior CVEs + GHSA-cq5v-8q36-5273/GHSA-mfx4-hv73-q22v/GHSA-mq44-7p77-q5h7
@@ -370,6 +403,29 @@ override-dependencies = [
   # requests with RSA and AES, and that API did not break in 49 or 50.
   # Remove this line when alibabacloud-tea-openapi lifts the cap.
   "cryptography>=50,<51",
+  # ai-edge-litert declares `backports.strenum` with NO environment marker,
+  # but its own code imports the backport only below python 3.11:
+  #
+  #   if sys.version_info >= (3, 11):
+  #     from enum import StrEnum
+  #   else:
+  #     from backports.strenum import StrEnum
+  #
+  # StrEnum is stdlib from 3.11, so on the payload interpreter (3.11) the
+  # backport is declared, downloaded, and never imported. Its latest
+  # release, 1.3.1, then caps ITSELF at Requires-Python >=3.8.6,<3.11 —
+  # the maintainer's way of saying the backport is obsolete. So the
+  # resolver picks the one version that excludes our interpreter.
+  #
+  # uv treats a locked pin's Requires-Python as advisory and installs it
+  # anyway; pip treats it as binding and refuses. The payload staging is
+  # where uv-resolved requirements meet real pip, so only the bundled
+  # darwin-arm64 lane failed (wake-tflite is the only consumer, and its
+  # dependency edge carries sys_platform == 'darwin').
+  #
+  # 1.2.8 allows 3.11 and is never imported there anyway. Remove this line
+  # when ai-edge-litert marks the dependency python_version < '3.11'.
+  "backports-strenum<1.3",
 ]
 exclude-newer = "14 days"
 # h2: temporary exclude-newer exception for the CVE-2026-71554 (GHSA-6hr6-w5qg-qmwg,
@@ -396,7 +452,21 @@ exclude-newer = "14 days"
 # cutoff can still brick installs. Exempting exact pins is pure brick-risk
 # removal at no supply-chain cost. Guarded by
 # tests/test_packaging_metadata.py::test_build_system_requires_exempt_from_exclude_newer.
-exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, h2 = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false }
+#
+# sherpa-onnx: 1.13.5 is the first release with win_arm64 wheels. Below it the
+# win32-arm64 payload build compiles the sdist, and that build fails in cmake
+# on the release runner.
+#
+# The timestamp is end of 2026-08-11 because a release's files upload over
+# HOURS, not at one instant: 1.13.5 spans 07:18Z–09:38Z and its win_arm64
+# wheels land at 07:33Z–07:46Z. A cutoff at the first file's upload time
+# resolves the version but silently drops every wheel published after it —
+# including the one this bump exists to get, which then sends the resolver
+# looking for a sherpa-onnx-core companion that the full wheel set does not
+# need. The next release (1.13.6) is 2026-08-18, so the date admits 1.13.5
+# only. This entry goes inert on 2026-08-25, when the rolling 14-day cutoff
+# passes it; delete it then.
+exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, h2 = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false, firecrawl-anydoc = "2026-08-05T18:29:24Z", sherpa-onnx = "2026-08-12T00:00:00Z" }
 
 [tool.setuptools]
 # Top-level single-file modules (not packages). Without this, uv2nix's
@@ -424,10 +494,13 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "installation", "plugins", "plugins.*", "providers", "providers.*"]
 
 [tool.setuptools.package-data]
-hermes_cli = ["observability/schemas/*.json", "data/*.json"]
+  hermes_cli = ["observability/schemas/*.json", "data/*.json"]
+  # The pin table is package data: it ships with the code that reads it,
+  # so a wheel carries it without the repo root a checkout has.
+  installation = ["runtime-pins.json"]
 # gateway/assets/ ships status_phrases.yaml and the Telegram BotFather
 # screenshot. Without this, sealed venvs (uv2nix) silently lose both —
 # status phrases fall back to the tiny hardcoded set and the Telegram
@@ -451,6 +524,7 @@ markers = [
     "linux_only: exercises Linux-specific behaviour; skipped on other hosts",
     "macos_only: exercises macOS-specific behaviour; skipped on other hosts",
     "windows_only: exercises native-Windows behaviour; skipped on other hosts",
+    "no_managed_deps: asserts behaviour on an unprovisioned tree; must not get the session managed toolchain",
 ]
 # integration tests take way too long to run in the normal CI environments
 addopts = "-m 'not integration'"

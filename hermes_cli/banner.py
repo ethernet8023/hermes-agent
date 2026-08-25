@@ -65,7 +65,8 @@ def _skin_color(key: str, fallback: str) -> str:
 # ASCII Art & Branding
 # =========================================================================
 
-from hermes_cli import __version__ as VERSION, __release_date__ as RELEASE_DATE
+from hermes_cli import __version__ as VERSION
+from hermes_cli.version_info import get_version_info
 
 HERMES_AGENT_LOGO = """[bold #FFD700]██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
 [bold #FFD700]██║  ██║██╔════╝██╔══██╗████╗ ████║██╔════╝██╔════╝      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
@@ -385,9 +386,9 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
 def check_for_updates() -> Optional[int]:
     """Check whether a Hermes update is available.
 
-    Two paths: if ``HERMES_REVISION`` is set (nix builds embed it), compare
-    it to upstream main via ``git ls-remote``. Otherwise look for a local
-    git checkout and count commits behind ``origin/main``.
+    Two paths: if the install stamp provides a commit (packaged builds),
+    compare it to upstream main via ``git ls-remote``. Otherwise look for a
+    local git checkout and count commits behind ``origin/main``.
 
     Returns the number of commits behind, ``UPDATE_AVAILABLE_NO_COUNT`` (-1)
     if behind but the count is unknown, ``0`` if up-to-date, or ``None`` if
@@ -395,15 +396,28 @@ def check_for_updates() -> Optional[int]:
     """
     hermes_home = get_hermes_home()
     cache_file = hermes_home / ".update_check"
-    embedded_rev = os.environ.get("HERMES_REVISION") or None
+
+    # Only immutable packaged-build provenance uses the remote SHA
+    # comparison. Source installs resolve as ``git`` too, but they keep a
+    # local checkout and can calculate the exact behind count below.
+    try:
+        from hermes_cli.version_info import get_version_info
+
+        version_info = get_version_info()
+        embedded_rev = (
+            version_info.commit
+            if version_info.source in {"nix", "docker", "build"}
+            else None
+        )
+    except Exception as exc:
+        logger.debug("version_info unavailable for update check: %s", exc)
+        embedded_rev = None
 
     # Docker images have no working tree to count commits against — the
-    # published image excludes `.git` (see .dockerignore) and sets no
-    # HERMES_REVISION (that's nix-only). Returning None makes both the Rich
-    # banner (build_welcome_banner) and the Ink badge (branding.tsx, guarded
-    # on `typeof === 'number' && > 0`) show nothing. The dashboard's REST
-    # `/api/hermes/update/check` endpoint short-circuits docker the same way
-    # (web_server.py); mirror that here so the banner/TUI surfaces agree.
+    # published image excludes `.git` (see .dockerignore). Returning None
+    # makes both the Rich banner and the Ink badge show nothing.
+    # The dashboard's REST `/api/hermes/update/check` endpoint short-circuits
+    # docker the same way (web_server.py); mirror that here so surfaces agree.
     try:
         from hermes_cli.config import detect_install_method, get_project_root
         if detect_install_method(get_project_root()) == "docker":
@@ -432,13 +446,8 @@ def check_for_updates() -> Optional[int]:
         # Prefer the running code's location over the profile-scoped path.
         # $HERMES_HOME/hermes-agent/ may be a stale copy from --clone-all;
         # Path(__file__) always resolves to the actual installed checkout.
-        repo_dir = Path(__file__).parent.parent.resolve()
-        if not (repo_dir / ".git").exists():
-            repo_dir = hermes_home / "hermes-agent"
-        if not (repo_dir / ".git").exists():
-            # No git checkout and no embedded revision — can't determine
-            # update status. This is the Docker path (already short-circuited
-            # above) or an unsupported install without a source tree.
+        repo_dir = _resolve_repo_dir()
+        if repo_dir is None:
             behind = None
         else:
             behind = _check_via_local_git(repo_dir)
@@ -457,15 +466,12 @@ def check_for_updates() -> Optional[int]:
 def _resolve_repo_dir() -> Optional[Path]:
     """Return the active Hermes git checkout, or None if this isn't a git install.
 
-    Prefers the running code's location over the profile-scoped path
-    because ``$HERMES_HOME/hermes-agent/`` may be a stale copy carried
-    over by ``--clone-all``.
+    Delegates to ``version_info._resolve_repo_dir`` — one checkout-resolution
+    policy for the whole package.
     """
-    repo_dir = Path(__file__).parent.parent.resolve()
-    if not (repo_dir / ".git").exists():
-        hermes_home = get_hermes_home()
-        repo_dir = hermes_home / "hermes-agent"
-    return repo_dir if (repo_dir / ".git").exists() else None
+    from hermes_cli.version_info import _resolve_repo_dir as _resolve
+
+    return _resolve()
 
 
 def _git_short_hash(repo_dir: Path, rev: str) -> Optional[str]:
@@ -522,10 +528,12 @@ def get_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
 def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
     repo_dir = repo_dir or _resolve_repo_dir()
     if repo_dir is None:
-        # No git checkout — try the baked build SHA (Docker image path).
+        # No git checkout — try the baked build SHA (packaged image path).
         try:
-            from hermes_cli.build_info import get_build_sha
-            baked = get_build_sha(short=8)
+            from hermes_cli.version_info import get_version_info
+
+            version_info = get_version_info()
+            baked = version_info.commit
             if baked:
                 return {"upstream": baked, "local": baked, "ahead": 0}
         except Exception:
@@ -538,8 +546,10 @@ def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]
         # Live-git lookup failed (e.g. shallow clone without origin/main).
         # Fall back to the baked build SHA if available.
         try:
-            from hermes_cli.build_info import get_build_sha
-            baked = get_build_sha(short=8)
+            from hermes_cli.version_info import get_version_info
+
+            version_info = get_version_info()
+            baked = version_info.commit
             if baked:
                 return {"upstream": baked, "local": baked, "ahead": 0}
         except Exception:
@@ -615,20 +625,19 @@ def get_latest_release_tag(repo_dir: Optional[Path] = None) -> Optional[tuple]:
 
 def format_banner_version_label() -> str:
     """Return the version label shown in the startup banner title."""
-    base = f"Hermes Agent v{VERSION} ({RELEASE_DATE})"
-    state = get_git_banner_state()
-    if not state:
-        return base
-
-    upstream = state["upstream"]
-    local = state["local"]
-    ahead = int(state.get("ahead") or 0)
-
-    if ahead <= 0 or upstream == local:
-        return f"{base} · upstream {upstream}"
-
-    carried_word = "commit" if ahead == 1 else "commits"
-    return f"{base} · upstream {upstream} · local {local} (+{ahead} carried {carried_word})"
+    info = get_version_info()
+    version_label = f"Hermes Agent v{info.derived_version}"
+    if info.dirty:
+        version_label += " (!)"
+    parts = [version_label]
+    if info.branch:
+        parts.append(info.branch)
+    if info.commit:
+        commit_label = info.commit[:12]
+        if info.dirty:
+            commit_label += " (+ uncommitted changes)"
+        parts.append(commit_label)
+    return " · ".join(parts)
 
 
 # =========================================================================
@@ -693,7 +702,11 @@ def get_update_result(timeout: float = 0.5) -> Optional[int]:
 
 def _format_update_notice(behind: int) -> str:
     """Render the update warning line for a non-zero ``behind`` result."""
-    from hermes_cli.config import get_managed_update_command, recommended_update_command
+    from hermes_cli.config import (
+        detect_install_method,
+        get_project_root,
+        recommended_update_command,
+    )
     if behind > 0:
         commits_word = "commit" if behind == 1 else "commits"
         return (
@@ -701,12 +714,12 @@ def _format_update_notice(behind: int) -> str:
             f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] to update[/]"
         )
     # UPDATE_AVAILABLE_NO_COUNT: nix-built hermes; we know an update
-    # exists but not by how much, and we don't know how the user
-    # installed it (nix run, profile, system flake, home-manager).
-    managed_cmd = get_managed_update_command()
+    # exists but not by how much. The install method decides the hint:
+    # only a nix install gets a command, because the stamp says how the
+    # user installed it.
     line = "[bold yellow]⚠ update available[/]"
-    if managed_cmd:
-        line += f"[dim yellow] — run [bold]{managed_cmd}[/bold][/]"
+    if detect_install_method(get_project_root()) == "nix":
+        line += f"[dim yellow] — run [bold]{recommended_update_command()}[/bold][/]"
     return line
 
 

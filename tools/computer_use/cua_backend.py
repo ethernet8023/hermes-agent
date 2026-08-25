@@ -152,7 +152,6 @@ def _action_result_from(
     )
 
 
-
 # ---------------------------------------------------------------------------
 # Update checking
 # ---------------------------------------------------------------------------
@@ -345,29 +344,35 @@ def _standard_runtime_launch_args(
     *,
     grant_existing_profile: bool,
     platform: str,
-    socket_path: Optional[str] = None,
-) -> Tuple[List[str], Optional[str]]:
-    """Return MCP args and any private runtime socket owned by this transport.
+) -> List[str]:
+    """Return the MCP args that launch the standard (non-embedded) runtime.
 
-    Windows and Linux run the standard runtime in the MCP process, so the
-    launch grant can be passed directly. macOS proxies through CuaDriver.app;
-    a grant must therefore launch a fresh app daemon on a private socket
-    instead of trying to reconfigure the default daemon.
+    Every platform runs the standard runtime IN the MCP process. Windows
+    and Linux always did. macOS does now too, and says so explicitly with
+    ``--direct``: the driver's default there is to auto-launch the
+    standalone ``CuaDriver.app`` and proxy to it, and a managed
+    installation has no bundle to launch. ``--direct`` also carries the
+    TCC consequence — Accessibility and Screen Recording attribute to the
+    HOST process (Hermes, or the terminal that spawned it) rather than to
+    ``com.trycua.driver``, because there is no bundle to attribute to.
+    That is the accepted trade for one pinned binary and one code path on
+    every platform.
 
-    ``platform`` is explicit so this policy can be tested as a pure function
-    on every CI host.
+    With the runtime in-process everywhere, a launch grant is just an
+    argument. The private-socket dance this used to do on macOS existed
+    only to get a FRESH app daemon (a grant cannot reconfigure a running
+    one), and there is no app daemon to be stale now. ``--direct`` is
+    mutually exclusive with ``--socket`` anyway.
+
+    ``platform`` is explicit so this policy can be tested as a pure
+    function on every CI host.
     """
     result = list(args)
-    if not grant_existing_profile:
-        return result, None
-    result.extend(["--grant", "existing-profile"])
-    if platform != "darwin":
-        return result, None
-    private_socket = socket_path or os.path.join(
-        tempfile.gettempdir(), f"hermes-cua-standard-{uuid.uuid4().hex[:12]}.sock"
-    )
-    result.extend(["--socket", private_socket])
-    return result, private_socket
+    if platform == "darwin":
+        result.append("--direct")
+    if grant_existing_profile:
+        result.extend(["--grant", "existing-profile"])
+    return result
 
 
 def _computer_use_max_image_dimension() -> Optional[int]:
@@ -870,9 +875,14 @@ def _resolve_mcp_invocation(
 
 def _mcp_args_with_overlay_flag(
     args: List[str],
-    driver_cmd: str = _CUA_DRIVER_DEFAULT_CMD,
+    driver_cmd: str,
 ) -> List[str]:
-    """Return *args* with ``--no-overlay`` appended when configured and supported."""
+    """Return *args* with ``--no-overlay`` appended when configured and supported.
+
+    ``driver_cmd`` is required: the probe below RUNS it, and the bare
+    name ``cua-driver`` is not resolvable now that the driver is a
+    managed tool addressed by its recorded absolute path.
+    """
     if _cua_no_overlay() and _cua_driver_supports_no_overlay(driver_cmd):
         return [*args, "--no-overlay"]
     return list(args)
@@ -951,13 +961,21 @@ def _candidate_cua_driver_commands(override: Optional[str] = None) -> List[str]:
 
     ``override`` is authoritative when supplied. Otherwise a non-empty
     ``HERMES_CUA_DRIVER_CMD`` is authoritative; only when neither is set do we
-    use PATH and canonical install locations.
+    resolve the managed driver.
 
-    Desktop apps launched from Finder/Dock often inherit a narrow PATH that
-    omits user-local install directories. The upstream cua-driver installer
-    commonly places the binary under ``~/.local/bin`` on POSIX systems, so a
-    Hermes Desktop/TUI session can otherwise filter out the `computer_use`
-    tool even though `hermes computer-use doctor` succeeds from a login shell.
+    There is exactly one non-override rung: the driver the provisioner
+    staged, resolved through its fact. cua-driver is a pinned managed
+    tool like node or ripgrep (``installation/runtime-pins.json``), so
+    the digest-verified binary this install recorded IS the driver.
+
+    This deliberately does NOT search PATH, ``~/.local/bin``,
+    ``~/.cargo/bin``, or the Homebrew prefixes the upstream installer
+    writes to. Those rungs existed because Hermes used to shell out to
+    ``curl | bash`` and then had to go find whatever that produced —
+    which also meant a Finder-launched desktop app with a narrow PATH
+    silently lost the tool. A fact carries an absolute path and cannot
+    have that problem. Someone running an upstream-installed driver on
+    purpose points ``HERMES_CUA_DRIVER_CMD`` at it.
     """
     configured = (override if override is not None else os.environ.get(_CUA_DRIVER_CMD_ENV, "")).strip()
     if configured:
@@ -965,38 +983,34 @@ def _candidate_cua_driver_commands(override: Optional[str] = None) -> List[str]:
         # driver missing instead of silently picking a different binary.
         return [configured]
 
-    candidates = [_CUA_DRIVER_DEFAULT_CMD]
-    home = os.path.expanduser("~")
-    if sys.platform == "win32":
-        local_app_data = os.environ.get("LOCALAPPDATA") or os.path.join(
-            home, "AppData", "Local"
-        )
-        candidates.extend([
-            # Official cua-driver installer location on Windows. Freshly
-            # installed sessions inherit a stale PATH, so PATH lookup alone
-            # misses it until every Hermes process is restarted.
-            os.path.join(
-                local_app_data, "Programs", "Cua", "cua-driver", "bin", "cua-driver.exe"
-            ),
-            os.path.join(home, ".local", "bin", "cua-driver.exe"),
-            os.path.join(home, ".local", "bin", "cua-driver"),
-        ])
-    else:
-        candidates.extend([
-            os.path.join(home, ".local", "bin", "cua-driver"),
-            os.path.join(home, ".cargo", "bin", "cua-driver"),
-            "/opt/homebrew/bin/cua-driver",
-            "/usr/local/bin/cua-driver",
-        ])
-    return candidates
+    managed = _managed_cua_driver_path()
+    return [managed] if managed else []
+
+
+def _managed_cua_driver_path() -> Optional[str]:
+    """The provisioned cua-driver's absolute path, or None.
+
+    None covers both "this install never provisioned the driver" (it is
+    an optional tool — nobody downloads it until Computer Use is asked
+    for) and "the fact names bytes that are gone", which ``tool_path``
+    already folds together for every managed tool.
+    """
+    try:
+        from installation.registry import tool_path
+
+        resolved = tool_path("cua-driver")
+    except Exception as exc:  # noqa: BLE001 — resolution must never raise
+        logger.debug("managed cua-driver lookup failed: %s", exc)
+        return None
+    return str(resolved) if resolved is not None else None
 
 
 def resolve_cua_driver_cmd(override: Optional[str] = None) -> Optional[str]:
     """Resolve the cua-driver executable for every runtime/status surface.
 
     A supplied override (or ``HERMES_CUA_DRIVER_CMD``) is never silently
-    replaced by another binary. Otherwise resolve PATH first, then canonical
-    user-local installation locations used by the official installer.
+    replaced by another binary. Otherwise this is the managed driver's
+    recorded path.
     """
     for candidate in _candidate_cua_driver_commands(override):
         expanded = os.path.expanduser(candidate)
@@ -1011,8 +1025,36 @@ def resolve_cua_driver_cmd(override: Optional[str] = None) -> Optional[str]:
 
 
 def cua_driver_binary_available() -> bool:
-    """True if `cua-driver` resolves via env, PATH, or known install paths."""
+    """True if `cua-driver` resolves via the override or the managed fact."""
     return resolve_cua_driver_cmd() is not None
+
+
+def provision_cua_driver() -> bool:
+    """Stage the pinned cua-driver. True when it landed.
+
+    ``installation.provisioner.provision_tool`` downloads the pinned
+    artifact, verifies its sha256 BEFORE extraction, publishes it into
+    the machine-wide tool store, proves it runs, and records the fact.
+    A second call is a no-op, and ``hermes update``'s sweep keeps it at
+    the pin from then on.
+
+    This replaced piping the upstream ``install.sh`` to bash. That
+    installer fetched whatever release its baked-in constant named,
+    unverified by us, and left behind a ``~/.cua-driver`` home, a
+    versioned-releases + ``current``-symlink tree, a concurrent-install
+    lockfile, and (on macOS) an ``/Applications`` bundle — all state the
+    driver does not need to run and Hermes then had to detect, repair,
+    refresh and unwedge.
+
+    Ungated, like ``provision_tool`` itself: whether an install may
+    happen right now is the caller's policy to decide.
+    """
+    try:
+        from installation.provisioner import provision_tool
+
+        return provision_tool("cua-driver").provisioned
+    except Exception:  # noqa: BLE001 — a failed download is a normal outcome
+        return False
 
 
 _CUA_DRIVER_RUNTIME_CONTRACT_MIN = (0, 20, 0)
@@ -1145,92 +1187,33 @@ def cua_driver_runtime_contract_status(binary: Optional[str] = None) -> Dict[str
     }
 
 
-def cua_driver_update_check(*, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
-    """Run ``cua-driver check-update --json`` and return its parsed state.
-
-    The payload mirrors the ``check_for_update`` MCP tool:
-    ``{current_version, latest_version, update_available, ...}``.
-
-    ``timeout`` defaults to 8s on POSIX and 25s on Windows — first-spawn of
-    the exe there routinely eats several seconds in Defender/SmartScreen
-    scanning, and a false timeout is expensive: callers treat ``None`` as
-    indeterminate, and the ``install_cua_driver(upgrade=True)`` path used to
-    fall through to a full multi-minute reinstall on it.
-
-    Returns ``None`` (callers should stay quiet) when the result is
-    indeterminate: the binary is missing, the driver is too old to support
-    the verb (it predates trycua/cua#1734), the GitHub check failed (an
-    ``error`` field is set), or the output didn't parse. Best-effort; never
-    raises.
-    """
-    if timeout is None:
-        timeout = 25.0 if sys.platform == "win32" else 8.0
-    driver_cmd = resolve_cua_driver_cmd()
-    if not driver_cmd:
-        return None
-    try:
-        from tools.environments.local import _sanitize_subprocess_env
-        proc = subprocess.run(
-            [driver_cmd, "check-update", "--json"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-            # Some older drivers don't have the verb and fall through to a
-            # stdin-reading mode rather than erroring — DEVNULL gives them EOF
-            # so they exit fast instead of blocking until the timeout.
-            stdin=subprocess.DEVNULL,
-            creationflags=windows_hide_flags(),
-            # Sanitized like every other cua-driver spawn: third-party
-            # binary, no inherited provider keys (#53503/#55709/#58889).
-            env=_sanitize_subprocess_env(cua_driver_child_env()),
-        )
-    except Exception:
-        return None
-    out = (proc.stdout or "").strip()
-    if not out:
-        # Older drivers don't have the verb: usage goes to stderr, stdout empty.
-        return None
-    try:
-        data = json.loads(out)
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(data, dict) or data.get("error"):
-        # A failed check (exit 1) carries its reason in `error` — indeterminate.
-        return None
-    return data
-
-
-def cua_driver_update_nudge() -> Optional[str]:
-    """One-line "an update is available" message, or ``None`` when up to date,
-    indeterminate, or the driver is too old to report."""
-    state = cua_driver_update_check()
-    if not state or not state.get("update_available"):
-        return None
-    latest = state.get("latest_version") or "?"
-    current = state.get("current_version") or "?"
-    return (
-        f"cua-driver {latest} is available (you have {current}); "
-        f"update with `hermes computer-use install --upgrade`."
-    )
-
-
-_update_checked = False
-
 # One auto-repair attempt per process. The runtime-contract gate in
-# ``CuaDriverBackend.start()`` fails closed on an incompatible driver; when
-# the incompatibility is something a reinstall fixes (old version, missing
-# manifest verbs) we run the standard install/repair path once instead of
-# telling the user to do it by hand. Guarded so a failing installer can't
-# loop — the second start() in the same process goes straight to the error.
+# ``CuaDriverBackend.start()`` fails closed on an unusable driver; when the
+# fault is one re-staging the pin can fix (a damaged store entry, a fact
+# left behind by a pin bump) we do that once instead of telling the user to
+# do it by hand. Guarded so a failing download cannot loop — the second
+# start() in the same process goes straight to the error.
 _contract_repair_attempted = False
 
 
 def _maybe_repair_runtime_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
-    """Try one automatic driver repair for a failed runtime contract.
+    """Re-stage the pinned driver once when the installed one is unusable.
 
-    Returns the post-repair contract state (or the original state when no
-    repair was attempted / the repair failed). Never raises. An explicit
-    ``HERMES_CUA_DRIVER_CMD`` override is authoritative even when broken, and
-    a missing binary means installation was never requested — both are left
-    for the caller's error message.
+    The runtime-contract gate in ``CuaDriverBackend.start()`` fails closed
+    on a driver that cannot host Hermes' integration. When that driver is
+    one WE staged, the cure is to stage the pin again: the store entry may
+    have been damaged, or the fact may point at a version from before a
+    pin bump. ``provision_cua_driver`` is idempotent and cheap when the
+    entry is already correct.
+
+    This cannot chase a newer upstream release, and must not: the pin
+    table names the version this install runs, so a driver that is merely
+    OLDER than upstream is not broken. Guarded to one attempt per process
+    so a failing download cannot loop.
+
+    An explicit ``HERMES_CUA_DRIVER_CMD`` override is authoritative even
+    when broken, and a missing binary means the driver was never
+    provisioned — both are left for the caller's error message.
     """
     global _contract_repair_attempted
     if contract.get("ready"):
@@ -1243,14 +1226,12 @@ def _maybe_repair_runtime_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
         return contract
     _contract_repair_attempted = True
     logger.info(
-        "computer_use: installed cua-driver is not usable (%s); "
-        "attempting automatic repair",
+        "computer_use: staged cua-driver is not usable (%s); "
+        "re-provisioning the pinned version",
         contract.get("reason") or "runtime contract is incomplete",
     )
     try:
-        from hermes_cli.tools_config import install_cua_driver
-
-        if not install_cua_driver(upgrade=False, show_installer_progress=False):
+        if not provision_cua_driver():
             return contract
     except Exception as exc:
         logger.warning("computer_use: automatic cua-driver repair failed: %s", exc)
@@ -1261,44 +1242,11 @@ def _maybe_repair_runtime_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
         return contract
 
 
-def _maybe_nudge_update() -> None:
-    """Emit an update nudge at most once per process, off-thread so the
-    (cached, ~20h) GitHub poll never blocks the first computer_use action."""
-    global _update_checked
-    if _update_checked:
-        return
-    _update_checked = True
-
-    def _run() -> None:
-        try:
-            msg = cua_driver_update_nudge()
-        except Exception:
-            return
-        if msg:
-            logger.info("computer_use: %s", msg)
-
-    threading.Thread(
-        target=_run, name="cua-driver-update-check", daemon=True
-    ).start()
-
-
 def cua_driver_install_hint() -> str:
-    if sys.platform == "win32":
-        installer = (
-            '  irm https://raw.githubusercontent.com/trycua/cua/main/'
-            'libs/cua-driver/scripts/install.ps1 | iex'
-        )
-    else:
-        installer = (
-            '  /bin/bash -c "$(curl -fsSL '
-            'https://raw.githubusercontent.com/trycua/cua/main/'
-            'libs/cua-driver/scripts/install.sh)"'
-        )
+    """What to tell a user whose Computer Use call found no driver."""
     return (
-        "cua-driver is not installed. Install with one of:\n"
+        "cua-driver is not installed. Install the pinned driver with:\n"
         "  hermes computer-use install\n"
-        "Or run the upstream installer directly:\n"
-        f"{installer}\n"
         "Or run `hermes tools` and enable the Computer Use toolset to install it automatically."
     )
 
@@ -1558,10 +1506,6 @@ class _CuaDriverSession:
         # Used to revive a logical ended-session rejection without
         # recursive call_tool re-entry or backend-owned state (#71166).
         self._declared_session_id: Optional[str] = None
-        # A macOS standard-mode launch grant belongs to the app daemon that
-        # receives it. Select and own a private endpoint so an existing
-        # default daemon cannot reject or silently miss the requested grant.
-        self._owned_standard_runtime_socket: Optional[str] = None
         self._transport_generation = 0
         self._transport_reset_callback: Optional[Any] = None
 
@@ -1605,13 +1549,11 @@ class _CuaDriverSession:
                 child_env = self._embedded_daemon.child_env()
             else:
                 command, args = _resolve_mcp_invocation(driver_cmd)
-                args, owned_socket = _standard_runtime_launch_args(
+                args = _standard_runtime_launch_args(
                     args,
                     grant_existing_profile=_cua_grant_existing_profile(),
                     platform=sys.platform,
-                    socket_path=self._owned_standard_runtime_socket,
                 )
-                self._owned_standard_runtime_socket = owned_socket
                 child_env = cua_driver_child_env()
             _t_manifest = _time.monotonic()
             params = StdioServerParameters(
@@ -1720,17 +1662,8 @@ class _CuaDriverSession:
         with self._lock:
             if self._started:
                 return
-            # A previous transport may have died without taking down its
-            # private app daemon. Stop that exact endpoint before relaunching
-            # with --grant; grants cannot modify an already-running runtime.
-            if self._owned_standard_runtime_socket is not None:
-                self._stop_owned_standard_runtime_locked()
             self._bridge.start()
-            try:
-                self._start_lifecycle_locked()
-            except Exception:
-                self._stop_owned_standard_runtime_locked()
-                raise
+            self._start_lifecycle_locked()
             self._started = True
 
     def _start_lifecycle_locked(self) -> None:
@@ -1776,11 +1709,9 @@ class _CuaDriverSession:
     def stop(self) -> None:
         with self._lock:
             if not self._started:
-                self._stop_owned_standard_runtime_locked()
                 return
             self._started = False
             self._stop_lifecycle_locked()
-            self._stop_owned_standard_runtime_locked()
 
     def set_transport_reset_callback(self, callback: Any) -> None:
         """Register a synchronous cache invalidation hook for transport swaps."""
@@ -1794,34 +1725,6 @@ class _CuaDriverSession:
             callback()
         except Exception as exc:
             logger.debug("cua-driver transport reset callback failed: %s", exc)
-
-    def _stop_owned_standard_runtime_locked(self) -> None:
-        """Stop the exact private macOS app daemon launched for a grant."""
-        socket_path = getattr(self, "_owned_standard_runtime_socket", None)
-        if not socket_path:
-            return
-        self._owned_standard_runtime_socket = None
-        driver_command = resolve_cua_driver_cmd()
-        if driver_command:
-            from tools.environments.local import _sanitize_subprocess_env
-
-            try:
-                subprocess.run(
-                    [driver_command, "stop", "--socket", socket_path],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=3.0,
-                    creationflags=windows_hide_flags(),
-                    env=_sanitize_subprocess_env(cua_driver_child_env()),
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
-        if os.path.exists(socket_path):
-            try:
-                os.remove(socket_path)
-            except OSError:
-                pass
 
     def _stop_lifecycle_locked(self) -> None:
         """Signal shutdown + wait for the lifecycle coroutine to unwind.
@@ -2035,7 +1938,6 @@ class _CuaDriverSession:
             except Exception as e:
                 logger.debug("cua-driver session cleanup before reconnect failed: %s", e)
         self._started = False
-        self._stop_owned_standard_runtime_locked()
         # Clear stale capability state; the next start populates from scratch.
         self._capabilities = {}
         self._tool_schemas = {}
@@ -2676,7 +2578,6 @@ class CuaDriverBackend(ComputerUseBackend):
             else:
                 repair = "Run `hermes computer-use install` to repair it."
             raise RuntimeError(f"cua-driver is not ready: {reason}. {repair}")
-        _maybe_nudge_update()
         # The MCP client SDK (`mcp`) is an optional dependency (the
         # `computer-use` / `mcp` extras), not part of Hermes' minimal core.
         # Lazy-install it on first use — the same pattern every other optional

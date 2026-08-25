@@ -67,29 +67,9 @@ _ALLOWED: dict[tuple[str, str], str] = {
         "WSL diagnostic: deliberately inspects what PATH resolves so it can "
         "warn that the only reachable npm is the Windows one."
     ),
-    ("tools/lazy_deps.py", "uv"): (
-        "Fallback after resolve_uv(), plus the except-branch for the "
-        "hermes_cli import guard."
-    ),
-    ("tools/browser_use_cli.py", "uv"): (
-        "install_cli()'s fallback after ensure_uv() misses — a user-installed "
-        "uv on PATH is a legitimate last rung before giving up with install "
-        "guidance."
-    ),
     ("hermes_cli/gateway.py", "node"): (
         "Fallback rung of _append_node_dir_for_service(), after the managed "
         "dirs from iter_hermes_node_dirs() are already appended."
-    ),
-    ("hermes_cli/main.py", "node"): (
-        "_ensure_tui_node()'s idempotence gate: the question really is 'is "
-        "node already discoverable on PATH', before bootstrapping one."
-    ),
-    ("hermes_cli/main.py", "npm"): (
-        "Same _ensure_tui_node() gate as node."
-    ),
-    ("tools/browser_tool.py", "npx"): (
-        "agent-browser runs via `npx`, resolved against the extended browser "
-        "PATH that _merge_browser_path() already seeds with the managed dirs."
     ),
 }
 

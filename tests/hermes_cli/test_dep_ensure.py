@@ -33,18 +33,8 @@ def test_has_npx_agent_browser_true_when_npx_resolves():
     from hermes_cli.dep_ensure import _has_npx_agent_browser
     import tools.browser_tool as bt
 
-    with patch.object(bt, "_find_agent_browser", return_value="npx agent-browser"), \
-         patch.object(bt, "_requires_real_termux_browser_install", return_value=False):
+    with patch.object(bt, "_find_agent_browser", return_value="npx agent-browser"):
         assert _has_npx_agent_browser() is True
-
-
-def test_has_npx_agent_browser_false_on_termux_local_bare_npx():
-    from hermes_cli.dep_ensure import _has_npx_agent_browser
-    import tools.browser_tool as bt
-
-    with patch.object(bt, "_find_agent_browser", return_value="npx agent-browser"), \
-         patch.object(bt, "_requires_real_termux_browser_install", return_value=True):
-        assert _has_npx_agent_browser() is False
 
 
 def test_has_npx_agent_browser_false_when_nothing_resolves():

@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from hermes_constants import get_config_path, get_skills_dir, is_termux
+from hermes_constants import get_config_path, get_skills_dir
 
 logger = logging.getLogger(__name__)
 
@@ -231,20 +231,10 @@ def skill_matches_platform_list(platforms: Any) -> bool:
     if not isinstance(platforms, list):
         platforms = [platforms]
     current = sys.platform
-    running_in_termux = is_termux()
     for platform in platforms:
         normalized = str(platform).lower().strip()
         mapped = PLATFORM_MAP.get(normalized, normalized)
         if current.startswith(mapped):
-            return True
-        # Termux runs a Linux userland on Android. Accept linux-tagged
-        # skills regardless of whether sys.platform is "linux" (pre-3.13
-        # Termux) or "android" (Python 3.13+ Termux, and any other
-        # Android runtime).
-        if running_in_termux and mapped == "linux":
-            return True
-        # Explicit termux/android tags match a Termux session too.
-        if running_in_termux and mapped in ("termux", "android"):
             return True
     return False
 
@@ -260,14 +250,6 @@ def skill_matches_platform(frontmatter: Dict[str, Any]) -> bool:
 
     If the field is absent or empty the skill is compatible with **all**
     platforms (backward-compatible default).
-
-    Termux note: on Termux/Android, ``sys.platform`` is ``"linux"`` on
-    older Pythons but became ``"android"`` on Python 3.13+. Termux is a
-    Linux userland riding on the Android kernel, so skills tagged
-    ``linux`` are treated as compatible in Termux regardless of which
-    ``sys.platform`` value Python reports. Individual Linux commands
-    inside a skill may still misbehave (no systemd, BusyBox utils, no
-    apt/dnf, etc.) but that is on the skill, not on platform gating.
     """
     return skill_matches_platform_list(frontmatter.get("platforms"))
 

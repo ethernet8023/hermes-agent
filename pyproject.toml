@@ -152,14 +152,16 @@ dependencies = [
   # exporter and consumes only its bounded projection. Relay publishes wheels
   # only (no sdist), so this marker must stay false anywhere no wheel tag can
   # match — otherwise installing Python dependencies fails resolution outright
-  # instead of falling back to the no-op Relay host (#76469, Termux).
-  # Termux Python reports plain linux/aarch64 but runs on Bionic
+  # instead of falling back to the no-op Relay host (#76469).
+  # Android Python reports plain linux/aarch64 but runs on Bionic
   # libc, which satisfies neither manylinux nor musllinux, hence the
   # `'android' not in platform_release` guard on the linux arms: Android GKI
   # kernels embed "-androidNN-" in the kernel release string. (Official PEP
   # 738 CPython reports sys_platform == 'android' and never matched.) Pre-GKI
   # devices can still slip through; they get the same resolution failure as
   # before, worked around by installing with `--no-deps` or an older release.
+  # Hermes does not support Android, but a base install must not fail
+  # resolution there.
   "nemo-relay>=0.7.1,<0.8; (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64' and 'android' not in platform_release) or (sys_platform == 'linux' and platform_machine == 'aarch64' and 'android' not in platform_release) or (sys_platform == 'win32' and platform_machine == 'AMD64') or (sys_platform == 'win32' and platform_machine == 'ARM64')",
 ]
 
@@ -283,26 +285,6 @@ otlp = ["opentelemetry-sdk==1.39.1", "opentelemetry-exporter-otlp-proto-http==1.
 bedrock = ["boto3==1.42.89"]
 vertex = ["google-auth==2.55.1"]
 azure-identity = ["azure-identity==1.25.3"]
-termux = [
-  # Baseline Android / Termux path for reliable fresh installs.
-  "python-telegram-bot[webhooks]==22.8",
-  "hermes-agent[cron]",
-  "hermes-agent[mcp]",
-  "hermes-agent[honcho]",
-  "hermes-agent[acp]",
-]
-termux-all = [
-  # Best-effort "install all" profile for Termux. Same policy as [all]:
-  # only includes extras that aren't covered by `tools/lazy_deps.py`.
-  # Backends like telegram/slack/dingtalk/feishu/honcho lazy-install at
-  # first use, so they're no longer eager-installed here.
-  "hermes-agent[termux]",
-  "hermes-agent[google]",
-  "hermes-agent[homeassistant]",
-  "hermes-agent[sms]",
-  "hermes-agent[web]",
-  "hermes-agent[pty]",
-]
 dingtalk = ["dingtalk-stream==0.24.3", "alibabacloud-dingtalk==2.2.42", "qrcode==7.4.2"]
 feishu = ["lark-oapi==1.6.8", "qrcode==7.4.2"]
 google = [

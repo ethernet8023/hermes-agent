@@ -61,7 +61,7 @@ class RuntimeRecord:
 class UpdatePlan:
     """The full pre-update picture: install shape + runtimes + actions."""
 
-    install_method: str = "unknown"       # git | docker | nix | apt | ...
+    install_method: str = "unknown"       # git | docker | nix | ...
     updatable_in_place: bool = True
     update_mechanism: str = "hermes update"
     expected_sha: Optional[str] = None    # current checkout HEAD (pre-pull)

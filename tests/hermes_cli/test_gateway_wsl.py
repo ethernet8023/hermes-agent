@@ -66,7 +66,6 @@ class TestSupportsSystemdServicesWSL:
         Linux-gated: ``supports_systemd_services()`` short-circuits on
         ``is_linux()``, so off Linux this asserted nothing about systemd.
         """
-        monkeypatch.setattr(gateway, "is_termux", lambda: False)
         monkeypatch.setattr(
             gateway.shutil, "which", lambda _name: "/usr/bin/systemctl"
         )
@@ -74,20 +73,6 @@ class TestSupportsSystemdServicesWSL:
         monkeypatch.setattr(gateway, "_wsl_systemd_operational", lambda: True)
         assert gateway.supports_systemd_services() is True
 
-    @pytest.mark.linux_only
-    def test_termux_still_excluded(self, monkeypatch):
-        """Termux → False regardless of WSL status.
-
-        Linux-gated: off Linux the ``not is_linux()`` arm returns False first,
-        so the Termux exclusion itself would never be exercised.
-        """
-        monkeypatch.setattr(gateway, "is_termux", lambda: True)
-        assert gateway.supports_systemd_services() is False
-
-
-# =============================================================================
-# WSL messaging in gateway commands
-# =============================================================================
 
 class TestGatewayCommandWSLMessages:
     """Test that WSL users see appropriate guidance."""
@@ -102,7 +87,6 @@ class TestGatewayCommandWSLMessages:
         real Windows host the unstubbed version would have run
         ``gateway_windows.install()`` against the user's real Startup folder.
         """
-        monkeypatch.setattr(gateway, "is_termux", lambda: False)
         monkeypatch.setattr(gateway, "is_wsl", lambda: True)
         monkeypatch.setattr(gateway, "supports_systemd_services", lambda: False)
         monkeypatch.setattr(gateway, "is_managed", lambda: False)
@@ -130,7 +114,6 @@ class TestGatewayCommandWSLMessages:
         printed only after the macOS/Windows service branches decline.
         """
         monkeypatch.setattr(gateway, "supports_systemd_services", lambda: False)
-        monkeypatch.setattr(gateway, "is_termux", lambda: False)
         monkeypatch.setattr(gateway, "is_wsl", lambda: True)
         monkeypatch.setattr(gateway, "find_gateway_pids", lambda: [12345])
         monkeypatch.setattr(gateway, "_runtime_health_lines", lambda: [])

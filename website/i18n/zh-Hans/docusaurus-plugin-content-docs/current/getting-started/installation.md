@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: "安装"
-description: "在 Linux、macOS、WSL2、原生 Windows 或通过 Termux 在 Android 上安装 Hermes Agent"
+description: "在 Linux、macOS、WSL2 或原生 Windows 上安装 Hermes Agent"
 ---
 
 # 安装
@@ -45,21 +45,8 @@ iex (irm https://hermes-agent.nousresearch.com/install.ps1)
 
 ### Android / Termux
 
-Hermes 现在也提供 Termux 感知的安装路径：
-
-```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-```
-
-安装程序会自动检测 Termux 并切换到经过测试的 Android 流程：
-
-- 使用 Termux `pkg` 安装系统依赖（`git`、`python`、`nodejs`、`ripgrep`、`ffmpeg`、构建工具）
-- 使用 `python -m venv` 创建虚拟环境
-- 自动导出 `ANDROID_API_LEVEL` 以用于 Android wheel 构建
-- 优先使用较宽泛的 `.[termux-all]` extra，若首次编译失败则回退到较小的 `.[termux]` extra（最终回退到基础安装）
-- 默认跳过未经测试的浏览器 / WhatsApp 引导
-
-如需完整的显式步骤，请参阅专门的 [Termux 指南](./termux.md)。
+Hermes 不再支持 Android 和 Termux。原因以及如何从手机使用 Hermes，
+请参阅 [Android / Termux](./termux.md)。
 
 :::note Windows 功能对等性
 

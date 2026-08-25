@@ -155,7 +155,6 @@ def test_make_tui_argv_omits_workspace_and_scrubs_esbuild_override(
     # Parent also has lockfile (but _workspace_root prefers tui_dir's own)
     (tmp_path / "package-lock.json").write_text("{}")
 
-    monkeypatch.delenv("TERMUX_VERSION", raising=False)
     monkeypatch.setenv("PREFIX", "/usr")
     monkeypatch.setenv("ESBUILD_BINARY_PATH", "/opt/esbuild-0.28.2")
     monkeypatch.setattr(main_mod, "_tui_need_npm_install", lambda _root: True)

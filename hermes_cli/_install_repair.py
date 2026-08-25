@@ -39,18 +39,6 @@ def _is_windows() -> bool:
     return sys.platform == "win32"
 
 
-def _is_termux_env(env: dict | None = None) -> bool:
-    """Stdlib Termux probe (hermes_cli.main's version lives behind imports)."""
-    env = env if env is not None else os.environ
-    try:
-        if env.get("TERMUX_VERSION"):
-            return True
-        prefix = env.get("PREFIX", "")
-        return "com.termux" in prefix
-    except Exception:
-        return False
-
-
 @contextlib.contextmanager
 def _stdout_to_stderr():
     """Route fd 1 (and sys.stdout) to stderr for the duration of an install.
@@ -88,17 +76,12 @@ def _resolve_install_target(root: Path) -> tuple[list[str], dict | None]:
     Mirrors ``main.py::_default_venv_install_target`` but without
     ``managed_uv``. ``VIRTUAL_ENV`` steers ``uv pip`` at the project venv even
     when invoked from the base interpreter (the early-recovery case).
-    Termux strips leaked interpreter-path env vars so uv resolves the venv
-    correctly.
     """
     uv_bin = _er._find_uv_binary()
     if uv_bin:
         from hermes_constants import project_venv_dir
 
         env = {**os.environ, "VIRTUAL_ENV": str(project_venv_dir(root) or root / "venv")}
-        if _is_termux_env(env):
-            env.pop("PYTHONPATH", None)
-            env.pop("PYTHONHOME", None)
         return [uv_bin, "pip"], env
     return [sys.executable, "-m", "pip"], None
 
@@ -573,7 +556,7 @@ def _run_install_cmd(cmd: list[str], *, env: dict | None, root: Path) -> None:
 
 
 def _load_installable_optional_extras(root: Path, group: str) -> list[str]:
-    """Optional extras referenced by a dependency group (all / termux-all)."""
+    """Optional extras referenced by a dependency group (all)."""
     try:
         import tomllib
 
@@ -604,17 +587,16 @@ def run_core_install(root: Path) -> None:
       pip module at all)
     - prefer ``uv pip`` with VIRTUAL_ENV pointed at the project venv; fall back
       to ``python -m pip`` when no uv binary is available
-    - target ``.[all]`` (or ``.[termux-all]`` on Termux) with the per-extra
-      fallback ladder when the combined extras resolve fails
+    - target ``.[all]`` with the per-extra fallback ladder when the combined
+      extras resolve fails
     - quarantine live ``hermes*.exe`` shims on Windows so they can be replaced
     - route ALL install output to stderr (acp/JSON-RPC safety)
-    - Termux strips leaked PYTHONPATH/PYTHONHOME from the uv env
 
     Raises ``subprocess.CalledProcessError`` when even the base install fails;
     callers own marker lifecycle (clear on success, keep on failure).
     """
     prefix, env = _resolve_install_target(root)
-    group = "termux-all" if _is_termux_env(env) else "all"
+    group = "all"
 
     with _stdout_to_stderr():
         try:

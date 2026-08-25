@@ -1,4 +1,12 @@
-"""Helpers for the temporary psutil-on-Android compatibility installer."""
+"""Helpers for the old psutil-on-Android compatibility installer.
+
+Termux support is removed. This module stays only because the old-updater
+compat surface (tests/compat/old_updater_surface.json) freezes
+``PSUTIL_URL`` and ``prepare_patched_psutil_sdist``: a released updater
+loads them from the NEW tree mid-update, so deleting them bricks that
+update on a half-new tree. Nothing in the current tree calls them. Delete
+the module when the frozen surface is regenerated without these names.
+"""
 
 from __future__ import annotations
 

@@ -1724,8 +1724,6 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
     uv_bin = ensure_uv()
 
     pip_cmd = [_m().sys.executable, "-m", "pip"]
-    if not uv_bin:
-        uv_bin = _ensure_uv_for_termux(pip_cmd)
     if uv_bin:
         # Same third-party UV-env isolation as the main update path (#83914):
         # a user-level UV_PYTHON_INSTALL_DIR / UV_PYTHON from unrelated
@@ -1734,9 +1732,6 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
 
         uv_env = managed_python_env()
         uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-        if _m()._is_termux_env(uv_env):
-            uv_env.pop("PYTHONPATH", None)
-            uv_env.pop("PYTHONHOME", None)
         try:
             _m()._install_python_dependencies_with_optional_fallback([uv_bin, "pip"], env=uv_env)
         except _shim_quarantine_error_type() as _sqe:
@@ -2858,80 +2853,6 @@ def _refresh_active_memory_provider_dependencies() -> None:
     except Exception as exc:
         print(f"  ⚠ {provider} dependencies failed to refresh: {exc}")
 
-def _is_android_python() -> bool:
-    return _m().sys.platform == "android"
-
-def _install_psutil_android_compat(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Install psutil on Android by patching upstream platform detection.
-
-    psutil's setup currently gates Linux sources behind
-    ``sys.platform.startswith('linux')``. On Termux Python reports
-    ``sys.platform == 'android'``, so setup aborts with
-    "platform android is not supported" despite compiling fine when using the
-    Linux source path.
-
-    We patch only the extracted build tree used for this install attempt;
-    nothing is persisted in the repository.
-
-    Stopgap: remove this once https://github.com/giampaolo/psutil/pull/2762
-    merges and ships in a release. The standalone installer script uses the
-    same shared helper and should be removed together.
-    """
-    import tempfile
-    import urllib.request
-    from hermes_cli.psutil_android import PSUTIL_URL, prepare_patched_psutil_sdist
-
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        archive = tmp_path / "psutil.tar.gz"
-        urllib.request.urlretrieve(PSUTIL_URL, archive)
-        src_root = prepare_patched_psutil_sdist(archive, tmp_path)
-
-        _m()._run_install_with_heartbeat(
-            install_cmd_prefix + ["install", "--no-build-isolation", str(src_root)],
-            env=env,
-        )
-
-def _ensure_uv_for_termux(pip_cmd: list[str]) -> str | None:
-    """Best-effort uv bootstrap on Termux for faster update installs.
-
-    The normal path (``ensure_uv()`` in managed_uv) installs the managed
-    standalone uv into ``$HERMES_HOME/bin/uv``, but on Termux the official
-    installer may not work (glibc vs bionic).  Prefer a uv already on PATH
-    (e.g. ``pkg install uv``); only if there is none do we fall back to a
-    wheel-only ``pip install uv`` so we never source-build the Rust crate.
-    """
-    from hermes_cli.managed_uv import resolve_uv
-
-    existing = resolve_uv()
-    if existing:
-        return existing
-    if not _m()._is_termux_env():
-        return None
-    # A Termux-packaged uv lands on PATH but not in the managed bin dir, so
-    # resolve_uv() misses it. Use it before pip, which has no Android wheel and
-    # would otherwise build uv from source on a low-memory device.
-    system_uv = shutil.which("uv")
-    if system_uv:
-        return system_uv
-    try:
-        print("  → Termux detected: trying to install uv for faster dependency updates...")
-        result = subprocess.run(
-            pip_cmd + ["install", "uv", "--only-binary", ":all:"],
-            cwd=_m().PROJECT_ROOT,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-    except Exception:
-        pass
-    # After pip install, check managed path first, then PATH
-    return resolve_uv() or shutil.which("uv")
-
 def _npm_manifest_paths() -> tuple[Path, ...]:
     """Manifests whose changes must defeat the update-skip.
 
@@ -3275,7 +3196,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
         print(format_docker_update_message())
         sys.exit(1)
 
-    if is_nix_install_method(method) or method == "apt":
+    if is_nix_install_method(method):
         print(recommended_update_command_for_method(method))
         sys.exit(1)
 
@@ -6752,8 +6673,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
         uv_bin = ensure_uv()
 
         pip_cmd = [sys.executable, "-m", "pip"]
-        if not uv_bin:
-            uv_bin = _ensure_uv_for_termux(pip_cmd)
         install_group = "all"
 
         if uv_bin:
@@ -6764,15 +6683,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
             uv_env = managed_python_env()
             uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-            if _m()._is_termux_env(uv_env):
-                uv_env.pop("PYTHONPATH", None)
-                uv_env.pop("PYTHONHOME", None)
-                install_group = "termux-all"
-                print("  → Termux detected: using uv + curated termux-all optional profile...")
+
             if not deps_current:
-                if _m()._is_termux_env(uv_env) and _is_android_python():
-                    print("  → Termux/Android detected: prebuilding psutil with Linux source path compatibility...")
-                    _install_psutil_android_compat([uv_bin, "pip"], env=uv_env)
                 _m()._install_python_dependencies_with_optional_fallback(
                     [uv_bin, "pip"], env=uv_env, group=install_group
                 )
@@ -6795,13 +6707,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     cwd=_m().PROJECT_ROOT,
                     check=True,
                 )
-            if _m()._is_termux_env():
-                install_group = "termux-all"
-                print("  → Termux detected: using curated termux-all optional profile...")
+
             if not deps_current:
-                if _m()._is_termux_env() and _is_android_python():
-                    print("  → Termux/Android detected: prebuilding psutil with Linux source path compatibility...")
-                    _install_psutil_android_compat(pip_cmd)
                 _m()._install_python_dependencies_with_optional_fallback(pip_cmd, group=install_group)
 
         install_prefix = [uv_bin, "pip"] if uv_bin else pip_cmd

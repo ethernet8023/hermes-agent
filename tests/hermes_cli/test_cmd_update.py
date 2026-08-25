@@ -169,53 +169,6 @@ class TestCmdUpdateNpmLockfileCache:
         assert cache_roots == [shared_root, shared_root]
 
 
-class TestCmdUpdateTermuxUvBootstrap:
-    """Regression tests for Termux-specific uv bootstrap behavior."""
-
-    @patch("shutil.which", return_value=None)
-    @patch("subprocess.run")
-    def test_termux_uv_bootstrap_uses_binary_only_install(
-        self, mock_run, _mock_which, monkeypatch
-    ):
-        from hermes_cli import main as hm
-
-        mock_run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="")
-        monkeypatch.setattr(hm, "_is_termux_env", lambda env=None: True)
-
-        uv_bin = hm._ensure_uv_for_termux(["/termux/python", "-m", "pip"])
-
-        assert uv_bin is None
-        assert mock_run.call_count == 1
-        assert mock_run.call_args.args[0] == [
-            "/termux/python",
-            "-m",
-            "pip",
-            "install",
-            "uv",
-            "--only-binary",
-            ":all:",
-        ]
-        assert mock_run.call_args.kwargs["cwd"] == PROJECT_ROOT
-        assert mock_run.call_args.kwargs["check"] is False
-
-    @patch("subprocess.run")
-    def test_termux_reuses_existing_path_uv_without_pip(self, mock_run, monkeypatch):
-        """A uv already on PATH (e.g. ``pkg install uv``) is reused before pip runs."""
-        from hermes_cli import main as hm
-
-        pkg_uv = "/data/data/com.termux/files/usr/bin/uv"
-        monkeypatch.setattr(hm, "_is_termux_env", lambda env=None: True)
-        # Production resolve_uv only checks $HERMES_HOME/bin/uv; model an empty
-        # managed dir so the PATH probe is what surfaces the packaged uv.
-        monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: None)
-        monkeypatch.setattr("shutil.which", lambda name: pkg_uv if name == "uv" else None)
-
-        uv_bin = hm._ensure_uv_for_termux(["/termux/python", "-m", "pip"])
-
-        assert uv_bin == pkg_uv
-        mock_run.assert_not_called()
-
-
 class TestUpdateManagedPythonEnvIsolation:
     """Regression for the uv-env isolation fix (third-party UV_PYTHON_INSTALL_DIR
     must not hijack the update's pip install).
@@ -875,13 +828,7 @@ class TestCmdUpdateZipBranchRefusal:
         assert "Downloading latest version" not in out
 
 
-def test_is_termux_env_true_for_termux_prefix():
-    from hermes_cli import main as hm
-
-    assert hm._is_termux_env({"PREFIX": "/data/data/com.termux/files/usr"}) is True
-
-
-def test_load_installable_optional_extras_supports_termux_group(tmp_path, monkeypatch):
+def test_load_installable_optional_extras_supports_named_group(tmp_path, monkeypatch):
     from hermes_cli import main as hm
 
     pyproject = tmp_path / "pyproject.toml"
@@ -893,15 +840,15 @@ version = "0.0.0"
 
 [project.optional-dependencies]
 all = ["x[mcp]"]
-termux-all = ["x[termux]", "x[mcp]"]
+slim = ["x[base]", "x[mcp]"]
 mcp = ["mcp>=1"]
-termux = ["rich>=14"]
+base = ["rich>=14"]
 """.strip()
     )
     monkeypatch.setattr(hm, "PROJECT_ROOT", tmp_path)
 
     assert hm._load_installable_optional_extras(group="all") == ["mcp"]
-    assert hm._load_installable_optional_extras(group="termux-all") == ["termux", "mcp"]
+    assert hm._load_installable_optional_extras(group="slim") == ["base", "mcp"]
 
 
 class TestNodeRuntimeNpmResolution:

@@ -42,7 +42,7 @@ def test_root_fhs_layout_exports_world_readable_uv_python_dirs() -> None:
 def test_root_fhs_uv_python_export_is_inside_root_branch() -> None:
     """The export must live in the root-FHS branch of resolve_install_layout,
     after ``ROOT_FHS_LAYOUT=true`` and before the branch's ``return 0``, so
-    non-root and Termux installs are unaffected. Bound the slice by the
+    non-root installs are unaffected. Bound the slice by the
     function body (not "next return 0" in the whole file) so the assertion
     can't accept an unreachable export."""
     body = _resolve_install_layout_body()

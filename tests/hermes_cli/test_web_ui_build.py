@@ -139,7 +139,6 @@ class TestBuildWebUISkipsWhenFresh:
         web_dir, _ = _make_web_dir(tmp_path)
         (web_dir / "package-lock.json").write_text("{}", encoding="utf-8")
         (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
-        monkeypatch.delenv("TERMUX_VERSION", raising=False)
         monkeypatch.setenv("PREFIX", "/usr")
         monkeypatch.setenv("ESBUILD_BINARY_PATH", "/opt/esbuild-0.28.2")
 
@@ -173,7 +172,6 @@ class TestBuildWebUISkipsWhenFresh:
         (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
         (tmp_path / "ui-tui").mkdir()
         (tmp_path / "ui-tui" / "package.json").write_text("{}", encoding="utf-8")
-        monkeypatch.delenv("TERMUX_VERSION", raising=False)
         monkeypatch.setenv("PREFIX", "/usr")
 
         install_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")
@@ -196,7 +194,6 @@ class TestBuildWebUISkipsWhenFresh:
         fails hard on a --workspace that doesn't exist."""
         web_dir, _ = _make_web_dir(tmp_path)
         (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
-        monkeypatch.delenv("TERMUX_VERSION", raising=False)
         monkeypatch.setenv("PREFIX", "/usr")
 
         install_cp = __import__("subprocess").CompletedProcess([], 0, stdout="", stderr="")

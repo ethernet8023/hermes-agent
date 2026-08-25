@@ -4990,16 +4990,14 @@ async def update_hermes():
             "update_command": recommended_update_command_for_method(install_method),
         }
 
-    if is_nix_install_method(install_method) or install_method == "apt":
+    if is_nix_install_method(install_method):
         message = recommended_update_command_for_method(install_method)
         _record_completed_action("hermes-update", message, exit_code=1)
         return {
             "ok": False,
             "pid": None,
             "name": "hermes-update",
-            "error": (
-                "apt_update_required" if install_method == "apt" else "nix_update_unsupported"
-            ),
+            "error": "nix_update_unsupported",
             "message": message,
             "update_command": message,
         }
@@ -5098,7 +5096,7 @@ async def check_hermes_update(force: bool = False):
     ``POST /api/hermes/update`` actually runs ``hermes update``.
 
     Returns:
-        install_method: 'apt' | 'git' | 'docker' | 'nix' | 'nixos' | 'unknown'
+        install_method: 'git' | 'docker' | 'nix' | 'nixos' | 'unknown'
         current_version: installed Hermes version string
         behind: commits behind upstream (>=1), 0 if up to date,
                 -1 if behind by an unknown count, or null if the
@@ -5145,12 +5143,6 @@ async def check_hermes_update(force: bool = False):
     if install_method == "docker":
         payload["message"] = format_docker_update_message()
         return payload
-    if install_method == "apt":
-        payload["message"] = (
-            "Hermes is managed by Termux APT; run `pkg upgrade hermes-agent`."
-        )
-        return payload
-
     # banner.check_for_updates() handles git / nix-revision paths and
     # caches the result for 6h. ``force`` busts the cache so the "Check now"
     # button reflects reality immediately.

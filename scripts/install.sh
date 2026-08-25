@@ -2,8 +2,8 @@
 # ============================================================================
 # Hermes Agent Installer
 # ============================================================================
-# Installation script for Linux, macOS, and Android/Termux.
-# Uses uv for desktop/server installs and Python's stdlib venv + pip on Termux.
+# Installation script for Linux and macOS.
+# Uses uv to provision Python and install dependencies.
 #
 # Usage:
 #   curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
@@ -392,18 +392,12 @@ prompt_yes_no() {
     esac
 }
 
-is_termux() {
-    [ -n "${TERMUX_VERSION:-}" ] || [[ "${PREFIX:-}" == *"com.termux/files/usr"* ]]
-}
-
 # Decide where the repo checkout + venv live, and where the `hermes` command
 # symlink goes.  Called after detect_os so $OS/$DISTRO are known.
 #
 # Defaults:
 #   - Non-root, any OS:       INSTALL_DIR = $HERMES_HOME/hermes-agent
 #                             command link in $HOME/.local/bin
-#   - Termux (any uid):       INSTALL_DIR = $HERMES_HOME/hermes-agent
-#                             command link in $PREFIX/bin (already on PATH)
 #   - Root on Linux (new):    INSTALL_DIR = /usr/local/lib/hermes-agent
 #                             command link in /usr/local/bin
 #                             (unless a legacy install already exists at
@@ -413,12 +407,6 @@ is_termux() {
 resolve_install_layout() {
     if [ "$INSTALL_DIR_EXPLICIT" = true ]; then
         log_info "Install directory: $INSTALL_DIR (explicit)"
-        return 0
-    fi
-
-    # Termux: package manager manages /data/data/..., keep code in HERMES_HOME.
-    if is_termux; then
-        INSTALL_DIR="$HERMES_HOME/hermes-agent"
         return 0
     fi
 
@@ -449,14 +437,12 @@ resolve_install_layout() {
         return 0
     fi
 
-    # Default: non-root, non-Termux → legacy user-scoped layout.
+    # Default: non-root → legacy user-scoped layout.
     INSTALL_DIR="$HERMES_HOME/hermes-agent"
 }
 
 get_command_link_dir() {
-    if is_termux && [ -n "${PREFIX:-}" ]; then
-        echo "$PREFIX/bin"
-    elif [ "$ROOT_FHS_LAYOUT" = true ]; then
+    if [ "$ROOT_FHS_LAYOUT" = true ]; then
         echo "/usr/local/bin"
     else
         echo "$HOME/.local/bin"
@@ -464,9 +450,7 @@ get_command_link_dir() {
 }
 
 get_command_link_display_dir() {
-    if is_termux && [ -n "${PREFIX:-}" ]; then
-        echo '$PREFIX/bin'
-    elif [ "$ROOT_FHS_LAYOUT" = true ]; then
+    if [ "$ROOT_FHS_LAYOUT" = true ]; then
         echo '/usr/local/bin'
     else
         echo '~/.local/bin'
@@ -509,22 +493,17 @@ get_hermes_command_path() {
 detect_os() {
     case "$(uname -s)" in
         Linux*)
-            if is_termux; then
-                OS="android"
-                DISTRO="termux"
+            OS="linux"
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release
+                DISTRO="$ID"
+                # VERSION_ID (e.g. "26.04", "14") lets us tell whether the
+                # apt release is newer than the newest one Playwright's
+                # platform resolver recognizes — the #35166 hang condition.
+                DISTRO_VERSION="${VERSION_ID:-}"
             else
-                OS="linux"
-                if [ -f /etc/os-release ]; then
-                    . /etc/os-release
-                    DISTRO="$ID"
-                    # VERSION_ID (e.g. "26.04", "14") lets us tell whether the
-                    # apt release is newer than the newest one Playwright's
-                    # platform resolver recognizes — the #35166 hang condition.
-                    DISTRO_VERSION="${VERSION_ID:-}"
-                else
-                    DISTRO="unknown"
-                    DISTRO_VERSION=""
-                fi
+                DISTRO="unknown"
+                DISTRO_VERSION=""
             fi
             ;;
         Darwin*)
@@ -553,12 +532,6 @@ detect_os() {
 # ============================================================================
 
 install_uv() {
-    if [ "$DISTRO" = "termux" ]; then
-        log_info "Termux detected — using Python's stdlib venv + pip instead of uv"
-        UV_CMD=""
-        return 0
-    fi
-
     # Hermes owns its own uv at $HERMES_HOME/bin/uv.  Always install there —
     # no PATH probing, no conda guards, no multi-location resolution chains.
     # The runtime update path (hermes_cli/managed_uv.py) looks in the same
@@ -616,25 +589,6 @@ install_uv() {
 }
 
 check_python() {
-    if [ "$DISTRO" = "termux" ]; then
-        log_info "Checking Termux Python..."
-        if command -v python >/dev/null 2>&1; then
-            PYTHON_PATH="$(command -v python)"
-            if "$PYTHON_PATH" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
-                PYTHON_FOUND_VERSION="$("$PYTHON_PATH" --version 2>/dev/null)"
-                log_success "Python found: $PYTHON_FOUND_VERSION"
-                return 0
-            fi
-        fi
-
-        log_info "Installing Python via pkg..."
-        pkg install -y python >/dev/null
-        PYTHON_PATH="$(command -v python)"
-        PYTHON_FOUND_VERSION="$("$PYTHON_PATH" --version 2>/dev/null)"
-        log_success "Python installed: $PYTHON_FOUND_VERSION"
-        return 0
-    fi
-
     log_info "Checking Python $PYTHON_VERSION..."
 
     # Let uv handle Python — it can download and manage Python versions
@@ -736,16 +690,6 @@ check_git() {
     fi
 
     log_error "Git not found"
-
-    if [ "$DISTRO" = "termux" ]; then
-        log_info "Installing Git via pkg..."
-        pkg install -y git >/dev/null
-        if command -v git >/dev/null 2>&1; then
-            GIT_VERSION=$(git --version | awk '{print $3}')
-            log_success "Git $GIT_VERSION installed"
-            return 0
-        fi
-    fi
 
     # Try to install it automatically before giving up (parity with install.ps1).
     log_info "Attempting to install Git automatically..."
@@ -964,8 +908,6 @@ check_node() {
         log_warn "node found but npm is not on PATH (stray node symlink?) — installing Hermes-managed Node $NODE_VERSION LTS..."
     elif command -v node &> /dev/null; then
         log_warn "Node.js $(node --version) is too old (Hermes requires Node >=26) — installing Hermes-managed Node $NODE_VERSION..."
-    elif [ "$DISTRO" = "termux" ]; then
-        log_info "Node.js not found — installing Node.js via pkg..."
     else
         log_info "Node.js not found — installing Node.js $NODE_VERSION LTS..."
     fi
@@ -973,20 +915,6 @@ check_node() {
 }
 
 install_node() {
-    if [ "$DISTRO" = "termux" ]; then
-        log_info "Installing Node.js via pkg..."
-        if pkg install -y nodejs >/dev/null; then
-            local installed_ver
-            installed_ver=$(node --version 2>/dev/null)
-            log_success "Node.js $installed_ver installed via pkg"
-            HAS_NODE=true
-        else
-            log_warn "Failed to install Node.js via pkg"
-            HAS_NODE=false
-        fi
-        return 0
-    fi
-
     local arch=$(uname -m)
     local node_arch
     case "$arch" in
@@ -1064,7 +992,7 @@ install_node() {
 
     # Place into ~/.hermes/node/ and symlink binaries into the same bin dir
     # the hermes command uses (get_command_link_dir): /usr/local/bin for root
-    # FHS installs, $PREFIX/bin on Termux, ~/.local/bin otherwise.
+    # FHS installs, ~/.local/bin otherwise.
     rm -rf "$HERMES_HOME/node"
     mkdir -p "$HERMES_HOME"
     mv "$extracted_dir" "$HERMES_HOME/node"
@@ -1132,15 +1060,8 @@ check_network_prerequisites() {
         return 0
     fi
 
-    if [ "$DISTRO" = "termux" ]; then
-        log_warn "Termux network prerequisites may be incomplete."
-        log_info "Try: pkg install -y ca-certificates curl && pkg update"
-        log_info "If mirrors are stale: termux-change-repo"
-        log_info "Then test: curl -I https://pypi.org/simple/ && curl -I https://duckduckgo.com/"
-    else
-        log_warn "Network checks failed. Hermes install may complete, but web search and dependency downloads can fail."
-        log_info "Verify internet/DNS and retry if pip install fails."
-    fi
+    log_warn "Network checks failed. Hermes install may complete, but web search and dependency downloads can fail."
+    log_info "Verify internet/DNS and retry if pip install fails."
 }
 
 install_system_packages() {
@@ -1165,30 +1086,6 @@ install_system_packages() {
         HAS_FFMPEG=true
     else
         need_ffmpeg=true
-    fi
-
-    # Termux always needs the Android build toolchain for the tested pip path,
-    # even when ripgrep/ffmpeg are already present.
-    if [ "$DISTRO" = "termux" ]; then
-        local termux_pkgs=(clang rust make pkg-config libffi openssl ca-certificates curl)
-        if [ "$need_ripgrep" = true ]; then
-            termux_pkgs+=("ripgrep")
-        fi
-        if [ "$need_ffmpeg" = true ]; then
-            termux_pkgs+=("ffmpeg")
-        fi
-
-        log_info "Installing Termux packages: ${termux_pkgs[*]}"
-        if pkg install -y "${termux_pkgs[@]}" >/dev/null; then
-            [ "$need_ripgrep" = true ] && HAS_RIPGREP=true && log_success "ripgrep installed"
-            [ "$need_ffmpeg" = true ]  && HAS_FFMPEG=true  && log_success "ffmpeg installed"
-            log_success "Termux build dependencies installed"
-            return 0
-        fi
-
-        log_warn "Could not auto-install all Termux packages"
-        log_info "Install manually: pkg install ${termux_pkgs[*]}"
-        return 0
     fi
 
     # Nothing to install — done
@@ -1534,19 +1431,6 @@ setup_venv() {
         return 0
     fi
 
-    if [ "$DISTRO" = "termux" ]; then
-        log_info "Creating virtual environment with Termux Python..."
-
-        if [ -d "venv" ]; then
-            log_info "Virtual environment already exists, recreating..."
-            rm -rf venv
-        fi
-
-        "$PYTHON_PATH" -m venv venv
-        log_success "Virtual environment ready ($(./venv/bin/python --version 2>/dev/null))"
-        return 0
-    fi
-
     log_info "Creating virtual environment with Python $PYTHON_VERSION..."
 
     if [ -d "venv" ]; then
@@ -1580,63 +1464,8 @@ install_deps() {
     # python-deps invocation. Re-deriving it here covers that path. Without it,
     # an inherited UV_PYTHON=3.14 makes the uv sync/pip tiers below recreate the
     # venv at 3.14 and fail the maturin source build (no cp314 wheels yet).
-    if [ "$DISTRO" != "termux" ] && [ -x "$INSTALL_DIR/venv/bin/python" ]; then
+    if [ -x "$INSTALL_DIR/venv/bin/python" ]; then
         export UV_PYTHON="$INSTALL_DIR/venv/bin/python"
-    fi
-
-    if [ "$DISTRO" = "termux" ]; then
-        if [ "$USE_VENV" = true ]; then
-            export VIRTUAL_ENV="$INSTALL_DIR/venv"
-            PIP_PYTHON="$INSTALL_DIR/venv/bin/python"
-        else
-            PIP_PYTHON="$PYTHON_PATH"
-        fi
-
-        if [ -z "${ANDROID_API_LEVEL:-}" ]; then
-            ANDROID_API_LEVEL="$(getprop ro.build.version.sdk 2>/dev/null || true)"
-            if [ -z "$ANDROID_API_LEVEL" ]; then
-                ANDROID_API_LEVEL=24
-            fi
-            export ANDROID_API_LEVEL
-            log_info "Using ANDROID_API_LEVEL=$ANDROID_API_LEVEL for Android wheel builds"
-        fi
-
-        "$PIP_PYTHON" -m pip install --upgrade pip setuptools wheel >/dev/null
-
-        # On Android, psutil's setup.py rejects sys.platform == 'android' before
-        # it ever invokes the C build, so the next pip install would fail at
-        # "platform android is not supported".  Prebuild psutil from the official
-        # sdist with a one-line marker patch (Linux source path is fine on
-        # Android).  Stopgap until psutil#2762 ships upstream.
-        if "$PIP_PYTHON" -c 'import sys; raise SystemExit(0 if sys.platform == "android" else 1)' 2>/dev/null; then
-            log_info "Android Python detected: prebuilding psutil compatibility shim..."
-            if ! "$PIP_PYTHON" "$INSTALL_DIR/scripts/install_psutil_android.py" --pip "$PIP_PYTHON -m pip"; then
-                log_warn "psutil Android prebuild failed — package install will likely fail next."
-                log_info "Workaround: manually rerun 'python scripts/install_psutil_android.py' once your toolchain is set up."
-            fi
-        fi
-
-        # Try the broad Termux profile first (best-effort "install all" for Android),
-        # then fall back to the conservative Termux baseline, then base package.
-        if ! "$PIP_PYTHON" -m pip install -e '.[termux-all]' -c constraints-termux.txt; then
-            log_warn "Termux broad profile (.[termux-all]) failed, trying baseline Termux profile..."
-            if ! "$PIP_PYTHON" -m pip install -e '.[termux]' -c constraints-termux.txt; then
-                log_warn "Termux baseline profile (.[termux]) failed, trying base install..."
-                if ! "$PIP_PYTHON" -m pip install -e '.' -c constraints-termux.txt; then
-                    log_error "Package installation failed on Termux."
-                    log_info "Ensure these packages are installed: pkg install clang rust make pkg-config libffi openssl ca-certificates curl"
-                    log_info "Then re-run: cd $INSTALL_DIR && python -m pip install -e '.[termux-all]' -c constraints-termux.txt"
-                    exit 1
-                fi
-            fi
-        fi
-
-        log_success "Main package installed"
-        log_info "Termux note: matrix e2ee and local faster-whisper extras are excluded from .[termux-all] due to upstream Android wheel/toolchain blockers."
-        log_info "Termux note: browser/WhatsApp tooling is not installed by default; see the Termux guide for optional follow-up steps."
-
-        log_success "All dependencies installed"
-        return 0
     fi
 
     if [ "$USE_VENV" = true ]; then
@@ -1843,11 +1672,7 @@ setup_path() {
     if [ ! -x "$HERMES_BIN" ] || { [ "$USE_VENV" = true ] && [ ! -f "$HERMES_ENTRYPOINT" ]; }; then
         log_warn "Hermes launcher prerequisites not found"
         log_info "This usually means the Python package install didn't complete successfully."
-        if [ "$DISTRO" = "termux" ]; then
-            log_info "Try: cd $INSTALL_DIR && python -m pip install -e '.[termux-all]' -c constraints-termux.txt"
-        else
-            log_info "Try: cd $INSTALL_DIR && uv pip install -e '.[all]'"
-        fi
+        log_info "Try: cd $INSTALL_DIR && uv pip install -e '.[all]'"
         return 0
     fi
 
@@ -1933,13 +1758,6 @@ EOF
     fi
     chmod +x "$command_link_dir/hermes-acp"
     log_success "Installed hermes-acp launcher → $command_link_display_dir/hermes-acp"
-
-    if [ "$DISTRO" = "termux" ]; then
-        export PATH="$command_link_dir:$PATH"
-        log_info "$command_link_display_dir is the native Termux command path"
-        log_success "hermes command ready"
-        return 0
-    fi
 
     # FHS layout: /usr/local/bin is normally on PATH for login shells (via
     # /etc/profile pathmunge), but on RHEL/CentOS/Rocky/Alma 8+ non-login
@@ -2402,18 +2220,6 @@ configure_browser_env_from_system_browser() {
 }
 
 install_node_deps() {
-    if [ "$HAS_NODE" = false ]; then
-        log_info "Skipping Node.js dependencies (Node not installed)"
-        return 0
-    fi
-
-    if [ "$DISTRO" = "termux" ]; then
-        log_info "Skipping automatic Node/browser dependency setup on Termux"
-        log_info "Browser automation is not part of the tested Termux install path yet."
-        log_info "If you want to experiment manually later, run: cd $INSTALL_DIR && npm install"
-        return 0
-    fi
-
     if [ -f "$INSTALL_DIR/package.json" ]; then
         log_info "Installing Node.js dependencies (browser tools)..."
         cd "$INSTALL_DIR"
@@ -2570,9 +2376,6 @@ install_browser_use_cli() {
         log_info "Skipping Browser Use CLI install (--skip-browser)"
         return 0
     fi
-    if [ "$DISTRO" = "termux" ]; then
-        return 0
-    fi
     if [ -z "$UV_CMD" ]; then
         log_info "Skipping Browser Use CLI install (uv unavailable)"
         return 0
@@ -2640,11 +2443,6 @@ install_computer_use_driver() {
         log_info "Skipping Computer Use (cua-driver) install (--skip-computer-use)"
         return 0
     fi
-    case "$DISTRO" in
-        termux)
-            return 0
-            ;;
-    esac
     if command -v cua-driver >/dev/null 2>&1; then
         if cua_driver_runtime_compatible; then
             log_success "Computer Use driver (cua-driver) already installed and compatible"
@@ -2765,20 +2563,14 @@ maybe_start_gateway() {
 
     echo ""
     local should_install_gateway=false
-    if [ "$DISTRO" = "termux" ]; then
-        if prompt_yes_no "Would you like to start the gateway in the background?" "yes"; then
-            should_install_gateway=true
-        fi
-    else
-        if prompt_yes_no "Would you like to install the gateway as a background service?" "yes"; then
-            should_install_gateway=true
-        fi
+    if prompt_yes_no "Would you like to install the gateway as a background service?" "yes"; then
+        should_install_gateway=true
     fi
 
     if [ "$should_install_gateway" = true ]; then
         HERMES_CMD="$(get_hermes_command_path)"
 
-        if [ "$DISTRO" != "termux" ] && command -v systemctl &> /dev/null; then
+        if command -v systemctl &> /dev/null; then
             log_info "Installing systemd service..."
             if $HERMES_CMD gateway install 2>/dev/null; then
                 log_success "Gateway service installed"
@@ -2791,19 +2583,12 @@ maybe_start_gateway() {
                 log_warn "Systemd install failed. You can start manually: hermes gateway"
             fi
         else
-            if [ "$DISTRO" = "termux" ]; then
-                log_info "Termux detected — starting gateway in best-effort background mode..."
-            else
-                log_info "systemd not available — starting gateway in background..."
-            fi
+            log_info "systemd not available — starting gateway in background..."
             nohup $HERMES_CMD gateway > "$HERMES_HOME/logs/gateway.log" 2>&1 &
             GATEWAY_PID=$!
             log_success "Gateway started (PID $GATEWAY_PID). Logs: ~/.hermes/logs/gateway.log"
             log_info "To stop: kill $GATEWAY_PID"
             log_info "To restart later: hermes gateway"
-            if [ "$DISTRO" = "termux" ]; then
-                log_warn "Android may stop background processes when Termux is suspended or the system reclaims resources."
-            fi
         fi
     else
         log_info "Skipped. Start the gateway later with: hermes gateway"
@@ -2884,10 +2669,7 @@ print_success() {
 
     echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"
     echo ""
-    if [ "$DISTRO" = "termux" ]; then
-        echo -e "${YELLOW}⚡ 'hermes' was linked into $(get_command_link_display_dir), which is already on PATH in Termux.${NC}"
-        echo ""
-    elif [ "$ROOT_FHS_LAYOUT" = true ]; then
+    if [ "$ROOT_FHS_LAYOUT" = true ]; then
         echo -e "${YELLOW}⚡ 'hermes' was linked into /usr/local/bin and is ready to use — no shell reload needed.${NC}"
         echo ""
     else
@@ -2911,11 +2693,7 @@ print_success() {
         echo -e "${YELLOW}"
         echo "Note: Node.js could not be installed automatically."
         echo "Browser tools need Node.js. Install manually:"
-        if [ "$DISTRO" = "termux" ]; then
-            echo "  pkg install nodejs"
-        else
-            echo "  https://nodejs.org/en/download/"
-        fi
+        echo "  https://nodejs.org/en/download/"
         echo -e "${NC}"
     fi
 
@@ -2924,11 +2702,7 @@ print_success() {
         echo -e "${YELLOW}"
         echo "Note: ripgrep (rg) was not found. File search will use"
         echo "grep as a fallback. For faster search in large codebases,"
-        if [ "$DISTRO" = "termux" ]; then
-            echo "install ripgrep: pkg install ripgrep"
-        else
-            echo "install ripgrep: sudo apt install ripgrep (or brew install ripgrep)"
-        fi
+        echo "install ripgrep: sudo apt install ripgrep (or brew install ripgrep)"
         echo -e "${NC}"
     fi
 }

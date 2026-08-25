@@ -53,7 +53,7 @@ To easily install the command-line and desktop applications, [download the Herme
 ### Without Hermes Desktop:
 For a command-line only install without Hermes Desktop, run:
 
-#### Linux / macOS / WSL2 / Android (Termux)
+#### Linux / macOS / WSL2
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
@@ -65,8 +65,8 @@ Run in powershell:
 iex (irm https://hermes-agent.nousresearch.com/install.ps1) 
 ```
 
-:::tip Android / Termux
-If you're installing on a phone, see the dedicated [Termux guide](./termux.md) for the tested manual path, supported extras, and current Android-specific limitations.
+:::tip Android
+Hermes no longer supports Android or Termux. See [Android / Termux](./termux.md) for the reason and for how to reach Hermes from a phone.
 :::
 
 After it finishes, reload your shell:

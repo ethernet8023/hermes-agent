@@ -7,7 +7,7 @@ Detection and prompting live here in Python — not in install.sh — because:
 
 install.sh is still the *installation* backend because it has 1900 lines of
 battle-tested OS detection and package-manager logic (apt/brew/pacman/dnf/
-zypper/Termux/…).  Reimplementing that in Python would be huge duplication.
+zypper/…).  Reimplementing that in Python would be huge duplication.
 
 Deps that degrade gracefully (ripgrep → grep fallback, ffmpeg → skip conversion)
 don't need ensure_dependency wired in — only hard-fail sites do (TUI needs node,
@@ -63,20 +63,17 @@ def _has_system_browser() -> bool:
 def _has_npx_agent_browser() -> bool:
     """agent-browser resolves lazily via npx on the default install (#43564),
     invisible to the PATH/managed-dir probes above. Mirror
-    tools.browser_tool.check_browser_requirements's Termux carve-out so this
-    check can't diverge from what browser tools actually find."""
+    tools.browser_tool.check_browser_requirements so this check can't diverge
+    from what browser tools actually find."""
     try:
         from tools.browser_tool import (
             _find_agent_browser,
             _is_npx_agent_browser_sentinel,
-            _requires_real_termux_browser_install,
         )
         browser_cmd = _find_agent_browser(validate=False)
     except Exception:
         return False
-    if not _is_npx_agent_browser_sentinel(browser_cmd):
-        return False
-    return not _requires_real_termux_browser_install(browser_cmd)
+    return _is_npx_agent_browser_sentinel(browser_cmd)
 
 
 def _has_hermes_agent_browser() -> bool:

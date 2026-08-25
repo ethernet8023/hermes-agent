@@ -52,6 +52,9 @@ export const en: Translations = {
     revealInSidebar: 'Reveal in filetree',
     copyPath: 'Copy Path',
     copyRelativePath: 'Copy Relative Path',
+    download: 'Download',
+    downloadSaved: 'Saved',
+    downloadFailed: 'Download failed',
     rename: 'Rename…',
     delete: 'Delete',
     renameTitle: 'Rename',
@@ -99,6 +102,13 @@ export const en: Translations = {
         `Signs out of the saved remote browser session, then opens ${signInLabel}. Use local gateway to switch to the bundled backend instead.`,
       signOutAndSignIn: 'Sign out & sign in',
       remoteFailureHint: 'Check the gateway URL and sign-in under Gateway settings, or switch to the local gateway.',
+      cloudDownTitle: 'Nous Cloud agent is down',
+      cloudDownDescription:
+        'The Nous-managed cloud agent this gateway connects to is returning a server error. It cannot be restarted from here — check its status, switch to the local gateway, or get support.',
+      cloudDownHint:
+        'The buttons below open the Nous Portal (instance status and controls) and our Discord for support.',
+      cloudDownCheckPortal: 'Check Portal status',
+      cloudDownDiscord: 'Get help on Discord',
       hideRecentLogs: 'Hide recent logs',
       showRecentLogs: 'Show recent logs',
       signedInTitle: 'Signed in',
@@ -200,6 +210,30 @@ export const en: Translations = {
     dismiss: 'Dismiss'
   },
 
+  sendDiagnostics: {
+    title: 'Send diagnostics to Nous',
+    privacyNotice:
+      'This uploads a debug bundle to Nous-internal storage (not a public paste). It includes system info (OS, versions, provider, which API keys are configured — never the keys themselves) and full agent, gateway, and desktop logs (up to 512 KB each), which likely contain conversation content, tool outputs, and file paths. Secrets are redacted before upload. The bundle is viewable only by Nous staff and allowlisted Discord moderators, and auto-deletes after 14 days.',
+    upload: 'Upload',
+    uploading: 'Uploading…',
+    cancel: 'Cancel',
+    close: 'Close',
+    copyLink: 'Copy link',
+    uploadIdFallback: id => `No view link returned — quote upload ID ${id} to support`,
+    doneTitle: 'Diagnostics sent',
+    doneDescription:
+      'Your bundle was uploaded privately. Share the link below in your support thread so the team can see your logs.',
+    failedTitle: 'Upload failed',
+    failedHint:
+      'You can also run `hermes debug share --nous` from a terminal, or `hermes debug share --local` to print the report without uploading.',
+    handoffLead: 'Pick up the discussion in:',
+    links: {
+      github: 'GitHub Issues',
+      portal: 'Nous Portal Support',
+      discord: 'Discord'
+    }
+  },
+
   titlebar: {
     hideSidebar: 'Hide sidebar',
     showSidebar: 'Show sidebar',
@@ -208,6 +242,7 @@ export const en: Translations = {
     swapSidebarSides: 'Swap sidebar sides',
     hideRightSidebar: 'Hide right sidebar',
     showRightSidebar: 'Show right sidebar',
+    unreadSessions: count => (count === 1 ? '1 unread session' : `${count} unread sessions`),
     muteHaptics: 'Mute haptics',
     unmuteHaptics: 'Unmute haptics',
     openSettings: 'Open settings',
@@ -272,6 +307,7 @@ export const en: Translations = {
       'view.toggleRightSidebar': 'Toggle file browser',
       'view.toggleReview': 'Toggle review pane',
       'view.toggleStatusbar': 'Toggle status bar',
+      'view.toggleTabStrip': 'Toggle tabs',
       'view.showFiles': 'Show file browser',
       'view.showBrowser': 'Open browser',
       'view.toggleHud': 'Toggle HUD mode',
@@ -355,6 +391,7 @@ export const en: Translations = {
       providerAccounts: 'Accounts',
       providerApiKeys: 'API keys',
       providerCustomEndpoints: 'Custom Endpoints',
+      providerLocalModels: 'Local Models',
       gateway: 'Gateways',
       apiKeys: 'Tools & Keys',
       keybinds: 'Keyboard Shortcuts',
@@ -512,6 +549,11 @@ export const en: Translations = {
       sessionDensityCompact: 'Compact',
       sessionDensityComfortable: 'Comfortable',
       sessionDensityDetailed: 'Detailed',
+      tabStripTitle: 'Tab Strip',
+      tabStripDesc: 'Show tabs above a zone. Auto hides them when a zone holds a single pane.',
+      tabStripAuto: 'Auto',
+      tabStripAlways: 'Always',
+      tabStripNever: 'Never',
       terminalFontTitle: 'Terminal Font',
       terminalFontDesc:
         'Choose an installed font for Desktop terminals. Nerd Fonts render Powerlevel10k and shell icons; leave blank to use bundled JetBrains Mono.',
@@ -519,11 +561,13 @@ export const en: Translations = {
       terminalFontPreview: 'Glyph preview',
       terminalFontReset: 'Use default',
       translucencyTitle: 'Window Translucency',
-      translucencyDesc: 'See your desktop through the whole window. macOS and Windows only.',
+      translucencyDesc: 'See your desktop through the whole window, text and all. Tuned separately for light and dark.',
       translucencyGlassDesc:
-        'Matte glass: the desktop shows through as a smooth blur while text stays sharp. macOS only.',
+        'Matte glass: the desktop shows through as a smooth blur while text stays sharp. Tuned separately for light and dark.',
       translucencyModeClear: 'Clear',
       translucencyModeGlass: 'Glass',
+      translucencyTintTitle: 'Tint',
+      translucencyFadeTitle: 'Fade',
       translucencyFrostTitle: 'Frost',
       translucencyFrost: {
         'under-window': 'Deep',
@@ -538,6 +582,8 @@ export const en: Translations = {
       },
       backdropTitle: 'Chat Backdrop',
       backdropDesc: 'The faint statue image behind the conversation.',
+      introSplashTitle: 'Intro Splash',
+      introSplashDesc: 'The wordmark and prompt shown on an empty chat.',
       reactionsTitle: 'Message Reactions',
       reactionsDesc: 'iMessage-style emoji tapbacks — react to messages, and Hermes can react to yours.',
       composerPopoutTitle: 'Floating Composer',
@@ -666,16 +712,20 @@ export const en: Translations = {
       set: 'Set',
       clear: 'Clear'
     },
-    // v2 multi-connection registry: Settings → Connections.
+    // v2 multi-connection registry: Settings → Gateways.
     connections: {
-      title: 'Connections',
-      intro:
-        'Register every place your agents live — this device, remote gateways on your network, and Hermes Cloud instances. All of them are stored here.',
+      title: 'Registered gateways',
+      intro: 'Manage this device and every Hermes gateway it can reach through remote, SSH, or Cloud connections.',
       stagedNote:
-        'Chats and the agent roster follow the source you pick; the app-managed window backend is still chosen in Settings → Gateway.',
+        'Switch gateways from Sessions. Profiles, chats, messaging, and cron jobs stay with their gateway; work on other gateways keeps running.',
+      launchModeTitle: 'At startup, return to Sessions on the last-used gateway',
+      launchModeDesc: 'When off, Sessions opens on the Primary gateway.',
+      searchPlaceholder: 'Search gateways…',
+      noSearchResults: 'No gateways match your search.',
       loadFailed: 'Could not load connections',
+      currentPill: 'Current',
       primaryPill: 'Primary',
-      managedPill: 'This device',
+      managedPill: 'App-managed',
       addConnection: 'Add connection',
       editConnection: 'Edit',
       removeConnection: 'Remove',
@@ -996,6 +1046,99 @@ export const en: Translations = {
         title_generation: { label: 'Title gen', hint: 'Session titles' },
         curator: { label: 'Curator', hint: 'Skill-usage review' }
       }
+    },
+    localModels: {
+      title: 'Local Models',
+      runtimeTitle: 'Local runtime',
+      runtimeReady: backend => `Ready · ${backend}`,
+      serverRunning: 'Running',
+      runtimeInstalled: 'llama.cpp runtime installed',
+      runtimeInstalledDetail: (tag, backend) =>
+        `Build ${tag}, ${backend} backend. Hermes starts and manages the server for you.`,
+      installTitle: 'Install the local runtime',
+      installDetail:
+        'Downloads the llama.cpp inference engine (a few hundred MB). Models you download run entirely on this machine — no account, nothing leaves your computer.',
+      installAction: 'Install runtime',
+      installing: 'Installing runtime…',
+      installFailed: 'Runtime install failed',
+      hardwareTitle: 'This machine',
+      hardwareLoading: 'Checking your hardware…',
+      vram: label => `${label} GPU memory`,
+      ram: label => `${label} RAM`,
+      unifiedMemory: 'Unified memory',
+      modelsTitle: 'Models',
+      recommended: 'Recommended',
+      downloaded: 'Downloaded',
+      downloadAction: size => `Download · ${size}`,
+      downloadProgress: (done, total) => `${done} of ${total}`,
+      downloadDoneToast: model => `${model} is ready.`,
+      installDoneToast: 'Local runtime installed and ready.',
+      useAction: 'Use',
+      activePill: 'Default',
+      updateTitle: 'Engine update available',
+      updateDetail: (next, current) => `A newer llama.cpp build (${next}) is ready to install — you're on ${current}. Models keep working during the download.`,
+      updateAction: 'Update engine',
+      updating: 'Updating engine…',
+      upToDateTitle: 'Engine up to date',
+      upToDateDetail: (tag, backend) => `Running llama.cpp ${tag} (${backend}) — the latest build Hermes ships.`,
+      updateToast: next => `A newer local engine build (${next}) is available. Update from Settings → Local Models.`,
+      activeDetail: 'New chats use this model — it loads when you send your first message',
+      activeNotLoaded: 'Loads on your first message',
+      loadedPill: 'In memory',
+      placementResident: 'all on GPU',
+      placementSpilled: 'partly in RAM',
+      placementResidentTip: 'Running entirely in GPU memory at this context window — full speed.',
+      placementSpilledTip:
+        'Part of this model runs from system RAM — it works, but slower. A more compact build or a smaller context would fit fully.',
+      loadingPill: 'Loading…',
+      ejectTip: 'Free GPU memory (loads again on the next message)',
+      ejected: 'Model unloaded — GPU memory freed.',
+      ejectFailed: 'Could not unload the model',
+      stopServer: 'Turn off',
+      startServer: 'Turn on',
+      runtimeRunningDetail: 'The local server is running. Turning it off frees all GPU memory and stops new chats from using local models until you turn it back on.',
+      serverStopped: 'Local server stopped — GPU memory freed.',
+      serverStarted: 'Local server running.',
+      serverStopFailed: 'Could not stop the local server',
+      serverStartFailed: 'Could not start the local server',
+      activating: 'Starting…',
+      activateFailed: model => `Could not switch to ${model}`,
+      activateDoneToast: model => `New chats use ${model}.`,
+      downloadFailed: model => `Download of ${model} failed`,
+      pillFitsGpu: 'Fits your GPU',
+      pillUsesRam: 'Uses system RAM',
+      pillTooBig: 'Too big for this machine',
+      browseTitle: 'Find more models',
+      browseHint: 'Search all of Hugging Face. Models you download here are sized to your machine automatically, but not tested by us.',
+      browsePlaceholder: 'Search models by name or author…',
+      browseSearching: 'Searching Hugging Face',
+      browseListing: 'Reading model files',
+      browseShowFiles: 'Show files',
+      browseRefresh: 'Refresh',
+      browseDownloads: 'downloads',
+      browseLikes: 'likes',
+      browseGated: 'requires Hugging Face sign-in',
+      browseNoGguf: 'No compatible model files found.',
+      browseFitUnknown: 'Fit unknown',
+      browseAlreadyDownloaded: 'Already downloaded.',
+      addedByYou: 'Added by you',
+      browseDownloadStarted: 'Downloading {name}',
+      browseDownloadAria: 'Download {name}',
+      sideloadButton: 'Add model file',
+      sideloadTitle: 'Choose a GGUF model file',
+      sideloadDone: 'Added {name}.',
+      sideloadAlreadyPresent: 'Already in your library.',
+      pillFullContext: max => `Full ${max} context`,
+      pillFullContextTip: "Runs at the model's complete context window from the start",
+      pillStarts: start => `Starts at ${start}`,
+      pillStartsTip: 'The context window it opens with — sized to run fast on your hardware',
+      pillUpTo: max => `Up to ${max}`,
+      pillGrowsTip: 'Grows automatically as your conversation needs more room',
+      pillVision: 'Sees images',
+      deleteAction: 'Delete model',
+      deleteConfirm: model => `Delete ${model} from disk?`,
+      deleted: model => `${model} deleted.`,
+      deleteFailed: 'Delete failed'
     },
     providers: {
       connectAccount: 'Connect an account',
@@ -1731,8 +1874,10 @@ export const en: Translations = {
     allProfiles: 'All profiles',
     showAllProfiles: 'Show all profiles',
     switchToProfile: name => `Switch to ${name}`,
+    switchToConnection: name => `Switch to ${name}`,
+    switchConnectionFailed: name => `Could not connect to ${name}`,
     manageProfiles: 'Manage profiles…',
-    connectGateway: 'Connect another Hermes gateway…',
+    connectGateway: 'Manage gateways…',
     actions: 'Actions',
     color: 'Color…',
     colorFor: 'Color',
@@ -2210,6 +2355,7 @@ export const en: Translations = {
     endShort: 'End',
     stopDictation: 'Stop dictation',
     transcribingDictation: 'Transcribing dictation',
+    voiceControls: 'Voice',
     voiceDictation: 'Voice dictation',
     speakReplies: 'Read replies aloud',
     stopSpeakingReplies: 'Stop reading replies aloud',
@@ -2393,6 +2539,7 @@ export const en: Translations = {
       openPr: 'Open PR',
       ghMissing: 'Install the GitHub CLI (gh) and sign in to open PRs',
       agentShip: 'Ask Hermes to open PR',
+      agentShipUnavailable: "The chat that owns these changes isn't on screen.",
       agentShipPrompt:
         'Review the current changes, commit them with a clear conventional-commit message, push the branch, and open a pull request.',
       newBranch: 'New branch',
@@ -2504,6 +2651,14 @@ export const en: Translations = {
     pidLabel: pid => `PID ${pid}`,
     technicalDetails: 'Technical details',
     notNow: 'Not now',
+    clientAlsoBehindTitle: 'Desktop app is behind',
+    clientAlsoBehindMessage:
+      'The backend is up to date, but this desktop app is still on an older version. Update it to pick up the latest fixes.',
+    clientAlsoBehindAction: 'Update desktop app',
+    everythingDispatched: 'Update dispatched',
+    everythingSkipped: 'Skipped',
+    everythingRowFailed: 'Update failed',
+    everythingFanoutFailedTitle: 'Couldn’t update other instances',
     applyStatus: {
       preparing: 'Updating backend…',
       pulling: 'Backend updating…',
@@ -2601,6 +2756,8 @@ export const en: Translations = {
     connected: 'Connected',
     featuredPitch: 'One subscription, 300+ frontier models — the recommended way to run Hermes',
     fireworksPitch: 'Direct model API — Fireworks-hosted frontier models',
+    localModelsTitle: 'Run models locally',
+    localModelsPitch: 'No account needed — download a model and run it on this machine',
     openRouterPitch: 'One key, hundreds of models — a solid default',
     apiKeyOptions: {
       fireworks: {
@@ -2798,6 +2955,15 @@ export const en: Translations = {
       openStarmap: 'Open memory graph',
       turnRunning: 'Running',
       contextUsage: 'Context usage',
+      systemResources: {
+        title: 'System Resources',
+        loading: 'Resources…',
+        gpuUtilization: 'GPU utilization',
+        gpuMemory: 'GPU memory',
+        ram: 'RAM',
+        unifiedNote: 'Unified memory — the GPU and system share this pool.',
+        toggle: 'System resources'
+      },
       contextUsagePanel: {
         categories: {
           conversation: 'Conversation',
@@ -2964,8 +3130,8 @@ export const en: Translations = {
   },
 
   zones: {
-    showHeader: 'Show header',
-    hideHeader: 'Hide header',
+    showTabStrip: 'Show tabs',
+    hideTabStrip: 'Hide tabs',
     showStripTab: title => `Show ${title}`,
     hideStripTab: title => `Hide ${title}`,
     lastTabKeptTitle: 'Last tab stays',
@@ -3011,6 +3177,30 @@ export const en: Translations = {
     tabCount: count => `${count} tabs`
   },
 
+  contextMenu: {
+    link: {
+      openInApp: 'Open in in-app browser',
+      openExternal: 'Open in external browser',
+      copyUrl: 'Copy URL',
+      copyResolvedUrl: 'Copy resolved URL'
+    },
+    image: {
+      copyImage: 'Copy image',
+      copyImageAddress: 'Copy image address',
+      saveImageAs: 'Save image as…'
+    },
+    edit: {
+      cut: 'Cut',
+      paste: 'Paste',
+      selectAll: 'Select all',
+      addToDictionary: 'Add to dictionary'
+    },
+    page: {
+      copyPageUrl: 'Copy page URL',
+      inspectElement: 'Inspect element'
+    }
+  },
+
   assistant: {
     thread: {
       loadingSession: 'Loading session',
@@ -3033,6 +3223,24 @@ export const en: Translations = {
       branchNewChat: 'Branch in new chat',
       react: 'React',
       dismissError: 'Dismiss error',
+      errorLayers: {
+        auth: 'Authentication error',
+        billing: 'Out of credits',
+        disk: 'Disk full',
+        endpoint: 'Custom endpoint error',
+        gateway: 'Gateway error',
+        generic: 'Turn failed',
+        provider: 'Provider error',
+        runtime: 'Local runtime error',
+        streaming: 'Streaming connection error'
+      },
+      errorRetry: 'Retry',
+      errorSwitchProvider: 'Switch provider',
+      errorOpenLogs: 'Open logs',
+      errorOpenLogsFailed: 'Could not open the logs folder',
+      errorOpenDesktopLogs: 'Open Desktop logs',
+      errorCopyDiagnostics: 'Copy error details',
+      errorSendDiagnostics: 'Send diagnostics',
       filesChanged: count => (count === 1 ? '1 file changed' : `${count} files changed`),
       reviewChanges: 'Review',
       readAloudFailed: 'Read aloud failed',
@@ -3080,6 +3288,9 @@ export const en: Translations = {
       skip: 'Skip',
       skipped: 'Skipped',
       continueLabel: 'Continue',
+      confirmAndContinueLabel: 'Confirm and continue',
+      answeredBadge: 'Answered',
+      questionProgress: (answered, total) => `${answered} of ${total} answered`,
       lateAnswer: (question, choice) => `Re: "${question}" — my answer: ${choice}`,
       lateAnswerTip: 'Draft this answer as a follow-up message',
       lateAnswerHint: 'This prompt is no longer waiting. Pick an option to draft it as a follow-up message.'

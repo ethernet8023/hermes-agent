@@ -427,6 +427,10 @@ export interface ModelOptionProvider {
 }
 
 export interface ModelCapabilities {
+  /** False when the route rejects a reasoning disable ("mandatory" in the
+   *  provider catalog), so the Thinking toggle must not be offered. Absent
+   *  when the catalog doesn't say. */
+  can_disable_reasoning?: boolean
   fast: boolean
   reasoning: boolean
 }
@@ -634,6 +638,9 @@ export interface SessionResumeResponse {
     /** Retained failed turn: the error the terminal frame carried (the frame
      *  itself may have been lost to a disconnect). */
     error?: string
+    /** Structured {layer, code, retryable} descriptor for the retained failed
+     *  turn (see agent/error_surface.py). Omitted by older gateways. */
+    error_surface?: unknown
     recoverable?: boolean
     status?: string
     streaming?: boolean
@@ -1206,6 +1213,85 @@ export interface StatusResponse {
   hermes_home: string
   latest_config_version: number
   version: string
+}
+
+// ── Managed local runtime (llama.cpp) ──────────────────────────
+
+export interface LocalModelPlacement {
+  window?: number
+  window_label?: string
+  spilled?: boolean
+  granted_window?: number
+  granted_window_label?: string
+}
+
+export interface LocalModelsStatus {
+  enabled: boolean
+  tag: string
+  configured_tag: string
+  update_available: boolean
+  runtime_installed: boolean
+  runtime_backend: string | null
+  server_running: boolean
+  server_base_url: string | null
+  active_model_id: string | null
+  loaded_models: Record<string, string>
+  placement?: Record<string, LocalModelPlacement>
+  models: { id: string; size_bytes: number; size_label: string }[]
+  models_dir: string
+}
+
+export interface LocalHardware {
+  uma: boolean
+  vram_total_bytes: number
+  vram_usable_bytes: number
+  ram_total_bytes: number
+  ram_available_bytes: number
+  vram_label: string
+  gpu_name: string | null
+  gpu_util_percent: number | null
+  vram_used_bytes: number | null
+}
+
+export interface LocalCatalogModel {
+  id: string
+  display_name: string
+  description: string
+  size_bytes: number
+  size_label: string
+  native_context: number
+  native_context_label: string
+  recommended: boolean
+  downloaded: boolean
+  downloaded_model_id?: string | null
+  downloaded_quant?: string | null
+  mtp: boolean
+  vision?: boolean
+  fits: boolean
+  fit_summary: string
+  fit_detail?: string
+  model_id?: string
+  quant?: string
+  quant_reason?: string
+  quant_validated?: boolean
+  variant_count?: number
+  start_window?: number
+  start_window_label?: string
+  spilled?: boolean
+}
+
+export interface LocalRuntimeJob {
+  job_id: string
+  kind: 'runtime-install' | 'model-download' | 'model-activate'
+  target: string
+  model_id: string | null
+  status: 'running' | 'done' | 'error'
+  phase: string
+  detail: string
+  total_bytes: number | null
+  done_bytes: number
+  percent?: number
+  error: string | null
 }
 
 export interface ActionResponse {

@@ -41,6 +41,7 @@ class HermesOverlay:
     extra_env_vars: Tuple[str, ...] = ()  # env vars models.dev doesn't list
     base_url_override: str = ""           # override if models.dev URL is wrong/missing
     base_url_env_var: str = ""            # env var for user-custom base URL
+    keyless: bool = False                 # served anonymously — no credential exists to configure
 
 
 HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
@@ -155,6 +156,12 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         transport="openai_chat",
         is_aggregator=True,
         base_url_env_var="OPENCODE_GO_BASE_URL",
+    ),
+    "opencode-free": HermesOverlay(
+        transport="openai_chat",
+        is_aggregator=True,
+        base_url_override="https://opencode.ai/zen/v1",
+        keyless=True,
     ),
     "kilo": HermesOverlay(
         transport="openai_chat",
@@ -332,6 +339,10 @@ ALIASES: Dict[str, str] = {
     "go": "opencode-go",
     "opencode-go-sub": "opencode-go",
 
+    # opencode-free
+    "free": "opencode-free",
+    "opencode_free": "opencode-free",
+
     # kilo (models.dev ID for KiloCode)
     "kilocode": "kilo",
     "kilo-code": "kilo",
@@ -427,6 +438,7 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "vertex": "Google Vertex AI",
     "ollama-cloud": "Ollama Cloud",
     "xai-oauth": "xAI Grok OAuth (SuperGrok / Premium+)",
+    "opencode-free": "OpenCode Free",
 }
 
 
@@ -978,6 +990,29 @@ def resolve_provider_full(
     custom_pdef = resolve_custom_provider(name, custom_providers)
     if custom_pdef is not None:
         return custom_pdef
+
+    # 2c. Managed local runtime: the llamacpp aliases are a real provider
+    # whenever the managed server (or a detected external one) resolves —
+    # no credential and no providers: entry required, the credential is
+    # reachability. Without this rung the model-switch path rejected the
+    # very provider the Local Models 'Use' flow writes to config
+    # ("Unknown provider 'llamacpp'" from the desktop dropdown).
+    if raw in ("llamacpp", "llama.cpp", "llama-cpp"):
+        try:
+            from hermes_cli.local_runtime.endpoint import resolve_llamacpp_endpoint
+
+            endpoint = resolve_llamacpp_endpoint(wait_for_boot_s=0)
+        except Exception:
+            endpoint = None
+        if endpoint:
+            return ProviderDef(
+                id="llamacpp",
+                name="Local (llama.cpp)",
+                transport="openai_chat",
+                api_key_env_vars=(),
+                base_url=endpoint["base_url"],
+                source="local-runtime",
+            )
 
     # 3. Try models.dev directly (for providers not in our ALIASES)
     try:

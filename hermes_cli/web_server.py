@@ -78,6 +78,7 @@ from hermes_cli.config import (
     check_config_version,
     detect_install_method,
     format_docker_update_message,
+    is_nix_install_method,
     recommended_update_command_for_method,
     redact_key,
     write_platform_config_field,
@@ -424,6 +425,28 @@ async def _lifespan(app: "FastAPI"):
     # sweeping stale sessions on schedule, independent of list requests.
     auto_archive_task = asyncio.create_task(_auto_archive_ticker_loop())
 
+    # Managed local runtime: when the user opted in (local_runtime.enabled,
+    # set by the Local Models 'Use' action), bring the llama-server back up
+    # so a restart doesn't strand a llamacpp main model without a backend.
+    # Off-thread and best-effort: binary check + spawn + health poll must
+    # not delay the server socket, and failure falls back to configured
+    # cloud providers exactly like a cold start.
+    def _boot_local_runtime():
+        try:
+            from hermes_cli.config import load_config
+            from hermes_cli.local_runtime.bootstrap import ensure_local_runtime
+
+            # Server only — models load on first inference, always (residency
+            # design: downloaded = available; demand loads; idleness
+            # evicts). An empty router holds no VRAM; warming a model at
+            # boot would reload gigabytes nobody asked for yet.
+            ensure_local_runtime(load_config())
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("local runtime boot failed: %s", exc)
+
+    threading.Thread(target=_boot_local_runtime, daemon=True,
+                     name="local-runtime-boot").start()
+
     try:
         yield
     finally:
@@ -433,6 +456,14 @@ async def _lifespan(app: "FastAPI"):
         selftest_task.cancel()
         auto_archive_task.cancel()
         await PTY_REGISTRY.close_all()
+        # Stop the managed llama-server with its parent — a supervisor-less
+        # orphan would keep VRAM pinned after the app closes.
+        try:
+            from hermes_cli.local_runtime.bootstrap import shutdown_local_runtime
+
+            shutdown_local_runtime()
+        except Exception:  # noqa: BLE001
+            pass
         if os.getenv("HERMES_DESKTOP") == "1":
             _terminate_desktop_managed_gateway()
 
@@ -3012,6 +3043,10 @@ def _git_path(path: str) -> str:
 from hermes_cli.web_routers import git as _git_routes  # noqa: E402
 
 app.include_router(_git_routes.router)
+
+from hermes_cli.web_routers import local_models as _local_models_routes  # noqa: E402
+
+app.include_router(_local_models_routes.router)
 from hermes_cli.web_routers.git import (  # noqa: E402,F401 — legacy re-exports; tests call these via web_server.<name>
     git_status_route,
     git_worktrees_route,
@@ -4380,6 +4415,30 @@ _ACTION_PROCS: Dict[str, subprocess.Popen] = {}
 _ACTION_COMMANDS: Dict[str, Tuple[str, ...]] = {}
 _ACTION_IDS: Dict[str, str] = {}
 
+# A finished ``gateway-restart`` child does not mean the gateway is back: the
+# child exits as soon as it has handed the restart to the supervisor (or to the
+# running gateway), while the gateway itself is still stopping and coming up.
+# The in-flight reuse in :func:`_spawn_gateway_restart` therefore stops
+# coalescing exactly when repeat requests do the most damage, so a stale cached
+# frontend that re-fires its restart every few seconds gets a brand new restart
+# every time (#89034: 77 restarts, 17 of them inside one minute, killing the
+# gateway often enough mid-FTS5-write to corrupt state.db).  Suppress repeats
+# for a short window after the last spawn as well.
+#
+# MAINTAINER DECISION: a fixed window, not "until the gateway reports healthy".
+# Health-gating is what #89034 asks for, but it cannot be made to fail safe
+# here — a gateway that never comes back would leave the restart action
+# permanently inert, which is a worse failure than the flood it prevents.  A
+# fixed window always releases.  10s is above the ~3.5s spacing of the reported
+# storm and below the time an operator waits before deliberately retrying.
+GATEWAY_RESTART_COOLDOWN_SECONDS = 10.0
+
+# ``(monotonic spawn time, Popen, command)`` for the last gateway restart this
+# process started.  Deliberately NOT read out of ``_ACTION_PROCS``: entries
+# there are reaped once the child exits, and a guard that disappears when the
+# child exits is the bug this exists to fix.
+_LAST_GATEWAY_RESTART: Optional[Tuple[float, subprocess.Popen, Tuple[str, ...]]] = None
+
 # ``name`` → completed synthetic action result for actions the server handled
 # without spawning a subprocess (for example, unsupported Docker updates).
 _ACTION_RESULTS: Dict[str, Dict[str, Any]] = {}
@@ -4606,6 +4665,13 @@ def _spawn_gateway_restart(profile: Optional[str] = None) -> Tuple[subprocess.Po
     concurrent ``hermes gateway restart`` children race each other on the
     manual kill-and-start path, so reuse the live one instead.
 
+    Reusing only the *live* child is not enough. The child exits as soon as
+    the restart has been handed off, long before the gateway is back, so a
+    frontend re-firing every few seconds cleared that guard every time and
+    kept restarting a gateway that was still coming up (#89034). Requests
+    within ``GATEWAY_RESTART_COOLDOWN_SECONDS`` of the last spawn for the
+    same profile are coalesced onto that spawn as well.
+
     Before spawning, sweep for orphaned gateway processes whose parent has
     exited (e.g. desktop-app restarts leaving a reparented gateway child
     under launchd/PPID=1).  Without this the orphan keeps its platform
@@ -4621,6 +4687,8 @@ def _spawn_gateway_restart(profile: Optional[str] = None) -> Tuple[subprocess.Po
     except Exception:
         pass  # best-effort — don't block the restart on a reap failure
 
+    global _LAST_GATEWAY_RESTART
+
     subcommand = _gateway_subcommand(profile, "restart")
     existing = _ACTION_PROCS.get("gateway-restart")
     if existing is not None and existing.poll() is None:
@@ -4628,7 +4696,24 @@ def _spawn_gateway_restart(profile: Optional[str] = None) -> Tuple[subprocess.Po
         if existing_command is None or existing_command == tuple(subcommand):
             return existing, True
         raise RuntimeError("gateway restart already in progress for another profile")
-    return _spawn_hermes_action(subcommand, "gateway-restart"), False
+
+    recent = _LAST_GATEWAY_RESTART
+    if recent is not None:
+        spawned_at, recent_proc, recent_command = recent
+        age = time.monotonic() - spawned_at if recent_command == tuple(subcommand) else None
+        if age is not None and age < GATEWAY_RESTART_COOLDOWN_SECONDS:
+            _log.info(
+                "Coalescing gateway restart: one was started %.1fs ago "
+                "(pid %s) and the gateway may still be coming back; not "
+                "spawning another (#89034).",
+                age,
+                getattr(recent_proc, "pid", "?"),
+            )
+            return recent_proc, True
+
+    proc = _spawn_hermes_action(subcommand, "gateway-restart")
+    _LAST_GATEWAY_RESTART = (time.monotonic(), proc, tuple(subcommand))
+    return proc, False
 
 
 def _restart_gateway_after_webhook_enable(profile: Optional[str] = None) -> dict[str, Any]:
@@ -4775,7 +4860,7 @@ async def update_hermes():
             "update_command": recommended_update_command_for_method(install_method),
         }
 
-    if install_method in {"nix", "source"}:
+    if is_nix_install_method(install_method) or install_method in {"apt", "source"}:
         message = recommended_update_command_for_method(install_method)
         _record_completed_action("hermes-update", message, exit_code=1)
         return {
@@ -7586,6 +7671,7 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
 @app.put("/api/config")
 async def update_config(body: ConfigUpdate, profile: Optional[str] = None):
     def _run():
+        approvals_mode_changed = False
         with _profile_scope(body.profile or profile):
             # The dashboard form is schema-driven (see CONFIG_SCHEMA). Any root
             # key absent from the schema — most visibly ``custom_providers``, but
@@ -7596,7 +7682,23 @@ async def update_config(body: ConfigUpdate, profile: Optional[str] = None):
             with _CONFIG_MUTATION_LOCK:
                 existing = read_raw_config()
                 incoming = _denormalize_config_from_web(body.config)
-                save_config(_deep_merge(existing, incoming))
+                merged = _deep_merge(existing, incoming)
+                # Compare normalized approvals.mode across the in-memory
+                # documents, not config blocks and not cache re-reads: the
+                # settings page PUTs the defaulted GET record while disk
+                # holds sparse YAML, so a block compare is always-unequal
+                # (every autosave would broadcast), and reloading after the
+                # save can serve the pre-save cache on an (mtime_ns, size)
+                # key collision. Only approvals.mode feeds session.info, so
+                # it is the honest trigger.
+                approvals_mode_changed = _approval_mode_of(merged) != _approval_mode_of(existing)
+                save_config(merged)
+        # REST saves bypass the config.set RPC (which re-emits itself), so
+        # refresh live sessions' cached approval/YOLO indicators after a mode
+        # change. Own-profile saves only: a profile-scoped save targets a
+        # different HERMES_HOME than this process's gateway sessions.
+        if approvals_mode_changed and not _is_other_profile(body.profile or profile):
+            _broadcast_gateway_session_info()
         return {"ok": True}
 
     try:
@@ -7606,6 +7708,51 @@ async def update_config(body: ConfigUpdate, profile: Optional[str] = None):
     except Exception:
         _log.exception("PUT /api/config failed")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def _is_other_profile(profile: Optional[str]) -> bool:
+    """True when ``profile`` names a profile other than this process's own."""
+    requested = (profile or "").strip()
+    if not requested or requested.lower() == "current":
+        return False
+    try:
+        target = _resolve_profile_dir(requested)
+    except HTTPException:
+        return True
+    return target.resolve() != get_process_hermes_home().resolve()
+
+
+def _approval_mode_of(config: Dict[str, Any]) -> str:
+    """Normalize approvals.mode from an in-memory config document.
+
+    Both sides of the broadcast comparison use in-memory documents (the raw
+    on-disk dict and the about-to-be-saved dict): re-reading through the
+    config cache after a save can serve the pre-save document when the
+    replacement file collides on the (mtime_ns, size) cache key, which would
+    suppress the broadcast exactly when the mode changed. Absent block or
+    key normalizes to the same default the approval gate uses.
+    """
+    from tools.approval import _normalize_approval_mode
+
+    approvals = config.get("approvals")
+    default_mode = (DEFAULT_CONFIG.get("approvals") or {}).get("mode", "manual")
+    mode = approvals.get("mode", default_mode) if isinstance(approvals, dict) else default_mode
+    return _normalize_approval_mode(mode)
+
+
+def _broadcast_gateway_session_info() -> None:
+    """Broadcast session.info on the in-process gateway when it's loaded.
+
+    ``sys.modules`` guard, not an import: gateway never imported means no
+    live sessions in this process to notify.
+    """
+    server = sys.modules.get("tui_gateway.server")
+    if server is None:
+        return
+    try:
+        server.broadcast_session_info()
+    except Exception:
+        _log.exception("session.info broadcast after config save failed")
 
 
 def _catalog_provider_env_metadata() -> dict:
@@ -11972,7 +12119,7 @@ def _open_session_db_at_path(db_path: Path, *, read_only: bool):
     """
     import sqlite3
 
-    from hermes_state import SessionDB, is_malformed_db_error
+    from hermes_state import SessionDB, is_malformed_schema_error
 
     if not read_only:
         return SessionDB(db_path=db_path, read_only=False)
@@ -12009,7 +12156,7 @@ def _open_session_db_at_path(db_path: Path, *, read_only: bool):
     except sqlite3.DatabaseError as exc:
         message = str(exc).lower()
         stale_schema = "no such table" in message or "no such column" in message
-        if not stale_schema and not is_malformed_db_error(exc):
+        if not stale_schema and not is_malformed_schema_error(exc):
             raise
         SessionDB(db_path=db_path, read_only=False).close()
         try:
@@ -15155,10 +15302,15 @@ async def update_config_raw(body: RawConfigUpdate, profile: Optional[str] = None
         parsed = yaml.safe_load(body.yaml_text)
         if not isinstance(parsed, dict):
             raise HTTPException(status_code=400, detail="YAML must be a mapping")
+        approvals_mode_changed = False
         with _profile_scope(body.profile or profile):
             # Full-document replacement: the editor owns the whole file; do not
             # merge omitted sections back from disk (#62723).
+            approvals_mode_changed = _approval_mode_of(parsed) != _approval_mode_of(read_raw_config())
             save_config(parsed, merge_existing=False)
+        # Same indicator refresh as the schema-driven save above.
+        if approvals_mode_changed and not _is_other_profile(body.profile or profile):
+            _broadcast_gateway_session_info()
         return {"ok": True}
 
     try:
@@ -15839,6 +15991,26 @@ def _ws_auth_mode() -> str:
     return "loopback"
 
 
+_GATEWAY_WS_PROTOCOL = "hermes-gateway-v1"
+_GATEWAY_WS_TICKET_PROTOCOL_PREFIX = "hermes-gateway-ticket."
+
+
+def _gateway_ws_ticket_from_subprotocol(ws: "WebSocket") -> tuple[str, str]:
+    """Return ``(ticket, reason)`` from an unambiguous gateway protocol set."""
+    raw = str(ws.headers.get("sec-websocket-protocol", "") or "")
+    protocols = [value.strip() for value in raw.split(",") if value.strip()]
+    ticket_protocols = [
+        value for value in protocols
+        if value.startswith(_GATEWAY_WS_TICKET_PROTOCOL_PREFIX)
+    ]
+    if not ticket_protocols:
+        return "", "none"
+    if _GATEWAY_WS_PROTOCOL not in protocols or len(ticket_protocols) != 1:
+        return "", "invalid"
+    ticket = ticket_protocols[0][len(_GATEWAY_WS_TICKET_PROTOCOL_PREFIX):]
+    return (ticket, "ok") if ticket else ("", "invalid")
+
+
 def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
     """Validate WS-upgrade auth; return ``(reason, credential)``.
 
@@ -15888,7 +16060,16 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
         internal = ws.query_params.get("internal", "")
         if internal:
             try:
-                consume_internal_credential(internal)
+                info = consume_internal_credential(internal)
+                # Stamp the server-minted identity onto the WS object so the
+                # connection (and any transport built from it) can never be
+                # impersonated by RPC params. Internal peers are marked
+                # ``server-internal`` and are excluded from privileged
+                # controller registration downstream.
+                ws._hermes_auth_identity = {
+                    "user_id": info.get("user_id"),
+                    "provider": info.get("provider"),
+                }
                 return None, "internal"
             except TicketInvalid as exc:
                 audit_log(
@@ -15899,12 +16080,32 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                 )
                 return "internal_invalid", "internal"
 
-        ticket = ws.query_params.get("ticket", "")
+        protocol_ticket, protocol_reason = _gateway_ws_ticket_from_subprotocol(ws)
+        if protocol_reason == "invalid":
+            return "ticket_invalid", "ticket-subprotocol"
+        ticket = protocol_ticket or ws.query_params.get("ticket", "")
         if not ticket:
             return "no_credential", "none"
 
         try:
-            consume_ticket(ticket)
+            info = consume_ticket(ticket)
+            # The ticket binds a server-minted {user_id, provider}; stamp it
+            # onto the WS object so ``gateway_ws`` can hand it to the gateway
+            # transport, where it is the sole identity authority for
+            # browser-controller registration. A client can never supply or
+            # spoof this value through RPC params. Only the two identity
+            # fields are carried — bookkeeping (e.g. ``minted_at``) is not
+            # part of the identity contract.
+            ws._hermes_auth_identity = {
+                "user_id": info.get("user_id"),
+                "provider": info.get("provider"),
+            }
+            if protocol_ticket:
+                # Select only the stable public protocol during accept. The
+                # ticket-bearing protocol is a credential and must never be
+                # reflected back to the browser or retained after admission.
+                ws._hermes_ws_subprotocol = _GATEWAY_WS_PROTOCOL
+                return None, "ticket-subprotocol"
             return None, "ticket"
         except TicketInvalid as exc:
             audit_log(
@@ -17025,7 +17226,15 @@ async def gateway_ws(ws: WebSocket) -> None:
 
     from tui_gateway.ws import handle_ws
 
-    await handle_ws(ws)
+    # The authenticated identity (ticket / internal credential) was stamped
+    # onto the WS object by _ws_auth_reason; carry it into the gateway
+    # transport where it becomes the identity authority for privileged RPCs
+    # (browser.controller.register). None on the legacy token path.
+    await handle_ws(
+        ws,
+        auth_identity=getattr(ws, "_hermes_auth_identity", None),
+        subprotocol=getattr(ws, "_hermes_ws_subprotocol", None),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -18971,6 +19180,21 @@ def start_server(
             # tui_gateway/slash_worker.py::_start_parent_death_watchdog. No-op
             # for standalone `hermes serve` (no HERMES_PARENT_PID env).
             _start_parent_death_watchdog()
+
+            # Positive process identity: record (pid, create_time, purpose,
+            # spawner) in the machine spawn ledger and — on Windows — attach
+            # to a kill-on-close job so this backend's whole child tree dies
+            # with it. Both best-effort; failures degrade to legacy behavior.
+            try:
+                from hermes_cli.process_identity import (
+                    attach_self_to_kill_on_close_job,
+                    register_self,
+                )
+
+                register_self("serve" if headless else "dashboard")
+                attach_self_to_kill_on_close_job()
+            except Exception as exc:
+                _log.debug("process-identity registration skipped: %s", exc)
 
             actual_port = _read_bound_port(server, fallback=port)
             app.state.bound_port = actual_port

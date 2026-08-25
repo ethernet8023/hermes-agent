@@ -52,6 +52,9 @@ export const ja = defineLocale({
     revealInSidebar: 'ファイルツリーで表示',
     copyPath: 'パスをコピー',
     copyRelativePath: '相対パスをコピー',
+    download: 'ダウンロード',
+    downloadSaved: '保存しました',
+    downloadFailed: 'ダウンロードに失敗しました',
     rename: '名前を変更…',
     delete: '削除',
     renameTitle: '名前を変更',
@@ -100,6 +103,13 @@ export const ja = defineLocale({
       signOutAndSignIn: 'サインアウトして再サインイン',
       remoteFailureHint:
         '「ゲートウェイ設定」でゲートウェイの URL とサインインを確認するか、ローカルゲートウェイに切り替えてください。',
+      cloudDownTitle: 'Nous Cloud エージェントが停止しています',
+      cloudDownDescription:
+        'このゲートウェイが接続している Nous 管理のクラウドエージェントがサーバーエラーを返しています。ここから再起動することはできません。ステータスを確認するか、ローカルゲートウェイに切り替えるか、サポートに連絡してください。',
+      cloudDownHint:
+        '下のボタンから Nous Portal（インスタンスの状態と操作）を開くか、Discord でサポートを受けられます。',
+      cloudDownCheckPortal: 'Portal のステータスを確認',
+      cloudDownDiscord: 'Discord でサポートを受ける',
       hideRecentLogs: '最近のログを非表示',
       showRecentLogs: '最近のログを表示',
       signedInTitle: 'サインインしました',
@@ -201,6 +211,30 @@ export const ja = defineLocale({
     dismiss: '閉じる'
   },
 
+  sendDiagnostics: {
+    title: 'Nous に診断情報を送信',
+    privacyNotice:
+      'デバッグバンドルを Nous 内部ストレージにアップロードします（公開ペーストではありません）。システム情報（OS、バージョン、プロバイダー、設定済み API キーの種類 — キー自体は含まれません）と、エージェント/ゲートウェイ/デスクトップの完全なログ（各最大 512 KB。会話内容、ツール出力、ファイルパスを含む可能性が高い）が含まれます。シークレットはアップロード前にマスクされます。閲覧できるのは Nous スタッフと許可された Discord モデレーターのみで、14 日後に自動削除されます。',
+    upload: 'アップロード',
+    uploading: 'アップロード中…',
+    cancel: 'キャンセル',
+    close: '閉じる',
+    copyLink: 'リンクをコピー',
+    uploadIdFallback: id => `表示リンクが返されませんでした — サポートにアップロード ID ${id} をお伝えください`,
+    doneTitle: '診断情報を送信しました',
+    doneDescription:
+      'バンドルは非公開でアップロードされました。サポートスレッドで以下のリンクを共有すると、チームがログを確認できます。',
+    failedTitle: 'アップロードに失敗しました',
+    failedHint:
+      'ターミナルから `hermes debug share --nous` を実行するか、`hermes debug share --local` でアップロードせずにレポートを表示することもできます。',
+    handoffLead: '続きは次の場所で:',
+    links: {
+      github: 'GitHub Issues',
+      portal: 'Nous Portal サポート',
+      discord: 'Discord'
+    }
+  },
+
   titlebar: {
     hideSidebar: 'サイドバーを非表示',
     showSidebar: 'サイドバーを表示',
@@ -209,6 +243,7 @@ export const ja = defineLocale({
     swapSidebarSides: 'サイドバーの向きを切り替え',
     hideRightSidebar: '右サイドバーを非表示',
     showRightSidebar: '右サイドバーを表示',
+    unreadSessions: count => (count === 1 ? '未読セッション 1 件' : `未読セッション ${count} 件`),
     muteHaptics: '触覚フィードバックをオフ',
     unmuteHaptics: '触覚フィードバックをオン',
     openSettings: '設定を開く',
@@ -238,6 +273,7 @@ export const ja = defineLocale({
       providerAccounts: 'アカウント',
       providerApiKeys: 'API キー',
       providerCustomEndpoints: 'カスタムエンドポイント',
+      providerLocalModels: 'ローカルモデル',
       gateway: 'ゲートウェイ',
       apiKeys: 'ツールとキー',
       keybinds: 'キーボードショートカット',
@@ -336,6 +372,11 @@ export const ja = defineLocale({
       sessionDensityCompact: 'コンパクト',
       sessionDensityComfortable: '標準',
       sessionDensityDetailed: '詳細',
+      tabStripTitle: 'タブバー',
+      tabStripDesc: 'ゾーンの上にタブを表示します。自動ではペインが1つのときに隠します。',
+      tabStripAuto: '自動',
+      tabStripAlways: '常に表示',
+      tabStripNever: '表示しない',
       terminalFontTitle: 'ターミナルフォント',
       terminalFontDesc:
         'Desktop のターミナルで使用するインストール済みフォントを選びます。Nerd Font は Powerlevel10k とシェルアイコンを表示できます。空欄では内蔵の JetBrains Mono を使用します。',
@@ -343,10 +384,12 @@ export const ja = defineLocale({
       terminalFontPreview: 'グリフのプレビュー',
       terminalFontReset: '既定値を使用',
       translucencyTitle: 'ウィンドウの透過',
-      translucencyDesc: 'ウィンドウ全体を透過させてデスクトップを表示します。macOS と Windows のみ。',
-      translucencyGlassDesc: 'マットガラス: デスクトップが滑らかなぼかしとして透け、テキストは鮮明なまま。macOS のみ。',
+      translucencyDesc: 'テキストも含めウィンドウ全体を透過させてデスクトップを表示します。',
+      translucencyGlassDesc: 'マットガラス: デスクトップが滑らかなぼかしとして透け、テキストは鮮明なまま。',
       translucencyModeClear: 'クリア',
       translucencyModeGlass: 'ガラス',
+      translucencyTintTitle: '色味',
+      translucencyFadeTitle: 'フェード',
       translucencyFrostTitle: 'くもりの質感',
       translucencyFrost: {
         'under-window': '深い',
@@ -361,6 +404,8 @@ export const ja = defineLocale({
       },
       backdropTitle: 'チャット背景',
       backdropDesc: '会話の背後に表示される淡い彫像の画像。',
+      introSplashTitle: 'イントロ表示',
+      introSplashDesc: '空のチャットに表示されるワードマークとプロンプト。',
       reactionsTitle: 'メッセージリアクション',
       reactionsDesc:
         'iMessage風の絵文字タップバック — メッセージにリアクションでき、Hermesもあなたのメッセージにリアクションします。',
@@ -923,6 +968,98 @@ export const ja = defineLocale({
         curator: { label: 'キュレーター', hint: 'スキル使用レビュー' }
       }
     },
+    localModels: {
+      title: 'ローカルモデル',
+      runtimeTitle: 'ローカルランタイム',
+      runtimeReady: backend => `準備完了 · ${backend}`,
+      serverRunning: '実行中',
+      runtimeInstalled: 'llama.cpp ランタイムをインストール済み',
+      runtimeInstalledDetail: (tag, backend) =>
+        `ビルド ${tag}、${backend} バックエンド。サーバーは Hermes が起動・管理します。`,
+      installTitle: 'ローカルランタイムをインストール',
+      installDetail:
+        'llama.cpp 推論エンジン（数百 MB）をダウンロードします。ダウンロードしたモデルはすべてこのマシン上で動作します——アカウント不要、データが外部に送られることはありません。',
+      installAction: 'ランタイムをインストール',
+      installing: 'ランタイムをインストール中…',
+      installFailed: 'ランタイムのインストールに失敗しました',
+      hardwareTitle: 'このマシン',
+      hardwareLoading: 'ハードウェアを確認中…',
+      vram: label => `GPU メモリ ${label}`,
+      ram: label => `RAM ${label}`,
+      unifiedMemory: 'ユニファイドメモリ',
+      modelsTitle: 'モデル',
+      recommended: 'おすすめ',
+      downloaded: 'ダウンロード済み',
+      downloadAction: size => `ダウンロード · ${size}`,
+      downloadProgress: (done, total) => `${done} / ${total}`,
+      downloadDoneToast: model => `${model} の準備ができました。`,
+      installDoneToast: 'ローカルランタイムのインストールが完了しました。',
+      useAction: '使用する',
+      activePill: 'デフォルト',
+      updateTitle: 'エンジンの更新があります',
+      updateDetail: (next, current) => `新しい llama.cpp ビルド（${next}）をインストールできます——現在は ${current} です。ダウンロード中もモデルは引き続き使えます。`,
+      updateAction: 'エンジンを更新',
+      updating: 'エンジンを更新中…',
+      upToDateTitle: 'エンジンは最新です',
+      upToDateDetail: (tag, backend) => `llama.cpp ${tag}（${backend}）で動作中——Hermes が提供する最新ビルドです。`,
+      updateToast: next => `ローカルエンジンの新しいビルド（${next}）があります。設定 → ローカルモデル から更新できます。`,
+      activeDetail: '新しいチャットはこのモデルを使用——最初のメッセージ送信時に読み込みます',
+      activeNotLoaded: '最初のメッセージで読み込みます',
+      loadedPill: '読み込み済み',
+      placementResident: 'すべて GPU 上',
+      placementSpilled: '一部 RAM 上',
+      placementResidentTip: 'このコンテキストウィンドウで GPU メモリ内で完全に動作しています — フルスピード。',
+      placementSpilledTip: 'モデルの一部がシステム RAM から動作しています — 動作しますが遅くなります。よりコンパクトなビルドか小さいコンテキストなら完全に収まります。',
+      loadingPill: '読み込み中…',
+      ejectTip: 'GPU メモリを解放（必要時に再読み込み）',
+      ejected: 'モデルをアンロードしました——GPU メモリを解放しました。',
+      ejectFailed: 'モデルをアンロードできませんでした',
+      stopServer: 'オフにする',
+      startServer: 'オンにする',
+      runtimeRunningDetail: 'ローカルサーバーが実行中です。オフにすると GPU メモリを全て解放し、再度オンにするまで新しいチャットはローカルモデルを使用しません。',
+      serverStopped: 'ローカルサーバーを停止しました——GPU メモリを解放しました。',
+      serverStarted: 'ローカルサーバー実行中。',
+      serverStopFailed: 'ローカルサーバーを停止できませんでした',
+      serverStartFailed: 'ローカルサーバーを起動できませんでした',
+      activating: '起動中…',
+      activateFailed: model => `${model} への切り替えに失敗しました`,
+      activateDoneToast: model => `新しいチャットは ${model} を使用します。`,
+      downloadFailed: model => `${model} のダウンロードに失敗しました`,
+      pillFitsGpu: 'GPU に完全に収まります',
+      pillUsesRam: 'システム RAM を使用',
+      pillTooBig: 'このマシンには大きすぎます',
+      browseTitle: 'さらにモデルを探す',
+      browseHint: 'Hugging Face 全体を検索できます。ここでダウンロードしたモデルは自動でマシンに合わせて動作しますが、当方でのテストは行われていません。',
+      browsePlaceholder: 'モデル名または作者で検索…',
+      browseSearching: 'Hugging Face を検索中',
+      browseListing: 'モデルファイルを読み込み中',
+      browseShowFiles: 'ファイルを表示',
+      browseRefresh: '更新',
+      browseDownloads: 'ダウンロード',
+      browseLikes: 'いいね',
+      browseGated: 'Hugging Face へのサインインが必要',
+      browseNoGguf: '互換性のあるモデルファイルが見つかりません。',
+      browseFitUnknown: '適合状況は不明',
+      browseAlreadyDownloaded: 'ダウンロード済みです。',
+      addedByYou: 'あなたが追加',
+      browseDownloadStarted: '{name} をダウンロード中',
+      browseDownloadAria: '{name} をダウンロード',
+      sideloadButton: 'モデルファイルを追加',
+      sideloadTitle: 'GGUF モデルファイルを選択',
+      sideloadDone: '{name} を追加しました。',
+      sideloadAlreadyPresent: '既にライブラリにあります。',
+      pillFullContext: max => `フル ${max} コンテキスト`,
+      pillFullContextTip: '最初からモデルの完全なコンテキストウィンドウで動作します',
+      pillStarts: start => `${start} から開始`,
+      pillStartsTip: '開始時のコンテキストウィンドウ——ハードウェアに合わせて高速に動作するサイズです',
+      pillUpTo: max => `最大 ${max}`,
+      pillGrowsTip: '会話が必要とするにつれて自動的に拡張します',
+      pillVision: '画像対応',
+      deleteAction: 'モデルを削除',
+      deleteConfirm: model => `${model} をディスクから削除しますか？`,
+      deleted: model => `${model} を削除しました。`,
+      deleteFailed: '削除に失敗しました'
+    },
     providers: {
       connectAccount: 'アカウントを接続',
       haveApiKey: 'API キーをお持ちですか？',
@@ -1448,6 +1585,8 @@ export const ja = defineLocale({
     allProfiles: 'すべてのプロファイル',
     showAllProfiles: 'すべてのプロファイルを表示',
     switchToProfile: name => `${name} に切り替え`,
+    switchToConnection: name => `${name} に切り替え`,
+    switchConnectionFailed: name => `${name} に接続できませんでした`,
     manageProfiles: 'プロファイルを管理…',
     actions: 'アクション',
 
@@ -1913,6 +2052,7 @@ export const ja = defineLocale({
     endShort: '終了',
     stopDictation: '口述を停止',
     transcribingDictation: '口述を文字起こし中',
+    voiceControls: '音声',
     voiceDictation: '音声口述',
     speakReplies: '返信を読み上げる',
     stopSpeakingReplies: '返信の読み上げを停止',
@@ -2060,6 +2200,7 @@ export const ja = defineLocale({
       openPr: 'PR を開く',
       ghMissing: 'PR を開くには GitHub CLI (gh) をインストールしてサインインしてください',
       agentShip: 'Hermes にコミットと PR を任せる',
+      agentShipUnavailable: 'この変更を持つチャットが画面にありません。',
       agentShipPrompt:
         '現在の変更を確認し、分かりやすい Conventional Commits 形式でコミットし、ブランチをプッシュして、プルリクエストを作成してください。',
       newBranch: '新しいブランチ',
@@ -2172,6 +2313,14 @@ export const ja = defineLocale({
     pidLabel: pid => `PID ${pid}`,
     technicalDetails: '技術的な詳細',
     notNow: '今は後で',
+    clientAlsoBehindTitle: 'デスクトップアプリが古くなっています',
+    clientAlsoBehindMessage:
+      'バックエンドは最新ですが、このデスクトップアプリはまだ古いバージョンです。最新の修正を反映するには更新してください。',
+    clientAlsoBehindAction: 'デスクトップアプリを更新',
+    everythingDispatched: '更新を開始しました',
+    everythingSkipped: 'スキップ',
+    everythingRowFailed: '更新に失敗しました',
+    everythingFanoutFailedTitle: '他のインスタンスを更新できませんでした',
     applyStatus: {
       preparing: 'バックエンドを更新しています…',
       pulling: 'バックエンドを更新中…',
@@ -2273,6 +2422,8 @@ export const ja = defineLocale({
     connected: '接続済み',
     featuredPitch: '1 つのサブスクリプションで 300 以上の最先端モデル — Hermes を実行するための推奨方法',
     fireworksPitch: '直接モデル API — Fireworks がホストする最先端モデル',
+    localModelsTitle: 'モデルをローカルで実行',
+    localModelsPitch: 'アカウント不要——モデルをダウンロードしてこのマシンで実行',
     openRouterPitch: '1 つのキーで数百のモデル — 堅実なデフォルト',
     apiKeyOptions: {
       fireworks: {
@@ -2456,6 +2607,15 @@ export const ja = defineLocale({
       openStarmap: 'メモリグラフを開く',
       turnRunning: '実行中',
       contextUsage: 'コンテキスト使用状況',
+      systemResources: {
+        title: 'システムリソース',
+        loading: 'リソース…',
+        gpuUtilization: 'GPU 使用率',
+        gpuMemory: 'GPU メモリ',
+        ram: 'RAM',
+        unifiedNote: 'ユニファイドメモリ——GPU とシステムがこのプールを共有します。',
+        toggle: 'システムリソース'
+      },
       contextUsagePanel: {
         categories: {
           conversation: '会話',
@@ -2623,8 +2783,8 @@ export const ja = defineLocale({
   },
 
   zones: {
-    showHeader: 'ヘッダーを表示',
-    hideHeader: 'ヘッダーを隠す',
+    showTabStrip: 'タブを表示',
+    hideTabStrip: 'タブを隠す',
     showStripTab: title => `${title} を表示`,
     hideStripTab: title => `${title} を隠す`,
     lastTabKeptTitle: '最後のタブは残ります',
@@ -2667,6 +2827,30 @@ export const ja = defineLocale({
     tabCount: count => `${count} 個のタブ`
   },
 
+  contextMenu: {
+    link: {
+      openInApp: 'アプリ内ブラウザーで開く',
+      openExternal: '外部ブラウザーで開く',
+      copyUrl: 'URL をコピー',
+      copyResolvedUrl: '解決後の URL をコピー'
+    },
+    image: {
+      copyImage: '画像をコピー',
+      copyImageAddress: '画像アドレスをコピー',
+      saveImageAs: '画像を名前を付けて保存…'
+    },
+    edit: {
+      cut: '切り取り',
+      paste: '貼り付け',
+      selectAll: 'すべて選択',
+      addToDictionary: '辞書に追加'
+    },
+    page: {
+      copyPageUrl: 'ページの URL をコピー',
+      inspectElement: '要素を調査'
+    }
+  },
+
   assistant: {
     thread: {
       loadingSession: 'セッションを読み込み中',
@@ -2689,6 +2873,24 @@ export const ja = defineLocale({
       branchNewChat: '新しいチャットでブランチ',
       react: 'リアクション',
       dismissError: 'エラーを閉じる',
+      errorLayers: {
+        auth: '認証エラー',
+        billing: 'クレジット不足',
+        disk: 'ディスク容量不足',
+        endpoint: 'カスタムエンドポイントのエラー',
+        gateway: 'ゲートウェイのエラー',
+        generic: 'ターンが失敗しました',
+        provider: 'プロバイダーのエラー',
+        runtime: 'ローカルランタイムのエラー',
+        streaming: 'ストリーミング接続のエラー'
+      },
+      errorRetry: '再試行',
+      errorSwitchProvider: 'プロバイダーを切り替え',
+      errorOpenLogs: 'ログを開く',
+      errorOpenLogsFailed: 'ログフォルダを開けませんでした',
+      errorOpenDesktopLogs: 'デスクトップのログを開く',
+      errorCopyDiagnostics: 'エラー詳細をコピー',
+      errorSendDiagnostics: '診断情報を送信',
       filesChanged: count => `${count} 件のファイルを変更`,
       reviewChanges: 'レビュー',
       readAloudFailed: '読み上げに失敗しました',
@@ -2733,6 +2935,9 @@ export const ja = defineLocale({
       skip: 'スキップ',
       skipped: 'スキップ済み',
       continueLabel: '続行',
+      confirmAndContinueLabel: '確定して続行',
+      answeredBadge: '回答済み',
+      questionProgress: (answered, total) => `${total}問中${answered}問回答済み`,
       lateAnswer: (question, choice) => `「${question}」について — 私の回答: ${choice}`,
       lateAnswerTip: 'この回答をフォローアップメッセージとして下書きします',
       lateAnswerHint: 'この質問はもう回答を待っていません。選択肢を選ぶとフォローアップメッセージとして下書きされます。'

@@ -25,9 +25,30 @@
   branch ? null,
   dirty ? false,
   distance ? null,
+  # Environment to bake into the launcher. A GUI launcher reads none of the
+  # shell profile, so a variable that an interactive shell exports does not
+  # reach an app that the desktop menu starts. The Home Manager module passes
+  # HERMES_HOME and HERMES_MANAGED here, which gives the app the same state
+  # directory as the services.
+  extraEnv ? { },
+  # Shell lines to run before the app starts. A secret belongs here and never
+  # in extraEnv: makeWrapper writes a --set value into the Nix store, which
+  # all users can read. A --run line reads the value from a runtime path at
+  # each start instead.
+  extraRun ? [ ],
   ...
 }:
 let
+  # Each flag goes on its own continued line, and the leading backslash is
+  # inside the generated string. An empty attribute set then adds no text at
+  # all, and cannot leave a backslash above a blank line. That fault ends the
+  # makeWrapper command early, and the next flag runs as a shell command.
+  extraEnvFlags = lib.concatMapStrings (
+    name: " \\\n      --set ${name} ${lib.escapeShellArg (toString extraEnv.${name})}"
+  ) (lib.attrNames extraEnv);
+
+  extraRunFlags = lib.concatMapStrings (line: " \\\n      --run ${lib.escapeShellArg line}") extraRun;
+
   # The Electron manifest identifies the UI project, but Hermes's version is
   # owned by the root Python package. Keep the Nix derivation and the manifest
   # shipped to Electron aligned with that one canonical value.
@@ -237,7 +258,7 @@ let
             ''
               makeWrapper ${lib.getExe electron} $out/bin/${binName} \
                 --add-flags "$out/share/hermes-desktop" \
-                --set ELECTRON_IS_DEV 0
+                --set ELECTRON_IS_DEV 0${extraEnvFlags}${extraRunFlags}
             ''
           else
             # Set HERMES_DESKTOP_HERMES to the absolute path of the
@@ -246,7 +267,7 @@ let
               makeWrapper ${lib.getExe electron} $out/bin/${binName} \
                 --add-flags "$out/share/hermes-desktop" \
                 --set HERMES_DESKTOP_HERMES "${lib.getExe hermesAgent}" \
-                --set ELECTRON_IS_DEV 0
+                --set ELECTRON_IS_DEV 0${extraEnvFlags}${extraRunFlags}
             ''
         }
 

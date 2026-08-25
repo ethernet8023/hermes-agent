@@ -198,6 +198,7 @@ CLIENT_INSTALL_METHODS: frozenset[str] = frozenset({
     "desktop-app",
     "docker",
     "git",
+    "home-manager",
     # Legacy values older clients still send; the relay keeps accepting them.
     "homebrew",
     "nix",

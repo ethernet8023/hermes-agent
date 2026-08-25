@@ -34,7 +34,7 @@ Substrate facts (verified May 2026):
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Optional
+from typing import Any, Optional
 
 
 # ─── Public types ───────────────────────────────────────────────────────
@@ -199,6 +199,17 @@ def build_models_payload(
         for_picker=for_picker,
         excluded_providers=ctx.excluded_providers or [],
     )
+
+    # Managed local runtime: staged GGUFs are selectable like any provider's
+    # models. list_authenticated_providers can't know about them (no
+    # credential, no custom_providers entry — the credential is
+    # reachability), so inject the row here where every picker surface
+    # inherits it. Present whenever models are staged; picking one routes
+    # through the llamacpp alias -> managed/detected server resolution.
+    local_row = _local_runtime_row(ctx)
+    if local_row is not None:
+        rows = [r for r in rows if str(r.get("slug", "")).lower() != "llamacpp"]
+        rows.append(local_row)
 
     moa_row = _moa_provider_row(ctx.current_provider)
     if moa_row is not None:
@@ -402,14 +413,54 @@ def format_aux_picker_entries(
     return entries
 
 
+def _reasoning_catalog_reader(slug: str):
+    """Per-model reasoning-capability reader for aggregators that publish one.
+
+    Cache-only — building the picker payload must never block on HTTP. A cold
+    cache warms in the background so the next open is accurate; until then the
+    model reports no restriction and the UI offers the full scale.
+    """
+    try:
+        from hermes_cli.models import (
+            nous_model_reasoning_capabilities,
+            openrouter_model_reasoning_capabilities,
+            warm_nous_reasoning_caps_async,
+            warm_openrouter_reasoning_caps_async,
+        )
+    except Exception:
+        return None
+
+    if slug == "nous":
+        warm_nous_reasoning_caps_async()
+        return nous_model_reasoning_capabilities
+    if slug == "openrouter":
+        warm_openrouter_reasoning_caps_async()
+        return openrouter_model_reasoning_capabilities
+    return None
+
+
 def _apply_capabilities(rows: list[dict]) -> None:
-    """Attach a ``{model: {fast, reasoning}}`` map to each provider row.
+    """Attach a ``{model: {fast, reasoning, ...}}`` map to each provider row.
 
     `fast` mirrors ``model_supports_fast_mode`` (the same gate the runtime
     enforces). `reasoning` comes from the models.dev catalog when known and
     defaults to True otherwise — the effort dial is broadly accepted and a
     no-op on models that ignore it, whereas hiding it from a capable-but-
     uncatalogued model is the worse failure.
+
+    Aggregators that publish per-model reasoning detail add
+    `can_disable_reasoning`, False on reasoning-mandatory routes whose upstream
+    answers a disable with HTTP 400. Omitted when the catalog doesn't say,
+    which the UI reads as "no restriction known". Such a catalog also overrides
+    `reasoning` itself when it reports a route that takes no reasoning
+    parameter — a definitive negative from the provider actually serving the
+    model outranks the models.dev inference.
+
+    The catalog's `supported_efforts` list is deliberately NOT forwarded: it
+    under-reports. The Portal accepts and honors levels a route doesn't
+    advertise (``z-ai/glm-5.3`` publishes ``max, high, low`` yet serves
+    ``minimal`` at its lowest thinking), so filtering the picker by that list
+    would hide levels that demonstrably work.
     """
     from hermes_cli.models import model_supports_fast_mode
 
@@ -420,7 +471,8 @@ def _apply_capabilities(rows: list[dict]) -> None:
 
     for row in rows:
         slug = row.get("slug") or ""
-        caps: dict[str, dict[str, bool]] = {}
+        caps: dict[str, dict[str, Any]] = {}
+        read_reasoning_catalog = _reasoning_catalog_reader(slug.lower())
 
         for model in row.get("models") or []:
             reasoning = True
@@ -432,10 +484,25 @@ def _apply_capabilities(rows: list[dict]) -> None:
                 except Exception:
                     reasoning = True
 
-            caps[model] = {
+            entry: dict[str, Any] = {
                 "fast": bool(model_supports_fast_mode(model)),
                 "reasoning": reasoning,
             }
+
+            if reasoning and read_reasoning_catalog is not None:
+                try:
+                    detail = read_reasoning_catalog(model)
+                except Exception:
+                    detail = None
+                if detail and not detail.get("supports_reasoning"):
+                    # For a route it serves, the aggregator's own catalog beats
+                    # models.dev: no reasoning parameter means no reasoning
+                    # controls, so there is no disable to describe either.
+                    entry["reasoning"] = False
+                elif detail:
+                    entry["can_disable_reasoning"] = not detail.get("mandatory")
+
+            caps[model] = entry
 
         row["capabilities"] = caps
 
@@ -626,6 +693,15 @@ def _filter_explicit_provider_rows(rows: list[dict], ctx: ConfigContext) -> list
         if current_slug and slug == current_slug:
             kept.append(row)
             continue
+        if row.get("source") == "local-runtime":
+            # Managed local models are explicit configuration by existence:
+            # the user downloaded gigabytes into the machine-scoped models
+            # dir. There is deliberately no config credential to find
+            # (credential is reachability), so without this clause the row
+            # only survives on the profile where Use was last clicked —
+            # every other profile loses local models from its picker.
+            kept.append(row)
+            continue
         if slug == "moa":
             # MoA is a virtual routing mode, not an independently configured
             # provider. Hide it from explicit-only pickers unless it is the
@@ -635,9 +711,25 @@ def _filter_explicit_provider_rows(rows: list[dict], ctx: ConfigContext) -> list
             if _raw_config_has_enabled_moa_preset():
                 kept.append(row)
             continue
+        if _provider_is_keyless(slug):
+            # Keyless providers (opencode-free) require no configuration at
+            # all — there is nothing to "explicitly configure", and hiding
+            # them would defeat their purpose (zero-setup discoverability).
+            kept.append(row)
+            continue
         if is_provider_explicitly_configured(slug):
             kept.append(row)
     return kept
+
+
+def _provider_is_keyless(slug: str) -> bool:
+    """True when the provider's Hermes overlay declares it keyless."""
+    try:
+        from hermes_cli.providers import HERMES_OVERLAYS
+        overlay = HERMES_OVERLAYS.get(slug)
+        return bool(overlay is not None and getattr(overlay, "keyless", False))
+    except Exception:
+        return False
 
 
 def _raw_config_has_enabled_moa_preset() -> bool:
@@ -810,8 +902,9 @@ def _apply_pricing(
             # Sale chrome is Nous Portal-only. Other providers (OpenRouter,
             # Novita, …) never get discount_percent / was_* even if a nested
             # pricing.original somehow appeared in their catalog. Free / $0
-            # models never get sale chrome either — even if original leaked.
-            if slug == "nous" and not is_free:
+            # models get flat -100% chrome (was_* only when the gateway
+            # served an original).
+            if slug == "nous":
                 sale = compute_sale_discount(
                     inp_raw, out_raw, p.get("original")
                 )
@@ -850,6 +943,54 @@ def _apply_pricing(
                 # is never blocked from picking a model.
                 row["free_tier"] = False
                 row["unavailable_models"] = []
+
+
+def _local_runtime_row(ctx: "ConfigContext") -> dict | None:
+    """Build the ``llamacpp`` provider row from staged local models.
+
+    Present whenever GGUFs are staged in the managed models directory —
+    downloaded models must be selectable even before the server is running
+    (selection starts it via the runtime_provider seam / activate flow).
+    Returns ``None`` when nothing is staged.
+    """
+    try:
+        from hermes_cli.local_runtime.bootstrap import staged_model_ids
+
+        staged = staged_model_ids()
+        if not staged:
+            return None
+        current = (ctx.current_provider or "").strip().lower() in (
+            "llamacpp", "llama.cpp", "llama-cpp")
+        if not current:
+            # A LIVE session on the managed server reports provider "custom"
+            # (the resolution seam's label) with the managed base_url. Match
+            # on the endpoint so the picker still marks this row current —
+            # otherwise the session the user is chatting in shows no
+            # selection.
+            try:
+                from hermes_cli.local_runtime.endpoint import _state_endpoint
+
+                managed = _state_endpoint()
+                current = bool(
+                    managed
+                    and (ctx.current_base_url or "").strip().rstrip("/")
+                    == managed["base_url"].rstrip("/"))
+            except Exception:
+                current = False
+        return {
+            "slug": "llamacpp",
+            "name": "Local (llama.cpp)",
+            "is_current": current,
+            "is_user_defined": False,
+            "models": staged,
+            "total_models": len(staged),
+            "source": "local-runtime",
+            "authenticated": True,       # the credential is reachability
+            "auth_type": "local",
+            "warning": None,
+        }
+    except Exception:
+        return None
 
 
 def _moa_provider_row(current_provider: str = "") -> dict | None:

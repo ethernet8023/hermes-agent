@@ -30,6 +30,7 @@ import {
 } from '@/store/gateway'
 import { registerGatewayReconnect } from '@/store/gateway-reconnect'
 import { $gatewaySwitching, wipeSessionListsForGatewaySwitch } from '@/store/gateway-switch'
+import { checkLocalRuntimeUpdate, watchLocalRuntimeJobs } from '@/store/local-runtime-jobs'
 import { notify, notifyError } from '@/store/notifications'
 import {
   $activeGatewayProfile,
@@ -52,6 +53,7 @@ import {
   $attentionSessionIds,
   $workingSessionIds,
   liveSessionScopes,
+  reconcileBusyStatesOnReconnect,
   recordSessionEventScope,
   resetTileRuntimeBindings
 } from '@/store/session-states'
@@ -252,6 +254,12 @@ export function useGatewayBoot({
         // A respawned backend re-mints (recycles) runtime ids, so any tile's
         // bound runtime id is now stale — drop them so each tile re-resumes.
         resetTileRuntimeBindings()
+        // Same staleness, other half: pre-reconnect busy flags are keyed by
+        // those dead runtime ids and would never receive their terminal
+        // busy:false — clear them or the sidebar running arc lies forever
+        // (#53902/#73082). A genuinely live turn re-asserts busy on its next
+        // post-reconnect event.
+        reconcileBusyStatesOnReconnect()
         // Resync state that may have moved on the backend while we were asleep.
         await callbacksRef.current.refreshHermesConfig().catch(() => undefined)
         await callbacksRef.current.refreshSessions().catch(() => undefined)
@@ -407,6 +415,12 @@ export function useGatewayBoot({
         ])
         completeDesktopBoot()
         bootCompleted = true
+        // Rediscover local-runtime jobs (model downloads, runtime installs)
+        // that were running before a reload — the backend registry is the
+        // authority; this just resumes following it.
+        watchLocalRuntimeJobs()
+        // One-per-session engine-update pointer (enabled runtimes only).
+        void checkLocalRuntimeUpdate()
       } catch (err) {
         if (!cancelled) {
           const message = err instanceof Error ? err.message : String(err)

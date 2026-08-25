@@ -2729,6 +2729,27 @@ class GatewaySlashCommandsMixin:
             state = mgr.resume()
             if state is None:
                 return t("gateway.goal.no_resume")
+            # Resume must restart work, not just flip persisted state
+            # (#75362): enqueue the canonical continuation through the
+            # adapter FIFO — the same path the post-turn judge uses — so
+            # the next turn fires as soon as this reply is delivered. A
+            # real user message already queued still preempts naturally,
+            # and pause/clear's stale-continuation cleanup recognizes it.
+            prompt = mgr.next_continuation_prompt()
+            try:
+                adapter = self.adapters.get(event.source.platform) if event.source else None
+                _quick_key = self._session_key_for_source(event.source) if event.source else None
+                if prompt and adapter and _quick_key:
+                    cont_event = MessageEvent(
+                        text=prompt,
+                        message_type=MessageType.TEXT,
+                        source=event.source,
+                        message_id=None,
+                        channel_prompt=None,
+                    )
+                    self._enqueue_fifo(_quick_key, cont_event, adapter)
+            except Exception as exc:
+                logger.debug("goal resume: continuation enqueue failed: %s", exc)
             return t("gateway.goal.resumed", goal=state.goal)
 
         if lower in {"clear", "stop", "done"}:
@@ -5952,8 +5973,11 @@ class GatewaySlashCommandsMixin:
                 import textwrap
                 from hermes_cli._subprocess_compat import windows_detach_popen_kwargs
 
-                # hermes_cmd is a list of argv parts we can pass directly
-                # (no shell-quoting needed).
+                # Invoke the updater as a module under this interpreter rather
+                # than through hermes_cmd (venv\Scripts\hermes.exe): the shim
+                # launcher holds its own file open for the whole run, and the
+                # update has to replace it. Going through python.exe maps no
+                # shim, so the entry points can be rewritten freely.
                 helper = textwrap.dedent(
                     """
                     import os, subprocess, sys
@@ -5973,7 +5997,8 @@ class GatewaySlashCommandsMixin:
                     [
                         sys.executable, "-c", helper,
                         str(output_path), str(exit_code_path),
-                        *hermes_cmd, "update", "--gateway",
+                        sys.executable, "-m", "hermes_cli.main",
+                        "update", "--gateway",
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,

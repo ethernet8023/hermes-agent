@@ -274,6 +274,12 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
     # sets it to a tempdir below; blanking first means a developer's own
     # export cannot survive into a test that deliberately unsets it.
     "HERMES_INSTALL_ROOT",
+    # Injected into subprocess envs by the terminal tool (_make_run_env), so
+    # any test run launched FROM a Hermes agent session inherits them and
+    # hermes_constants home-resolution helpers prefer them over monkeypatched
+    # HOME (test_subprocess_home_isolation red locally, green on CI).
+    "HERMES_REAL_HOME",
+    "TERMINAL_HOME_MODE",
     "HERMES_INTERACTIVE",
     "HERMES_QUIET",
     "HERMES_TOOL_PROGRESS",

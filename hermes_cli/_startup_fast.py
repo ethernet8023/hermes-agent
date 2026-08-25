@@ -182,12 +182,43 @@ def read_install_method() -> str | None:
     return "source" if has_git else None
 
 
-def print_fast_version_info() -> None:
-    from hermes_cli import __release_date__, __version__
+def print_fast_version_info(*, check_updates: bool = True) -> None:
+    """THE canonical ``hermes --version`` output (also used by /version).
 
-    print(f"Hermes Agent v{__version__} ({__release_date__})")
+    The static lines print instantly from stdlib-only probes; everything
+    heavier (upstream SHA in the version line, authoritative install-method
+    detection, the update-status check) is lazy-imported AFTER the first
+    line is already on screen, so perceived latency stays instant while the
+    output carries the full information that used to require the (removed)
+    ``hermes version`` subcommand. Every lazy block degrades gracefully —
+    a broken/heavy import can never take the basic version output down.
+    """
+    # Line 1: registry-owned banner label (includes "· upstream <sha>" for
+    # git installs). banner.py keeps rich/prompt_toolkit lazy, so this
+    # import is light; fall back to the plain label if anything fails.
+    try:
+        from hermes_cli.banner import format_banner_version_label
+
+        print(format_banner_version_label())
+    except Exception:
+        from hermes_cli import __release_date__, __version__
+
+        print(f"Hermes Agent v{__version__} ({__release_date__})")
+
     print(f"Install directory: {project_root_str()}")
-    install_method = read_install_method()
+
+    # Install method: authoritative resolver first (code-scoped stamp →
+    # managed → nix → git → pip; also self-heals poisoned shared-home
+    # 'docker' stamps). Fall back to the cheap stdlib stamp probe only if
+    # the resolver import/run fails.
+    try:
+        from pathlib import Path
+
+        from hermes_cli.config import detect_install_method
+
+        install_method = detect_install_method(Path(project_root_str()))
+    except Exception:
+        install_method = read_install_method()
     if install_method:
         print(f"Install method: {install_method}")
 
@@ -195,7 +226,30 @@ def print_fast_version_info() -> None:
 
     openai_version = read_openai_version()
     print(f"OpenAI SDK: {openai_version}" if openai_version else "OpenAI SDK: Not installed")
-    print("Run 'hermes version' for update status.")
+
+    if not check_updates:
+        return
+
+    # Update status (synchronous — acceptable since the user asked for
+    # version info). Bounded by check_for_updates' own subprocess/network
+    # timeouts and its 6-hour cache; any failure prints nothing.
+    try:
+        from hermes_cli.banner import UPDATE_AVAILABLE_NO_COUNT, check_for_updates
+        from hermes_cli.config import recommended_update_command
+
+        behind = check_for_updates()
+        if behind == UPDATE_AVAILABLE_NO_COUNT:
+            print(f"Update available — run '{recommended_update_command()}'")
+        elif behind and behind > 0:
+            commits_word = "commit" if behind == 1 else "commits"
+            print(
+                f"Update available: {behind} {commits_word} behind — "
+                f"run '{recommended_update_command()}'"
+            )
+        elif behind == 0:
+            print("Up to date")
+    except Exception:
+        pass
 
 
 def try_fast_version(argv: list[str] | None = None) -> bool:

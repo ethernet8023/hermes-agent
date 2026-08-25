@@ -51,7 +51,7 @@ test('group member session.create is unconditionally hidden too', () => {
   assert.equal(source.includes('$hideBotChats'), false, 'the old pref atom must be gone')
 })
 
-test('hideOwnedBotSessions sweeps canonical chats AND room member sessions', async () => {
+test('hideOwnedBotSessions sweeps room member sessions by id', async () => {
   const start = source.indexOf('function hideOwnedBotSessions()')
   const end = source.indexOf('/** Fetch server-side avatars', start)
   const calls = []
@@ -62,22 +62,34 @@ test('hideOwnedBotSessions sweeps canonical chats AND room member sessions', asy
         return {}
       }
     },
-    $botMeta: { get: () => ({ alpha: { chat: 'chat-a' }, beta: { chat: 'chat-b' }, gamma: {} }) },
     $groupChats: {
       get: () => ({
         Core: { sessions: { alpha: 'room-core-a', beta: 'room-core-b' } },
-        Quiet: { sessions: { alpha: 'chat-a' } }, // duplicate id — must dedupe
+        Quiet: { sessions: { alpha: 'room-core-a' } }, // duplicate id — must dedupe
         Legacy: {} // pre-sessions room shape
       })
-    }
+    },
+    sweepBotProfileSessions: async () => undefined
   }
   const section = source.slice(start, end).concat('\nglobalThis.__h = { hideOwnedBotSessions };\n')
   vm.runInNewContext(section, context, { filename: 'h.js' })
   await context.__h.hideOwnedBotSessions()
 
-  const ids = calls.map(c => c.params.session_id).sort()
-  assert.deepEqual(ids, ['chat-a', 'chat-b', 'room-core-a', 'room-core-b'])
-  assert.ok(calls.every(c => c.method === 'session.set_hidden' && c.params.hidden === true))
+  const ids = calls.filter(c => c.method === 'session.set_hidden').map(c => c.params.session_id).sort()
+  assert.deepEqual(ids, ['room-core-a', 'room-core-b'])
+  const hiddenCalls = calls.filter(c => c.method === 'session.set_hidden')
+  assert.ok(hiddenCalls.every(c => c.params.hidden === true))
+})
+
+test('hideOwnedBotSessions never consults stored canonical pointers', () => {
+  // Canonical Bot Chats are hidden by the TITLE sweep (they are identified by
+  // name, not by pointer) — the load-time reconciliation must not read
+  // $botMeta chat ids or verify them via profiles.list.
+  const start = source.indexOf('function hideOwnedBotSessions()')
+  const end = source.indexOf('// Titles Bot Mode itself mints', start)
+  const section = source.slice(start, end)
+  assert.doesNotMatch(section, /botMeta/)
+  assert.doesNotMatch(section, /profiles\.list/)
 })
 
 test('sweepBotProfileSessions hides Bot-Mode-titled rows per roster bot, and only those', async () => {
@@ -140,9 +152,10 @@ test('hideOwnedBotSessions chains the ownership sweep and survives its absence o
   assert.match(source, /return Promise\.all\(\[known, sweepBotProfileSessions\(\)\.catch\(\(\) => undefined\)\]\)/)
 })
 
-test('the Bots session browser lists with include_hidden', () => {
-  // The one session.list consumer that must see the always-hidden rows.
-  // (Canonical-chat recovery now goes through profiles.list
-  // preferred_session_ids, whose resolver already sees hidden rows.)
-  assert.match(source, /session\.list', \{ profile: botName, limit: PROFILE_SESSION_LIST_LIMIT, include_hidden: true \}/)
+test('the canonical-chat adoption scan lists with include_hidden', () => {
+  // The one session.list consumer that must see the always-hidden rows:
+  // findExistingCanonicalChat (the registry lookup) — canonical Bot Chats
+  // are born hidden, so a visible-only scan would miss the very row that IS
+  // the bot's identity.
+  assert.match(source, /include_hidden: true\s*\}\)\s*const rows = res\?\.sessions \?\? \[\]\s*return rows\.find\(row => isCanonicalBotChatHistory\(row\)\)/)
 })

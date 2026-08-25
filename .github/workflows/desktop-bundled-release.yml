@@ -1,0 +1,912 @@
+name: Desktop Bundled Release
+
+# This workflow builds the desktop installers for each (os, arch) target,
+# in both release variants:
+#
+#   * bundled — the fully self-contained installer. The agent payloads are
+#     baked in: the repo snapshot at the release tag (with the prebuilt
+#     TUI/dashboard JS), uv plus CPython, a ready site-packages tree, and
+#     node. The app runs the backend directly out of its own resources;
+#     nothing installs on the user machine.
+#   * light — "Hermes Light", the remote-only client. No agent payload, no
+#     local backend; it only connects to remote gateways. A separate app
+#     identity (own appId and names) and its own electron-updater channel
+#     (light*.yml), so both variants share one GitHub release.
+#
+# Payload staging stays dormant unless a build sets
+# HERMES_DESKTOP_VARIANT=bundled. This workflow is the only place that
+# sets it.
+#
+# Triggers: workflow_dispatch only, always with an explicit tag.
+#
+# scripts/release.py is the one entry point for a release of either kind.
+# It creates the tag and the draft release, then dispatches this workflow
+# against that tag. One mechanism serves all three paths — a stable
+# release, the scheduled nightly, and a nightly cut by hand — because
+# workflow_dispatch is one of the two events GITHUB_TOKEN is allowed to
+# raise. A tag push is not: the scheduled nightly pushes its tag as
+# github-actions[bot], and a bot-pushed tag starts no workflow run, so a
+# push trigger could never serve the nightly path.
+#
+# Dispatching also removes the ordering hazard the push trigger carried.
+# The build now starts after its release exists, rather than racing the
+# `gh release create` that follows the tag push.
+#
+# Each runner installs site-packages, uv, python, and node natively. This is why the
+# workflow is a matrix: electron-builder needs per-OS runners for signing.
+# As a result, there are no cross-platform wheel-tag tables anywhere.
+#
+# Signing and notarization: if the APPLE_* and CSC_* secrets are absent,
+# electron-builder skips those steps. Thus this workflow produces
+# unsigned artifacts on forks. When the org secrets are set, it produces
+# signed artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bundle (vX.Y.Z or vX.Y.0-nightly.YYYYMMDDHHMMSS). Must exist on the repo.'
+        required: true
+        type: string
+      upload_release:
+        description: 'Attach artifacts to the GitHub release for the tag'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # for the release asset upload; read-only for all other content
+  id-token: write # for the OIDC federated login to Azure (Windows signing)
+
+concurrency:
+  group: desktop-bundled-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Builds-in-progress placeholder ───────────────────────────────────
+  # The first job of the run. It replaces the release body's
+  # <!-- HERMES_BUILDS_TABLE --> marker with a "builds in progress" link
+  # to this run, so a reader of the draft can find the installers-to-be
+  # during the ~90 minutes the matrix takes. The builds-table job
+  # replaces the link with the real tables. No other job needs this one:
+  # a failure here does not stop the build, and the matrix does not wait
+  # for it.
+  builds-pending:
+    name: Mark the builds table as in progress
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Render the placeholder
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HERMES_PAYLOAD_TAG: ${{ inputs.tag || github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # The release exists before the workflow is dispatched, so a
+          # missing one means the release process broke. This is the
+          # earliest job that can report it.
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot mark the builds table"
+            exit 1
+          fi
+          python3 scripts/render-builds-table.py \
+            --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pending-run-url "$RUN_URL"
+
+  build:
+    name: ${{ matrix.variant }} ${{ matrix.target.label }}
+    runs-on: ${{ matrix.target.runner }}
+    # The signing secrets and variables live in this environment, not at
+    # repo level. Its deployment policy (main + v* tags) decides which
+    # refs may receive them. Refs outside the policy fail at job start,
+    # so a workflow_dispatch against a work branch cannot reach the
+    # secrets at all. On repos without the environment, GitHub treats it
+    # as unprotected-and-empty: jobs run, secrets resolve blank, and the
+    # build stays unsigned — the fork/dry-run behavior is unchanged.
+    environment: release-signing
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # variant × target: every target builds both the bundled installer
+        # and the light client. The light lanes skip every payload step and
+        # finish much faster; signing and packaging are identical.
+
+        # light variants are disabled right now. enable later when they're fleshed out more.
+        # variant: [bundled, light]
+        variant: [bundled]
+        target:
+          # electron-builder targets are chosen by the shared script from
+          # the runner platform: linux AppImage, mac dmg+zip, win nsis.
+          - label: linux-x64
+            runner: ubuntu-24.04
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+          - label: darwin-arm64
+            runner: macos-15
+          - label: darwin-x64
+            runner: macos-15-intel
+          - label: win32-x64
+            runner: windows-2025
+          # windows-11-arm carries MSVC arm64 and Rust. The staging
+          # script builds the pinned packages that publish no win_arm64
+          # wheel (cryptography, httptools, ruamel-yaml-clib, pywinpty)
+          # from sdist on this runner; user machines never compile.
+          - label: win32-arm64
+            runner: windows-11-arm
+    env:
+      # The one switch that selects the variant stack. 'bundled' turns on
+      # payload staging; 'light' builds the remote-only client under its
+      # own app identity (electron-builder.config.cjs overlay).
+      HERMES_DESKTOP_VARIANT: ${{ matrix.variant }}
+      HERMES_PAYLOAD_TAG: ${{ inputs.tag || github.ref_name }}
+      # Redirect the electron-builder and @electron/get caches into the
+      # workspace so one actions/cache step below can cover both on every
+      # OS. @electron/get historically honored electron_config_cache;
+      # newer versions read ELECTRON_CACHE — set both.
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      electron_config_cache: ${{ github.workspace }}/.cache/electron
+    steps:
+      # disable spotlight and XProtect. for speed and dmg detaching flakiness
+      # both of thsese are documented as reasons for dmg detach failures
+      # ("hdiutil: couldn't eject — Resource busy")
+      - name: Disable Spotlight indexing & XProtect
+        if: startsWith(matrix.target.label, 'darwin-')
+        shell: bash
+        run: |
+          sudo mdutil -a -i off || true
+          echo killing...; sudo pkill -9 XProtect >/dev/null || true;
+          echo waiting...; while pgrep XProtect; do sleep 3; done;
+
+      # Exclude the build write paths from Defender's real-time scanning.
+      # npm ci writes ~1300 packages of small files; on the windows-11-arm
+      # runner image that step measured 11-14 MINUTES against 33-60s on x64
+      # for the same lockfile with a warm npm http cache — a file-write-path
+      # slowdown, which is Defender's signature. The x64 images ship with
+      # runner exclusions this image appears to lack.
+      #
+      # The workspace alone is NOT enough: run 32301107652 measured 650-700s
+      # with the workspace exclusion confirmed applied. npm ci stages every
+      # tarball through the content-addressable cache (%LocalAppData%\
+      # npm-cache\_cacache) and extracts under %TEMP% — both outside
+      # $GITHUB_WORKSPACE, both scanned per-file. Exclude those write paths
+      # too. Best-effort (try / catch): a hardened future image that denies
+      # the call should not fail the build, just run slow like today.
+      - name: Exclude build write paths from Defender scanning
+        if: startsWith(matrix.target.label, 'win32-')
+        shell: powershell
+        run: |
+          $paths = @(
+            $env:GITHUB_WORKSPACE,
+            $env:RUNNER_TEMP,
+            (npm config get cache)
+          )
+          foreach ($p in $paths) {
+            try {
+              Add-MpPreference -ExclusionPath $p
+              Write-Host "Defender exclusion added for $p"
+            } catch {
+              Write-Host "Defender exclusion not applied for $p ($($_.Exception.Message)) - continuing"
+            }
+          }
+          try {
+            Write-Host "Windows defender disabled."
+            Set-MpPreference -DisableRealtimeMonitoring $true
+          } catch {
+            Write-Host "Could not disable windows defender"
+          }
+
+      - name: Validate tag shape
+        shell: bash
+        run: |
+          case "$HERMES_PAYLOAD_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*-nightly.20[0-9][0-9][0-9][0-9][0-9][0-9]*) echo "nightly tag: $HERMES_PAYLOAD_TAG" ;;
+            v[0-9]*.[0-9]*.[0-9]*) echo "tag: $HERMES_PAYLOAD_TAG" ;;
+            *) echo "::error::'$HERMES_PAYLOAD_TAG' is not a release tag (vX.Y.Z or vX.Y.0-nightly.YYYYMMDDHHMMSS)"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.HERMES_PAYLOAD_TAG }}
+          # stage-agent-payloads clones the payload repo from this checkout
+          # at the tag. A depth-1 checkout at the tag is sufficient, but the
+          # tag ref must exist locally.
+          fetch-tags: true
+
+      # ── Toolchain cache key ────────────────────────────────────────────
+      # The electron and electron-builder pins from the lockfile, exposed
+      # as step outputs so the toolchain cache key below rotates on either
+      # bump. Runs on the runner's preinstalled node (setup-node has not
+      # run yet — only the checked-out lockfile matters). The guard fails
+      # the step loudly if either lookup goes missing rather than emitting
+      # a junk key.
+      - name: Resolve toolchain cache key
+        id: toolchain
+        shell: bash
+        run: |
+          node -e '
+            const l = require("./package-lock.json")
+            const el = l.packages["apps/desktop/node_modules/electron"].version
+            const eb = l.packages["node_modules/electron-builder"].version
+            if (!el || !eb) process.exit(1)
+            console.log(`electron=${el}`)
+            console.log(`builder=${eb}`)
+          ' >> "$GITHUB_OUTPUT"
+
+      # ── Host toolchain versions from the pin table ─────────────────────
+      # installation/runtime-pins.json is the ONE source of truth for the
+      # runtimes an install carries (see its $comment). The EMBEDDED
+      # runtimes are staged from it by the provisioner; the steps below
+      # install the same pinned versions as the HOST toolchain, so the
+      # node that builds the JS surfaces and the uv that installs the
+      # payload interpreter are the versions the artifact ships with —
+      # a host/pin mismatch is a silently different artifact. Resolved
+      # here, on the runner's preinstalled node, and consumed by every
+      # setup step below; a pin bump rotates all of them in one commit.
+      - name: Resolve runtime pins
+        id: pins
+        shell: bash
+        run: |
+          node -e '
+            const p = require("./installation/runtime-pins.json")
+            const node = p.tools.node.version
+            const npm = p.tools.npm.version
+            const uv = p.tools.uv.version
+            const python = p.tools.uv.python
+            if (!node || !npm || !uv || !python) process.exit(1)
+            console.log(`node=${node}`)
+            console.log(`npm=${npm}`)
+            console.log(`uv=${uv}`)
+            console.log(`python=${python}`)
+          ' >> "$GITHUB_OUTPUT"
+
+      # ── Node ──────────────────────────────────────────────────────────
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # The host node builds and npm-installs the JS surfaces that the
+          # PINNED payload node runs at runtime, so it must be that exact
+          # version — a different host node is a different artifact.
+          node-version: ${{ steps.pins.outputs.node }}
+          cache: npm
+
+      - name: Install the pinned npm
+        shell: bash
+        run: npm i -g npm@${{ steps.pins.outputs.npm }}
+
+      # ── Rust (CLI shims) ──────────────────────────────────────────────
+      # stage-agent-payloads builds the payload's CLI shims
+      # (apps/desktop/shim, zero-dep) natively with cargo.
+      - name: Ensure Rust toolchain
+        shell: bash
+        run: |
+          if ! command -v cargo >/dev/null 2>&1; then
+            rustup default stable
+          fi
+          cargo --version
+          rustc --version
+
+      # No npm ci here: the build script runs it as its own first step, and
+      # a second install would delete and recreate node_modules (~10 min on
+      # the Windows runners).
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # 9.0.0
+        with:
+          # The pinned uv from the pin table — the same version the payload
+          # ships. (0.12+ also prints the build triple in --version, which
+          # the payload staging guard requires.)
+          version: ${{ steps.pins.outputs.uv }}
+          # No uv cache: the host uv only runs `uv export` (a lock read,
+          # no downloads) and `uv python install` into the payload tree,
+          # which the agent-payload cache below already covers. The
+          # site-packages install runs pip on the payload interpreter,
+          # not host uv, so the uv cache never receives a deposit —
+          # explicit false because the default is on for hosted runners.
+          enable-cache: false
+          python-version: ${{ steps.pins.outputs.python }}
+
+      # ── OpenSSL for the win32-arm64 source builds ──────────────────────
+      # cryptography publishes no win_arm64 wheel, so the staging script
+      # builds it from sdist, and its Rust core links OpenSSL. vcpkg is
+      # preinstalled on GitHub runners; the static triplet makes the wheel
+      # self-contained (the offline payload cannot ship loose DLLs). The
+      # cache saves the ~20 minute from-source OpenSSL build on later runs.
+      - name: Cache vcpkg OpenSSL (arm64)
+        if: matrix.variant == 'bundled' && matrix.target.label == 'win32-arm64'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\vcpkg\installed\arm64-windows-static-md
+          key: vcpkg-openssl-arm64-windows-static-md-${{ runner.os }}
+
+      - name: Install OpenSSL (arm64)
+        if: matrix.variant == 'bundled' && matrix.target.label == 'win32-arm64'
+        shell: bash
+        run: |
+          if [ ! -f "/c/vcpkg/installed/arm64-windows-static-md/lib/libcrypto.lib" ]; then
+            "$VCPKG_INSTALLATION_ROOT/vcpkg" install openssl:arm64-windows-static-md
+          fi
+          {
+            printf 'OPENSSL_DIR=C:\\vcpkg\\installed\\arm64-windows-static-md\n'
+            printf 'OPENSSL_STATIC=1\n'
+          } >> "$GITHUB_ENV"
+
+      # ── Payload python + site-packages cache ───────────────────────────
+      # The two expensive staging trees. Their content depends only on the
+      # lock, the payload python version, and the target — NOT the release
+      # tag, so one cache serves every release until the lock moves. The
+      # staging script owns correctness: it validates the restored trees
+      # against its .stage-cache-key (schema version, target triple,
+      # source-build list, requirements hash) and restages from scratch on
+      # any mismatch — an exact key here is an optimization, never a proof.
+      # No restore-keys: a partial match would fail that check and restage
+      # anyway. win32-arm64 saves the most (15+ min of MSVC/Rust sdist
+      # builds); every platform saves the python install + wheel downloads.
+      # The key hashes the staging script too: the script's cache identity
+      # also covers the payload schema version, the source-build list, and
+      # the uv python request, which all live in the script source. A key
+      # missing any of them meets the cache immutability trap — an exact
+      # hit never re-saves, so a schema bump would restore stale trees,
+      # restage from scratch, and skip the save, on every later run.
+      - name: Cache payload python + site-packages
+        if: matrix.variant == 'bundled'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apps/desktop/build/agent-payload/python
+            apps/desktop/build/agent-payload/site-packages
+            apps/desktop/build/agent-payload/.stage-cache-key
+          key: agent-payload-${{ matrix.target.label }}-py${{ steps.pins.outputs.python }}-${{ hashFiles('uv.lock', 'apps/desktop/scripts/stage-agent-payloads.mjs') }}
+
+      # ── Windows sign cache ──────────────────────────────────────────────
+      # Content-addressed store of Azure-signed bytes keyed by the sha256
+      # of the UNSIGNED input. The signable payload set (uv, python,
+      # site-packages bin shims — 792 files/pass) changes when the lock
+      # moves OR when the pin table bumps uv or python — the binaries come
+      # from the pins, so the key hashes both. A key missing the pins met
+      # the immutability trap: a python bump left the key unchanged, the
+      # exact hit blocked the save, and every python binary re-signed
+      # every night until the lock happened to move.
+      # restore-keys IS correct here, unlike the payload cache above: the
+      # store is content-addressed, so entries in a stale restore still
+      # hit for every binary the bump did not change, and the save lands
+      # under the new exact key. Without it, a lock bump re-signs all 792.
+      # Per-build artifacts (Hermes.exe after the rcedit stamp, installers,
+      # MSIX) hash differently every night and are simply signed fresh — a
+      # handful of files, seconds.
+      # Threat model: writable only from main/tag runs, which already hold
+      # live signing credentials; poisoning adds no capability.
+      # Bundled only: a light build signs 5-9 per-build files that never
+      # hash the same twice, so a restored cache cannot hit — the restore
+      # and save steps are pure overhead (measured ~30s on the arm64
+      # runner). The pass1→pass2 in-job dedupe reads the local dir and
+      # works on light legs without any cache step.
+      - name: Cache signed payload binaries
+        if: matrix.variant == 'bundled' && startsWith(matrix.target.label, 'win32-')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/build/sign-cache
+          key: sign-cache-${{ matrix.target.label }}-${{ matrix.variant }}-${{ hashFiles('uv.lock', 'installation/runtime-pins.json') }}
+          restore-keys: |
+            sign-cache-${{ matrix.target.label }}-${{ matrix.variant }}-
+
+      # ── Runtime pin archive cache ───────────────────────────────────────
+      # The downloaded uv/python/node archives named by the pin table.
+      # Keyed on the pin table itself: a pin bump rotates the key, and the
+      # archives are content-verified against the pins after restore.
+      - name: Cache runtime pin archives
+        if: matrix.variant == 'bundled'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/build/pin-archives
+          key: pin-archives-${{ matrix.target.label }}-${{ hashFiles('installation/runtime-pins.json') }}
+
+      # ── electron + electron-builder toolchain cache ────────────────────
+      # One cache for electron-builder's whole cache dir (winCodeSign
+      # toolset, nsis, AppImage tooling, electron dist zips) plus
+      # @electron/get's cache from npm ci's electron postinstall. Key
+      # rotates automatically on an electron or electron-builder bump —
+      # retiring the old hardcoded winCodeSign path that silently missed
+      # after a toolset bump.
+      - name: Cache electron + electron-builder toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/electron-builder
+            ${{ github.workspace }}/.cache/electron
+          key: eb-${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.toolchain.outputs.electron }}-builder-${{ steps.toolchain.outputs.builder }}
+
+      # ── node_modules cache ──────────────────────────────────────────────
+      # The root npm ci output (hoisted workspaces + per-workspace shadow
+      # trees). On the windows-11-arm image a cold npm ci runs 655-700s —
+      # individual registry tarball fetches stall 4-6 minutes (node-pty
+      # 393s, node-gyp 274s in run 32301107652) — against 56-61s on x64.
+      # Defender write-path exclusions were confirmed applied and changed
+      # nothing; the stall is in the fetch path, so the fix is to not
+      # fetch. build-bundled-desktop.mjs owns correctness through its
+      # .install-stamp (lockfile hash + node + npm + target): a restored
+      # tree with a stale or missing stamp is fully reinstalled, so this
+      # cache is purely an optimization the script accepts or rejects.
+      # Exact key only: restoring a near-miss tree buys nothing (npm ci
+      # deletes it) and uploads a wasted gigabyte.
+      - name: Cache node_modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            ui-tui/node_modules
+            ui-tui/packages/*/node_modules
+            web/node_modules
+            tests-js/node_modules
+          key: node-modules-${{ matrix.target.label }}-node-${{ steps.pins.outputs.node }}-npm-${{ steps.pins.outputs.npm }}-${{ hashFiles('package-lock.json') }}
+
+      # ── Azure OIDC login for Windows signing ───────────────────────────
+      # No client secret exists anywhere. GitHub mints an OIDC token for
+      # this job; Azure redeems it only when the token's subject matches
+      # the app registration's federated credential
+      # (repo:<owner>/<repo>:environment:release-signing). This login
+      # validates the federation early and fails fast when it is broken.
+      # Skipped when the environment variables are absent (forks, dry
+      # runs) — the build stays unsigned.
+      - name: Azure login (OIDC)
+        if: startsWith(matrix.target.label, 'win32-') && vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # The signing dlib authenticates with WorkloadIdentityCredential:
+      # a fresh GitHub OIDC token on disk + AZURE_FEDERATED_TOKEN_FILE.
+      # The dev-tool credentials (AzureCli & co.) all spawn subprocesses,
+      # and inside the x64-emulated dlib on the arm64 runner that spawn
+      # wedged signtool for 35+ minutes. WorkloadIdentityCredential is
+      # in-process HTTPS only — the same token exchange azure/login just
+      # performed, done by the dlib itself.
+      #
+      # GitHub OIDC tokens live only minutes, and the first signtool call
+      # comes 20+ minutes into the build (payload staging), with more
+      # calls for an hour after — so a background loop remints the file
+      # every 4 minutes for the life of the job. Every signtool spawn is
+      # a fresh dlib process that re-reads the file. The runner reaps the
+      # loop at job end.
+      - name: Mint federated token for the signing dlib
+        if: startsWith(matrix.target.label, 'win32-') && vars.AZURE_CLIENT_ID != ''
+        shell: bash
+        run: |
+          file="$RUNNER_TEMP/azure-federated-token"
+          mint() {
+            curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+              | jq -r .value > "$file.tmp" && mv -f "$file.tmp" "$file"
+          }
+          mint
+          ( while sleep 240; do mint || true; done ) &
+          echo "AZURE_FEDERATED_TOKEN_FILE=$file" >> "$GITHUB_ENV"
+
+      # notarytool's --key flag takes a PATH to the .p8 — and the chain
+      # from env var to argv is verbatim (no decode, no temp file:
+      # MacTargetHelper passes process.env.APPLE_API_KEY straight to
+      # @electron/notarize, which passes it straight to notarytool).
+      # Raw PEM content in the env var splices newlines into the argv
+      # ("Invalid option"); base64 content is a nonexistent path. So the
+      # secret holds the raw .p8 CONTENT and this step writes the file
+      # whose path the build step exports as APPLE_API_KEY.
+      - name: Write App Store Connect key for notarytool
+        if: startsWith(matrix.target.label, 'darwin-')
+        shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [ -n "$APPLE_API_KEY_P8" ]; then
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple-api-key.p8"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/apple-api-key.p8" >> "$GITHUB_ENV"
+          else
+            echo "APPLE_API_KEY_P8 secret not set — notarization will be skipped"
+          fi
+
+      # ── Build + package through the shared script ──────────────────────
+      # scripts/build-bundled-desktop.mjs owns the whole sequence: the root
+      # npm ci, the JS surface builds, the payload node dist, the bundled
+      # desktop build, and electron-builder. Run the same script locally to
+      # reproduce a CI build. The workflow adds only caching, signing, and
+      # upload.
+      - name: Build and package
+        shell: bash
+        # macOS notarization dominates this step: Apple scans every Mach-O
+        # in the bundled python payload, and the first submission of a new
+        # binary set can wait a long time in the queue. Give the step all
+        # the headroom the 90-minute job allows.
+        timeout-minutes: 85
+        env:
+          # The electron-osx-sign and electron-notarize namespaces cover
+          # the two phases that were silent for 55 minutes before the
+          # darwin timeouts: per-file codesign and the notarytool
+          # submission. The broad electron-builder namespace stays OFF:
+          # it relays full child output — every makeappx "payload file"
+          # line and the whole npm ci tree — for no signal.
+          DEBUG: 'electron-osx-sign*,electron-notarize*'
+          # TEMPORARY diagnostic (msix signing 0x800700C1): AppxSIP logs the
+          # exact inner PE with the malformed certificate to the console when
+          # this is set — signtool's failing output lands in the step log.
+          # Remove once the corrupt file is identified and fixed.
+          APPXSIP_LOG: '1'
+          HERMES_BUNDLE_TAG: ${{ env.HERMES_PAYLOAD_TAG }}
+          # macOS signing and notarization (electron-builder builtin).
+          # APPLE_API_KEY is intentionally NOT set here: the write-key
+          # step above exports it into GITHUB_ENV as the PATH to the .p8
+          # file, and a step-level env entry would shadow that with the
+          # raw secret. Forks do not have the secrets; electron-builder
+          # skips signing and notarization without them.
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Windows signing with Azure Trusted Signing. The signing dlib
+          # authenticates as a workload identity — no secret exists. These
+          # non-secret variables in the release-signing environment turn
+          # signing on; without them the build stays unsigned, so forks
+          # and dry runs continue to work.
+          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          # WorkloadIdentityCredential inputs: client + tenant + the token
+          # file minted above. 'prod' restricts the dlib's chain to
+          # Environment/WorkloadIdentity/ManagedIdentity — Environment
+          # fails instantly (no secret set), WorkloadIdentity succeeds
+          # from the token file, ManagedIdentity is never reached. The
+          # dev-tool half of the chain spawns subprocesses, which wedged
+          # the x64-emulated signtool on the arm64 runner for 35+ minutes.
+          # (The dlib's Azure.Identity accepts only 'dev'/'prod' here, and
+          # ExcludeCredentials in win.sign.additionalMetadata cannot be
+          # expressed: the v27 schema types it as a string while the dlib
+          # requires a list.)
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_TOKEN_CREDENTIALS: prod
+
+          # so fork-built bundles can continue updating from their forks
+          GITHUB_REPOSITORY: ${{ env.GITHUB_REPOSITORY }}
+        run: |
+          # Windows signing turns on inside run-electron-builder.mjs when the
+          # AZURE_SIGN_* variables above are present. It cannot ride through
+          # -c arguments: the publisherName contains spaces, which do not
+          # survive the cmd.exe hops on the Windows runners.
+          MATRIX_LABEL="${{ matrix.target.label }}"
+          if [[ "$MATRIX_LABEL" == win32-* ]] && [ -n "$AZURE_SIGN_ENDPOINT" ] && [ -n "$AZURE_CLIENT_ID" ]; then
+            echo "Windows signing: Azure Trusted Signing at $AZURE_SIGN_ENDPOINT"
+          fi
+          # Raise the file-descriptor limit for the build (macOS).
+          #
+          # This is a headroom setting, NOT the EMFILE fix. The fix is
+          # apps/desktop/scripts/fs-open-limit.cjs, preloaded into the
+          # electron-builder process, which caps concurrent fs.open calls so
+          # @electron/osx-sign's unbounded walk cannot exhaust the table. The
+          # walk passes at the macOS default of 256 with the cap alone
+          # (verified), so this step is not load-bearing.
+          #
+          # It stays because the cap scales with the limit (a quarter of it),
+          # so a higher ceiling means a wider walk and a faster sign, and
+          # because other build stages open files without going through that
+          # preload. If it must run at all it has to run in the SAME shell as
+          # the build: each workflow step gets a fresh shell, so a standalone
+          # `ulimit` step would raise the limit for a process that has already
+          # exited. Children inherit it, which carries it into node.
+          #
+          # `|| true`: a runner with a lower hard cap still builds. The echo
+          # records what was granted, so a future EMFILE is readable from the
+          # log rather than guessed at.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ulimit -n 16384 2>/dev/null || true
+            echo "file descriptor limit: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
+          fi
+          node scripts/build-bundled-desktop.mjs --tag="$HERMES_BUNDLE_TAG" --variant="${{ matrix.variant }}"
+
+      # Every native binary in the unpacked app must match the target
+      # arch. Wrong-arch binaries run FINE on the runners (Windows-on-ARM
+      # and Rosetta emulate x64 silently) and ship broken or slow — an
+      # x64 pip launcher shim inside the arm64 payload made it into a
+      # release exactly this way. The audit fails the job and names the
+      # offending files before anything uploads.
+      - name: Audit bundle architecture
+        shell: bash
+        run: |
+          MATRIX_LABEL="${{ matrix.target.label }}"
+          node apps/desktop/scripts/audit-bundle-arch.mjs \
+            --arch="${MATRIX_LABEL##*-}" --root=apps/desktop/release
+
+      # The unpacked app tree ships in the artifact beside the installers
+      # so a dry run is testable without running an installer. tar first:
+      # the tree carries symlinks (mac frameworks) and executable bits
+      # that upload-artifact's zip does not preserve.
+      - name: Pack unpacked app for upload
+        shell: bash
+        run: |
+          cd apps/desktop/release
+          dirs=()
+          for d in *-unpacked mac mac-*; do
+            [ -d "$d" ] && dirs+=("$d")
+          done
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::no unpacked app directory found"; exit 1
+          fi
+          tar -czf "unpacked-${{ matrix.variant }}-${{ matrix.target.label }}.tar.gz" "${dirs[@]}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-${{ matrix.variant }}-${{ matrix.target.label }}-${{ env.HERMES_PAYLOAD_TAG }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            # apps/desktop/release/*.msix
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+            apps/desktop/release/light*.yml
+            apps/desktop/release/nightly*.yml
+            apps/desktop/release/unpacked-*.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+
+      # ── Attach to the GitHub release (tag pushes, opt-in dispatch, and
+      # the nightly caller which passes upload_release: true) ─────────────
+      - name: Upload to GitHub release
+        if: inputs.upload_release == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          # No *.msix here on purpose: the bare per-arch packages travel as
+          # workflow artifacts only (the msixbundle job consumes them from
+          # there). The release carries just the universal .msixbundle,
+          # which that job uploads — one MSIX-shaped download, no chance of
+          # a user grabbing a single-arch package by hand.
+          files=(apps/desktop/release/*.dmg apps/desktop/release/*.zip \
+                 apps/desktop/release/*.exe \
+                 apps/desktop/release/*.AppImage \
+                 apps/desktop/release/*.blockmap apps/desktop/release/latest*.yml \
+                 apps/desktop/release/light*.yml apps/desktop/release/nightly*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no release artifacts found"; exit 1
+          fi
+          # release.py creates the release (a draft) before this build can
+          # reach this step, so a missing one is a broken release process,
+          # not a state to tolerate. Skipping quietly here is how a green
+          # build ends up attached to nothing: fail loudly instead.
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — release.py must create it (as a draft) before the build uploads to it"
+            exit 1
+          fi
+          gh release upload "$HERMES_PAYLOAD_TAG" "${files[@]}" --clobber
+
+  # ── Universal MSIX bundle ────────────────────────────────────────────
+  # electron-builder's MsixTarget CAN assemble a .msixbundle itself
+  # (finishBuild → createMsixBundle), but only from packages built in ONE
+  # invocation — and the x64/arm64 legs run on separate native runners
+  # (the arm64 payload needs its own MSVC/Rust sdist builds). So this job
+  # marries the two legs after the fact: download both per-arch .msix
+  # files, makeappx bundle them, sign the bundle envelope with the same
+  # Trusted Signing identity, and attach it to the release. Windows picks
+  # the right inner package at install time — one download link serves
+  # both architectures. The inner .msix files are already signed from
+  # their legs; only the bundle envelope needs a signature here.
+  msixbundle:
+    if: false # msix disabled for now
+    name: ${{ matrix.variant }} msixbundle
+    needs: build
+    runs-on: windows-2025
+    environment: release-signing
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # light is disabled in the build matrix above (2ebd15ea53) — no
+        # hermes-light-win32-* artifacts exist to bundle, and the download
+        # step silently matches zero. Keep the two matrices in sync.
+        variant: [bundled]
+    env:
+      HERMES_PAYLOAD_TAG: ${{ inputs.tag || github.ref_name }}
+      # Tool pins (dependency pinning policy: CI-only tools pin exact).
+      # BuildTools ships makeappx + signtool; the Trusted.Signing.Client
+      # dlib must be >= 1.0.68 — older ones cannot sign MSIX at all.
+      SDK_BUILDTOOLS_VERSION: '10.0.26100.4948'
+      TRUSTED_SIGNING_VERSION: '1.0.95'
+    steps:
+      - name: Download win32 artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: hermes-${{ matrix.variant }}-win32-*-${{ env.HERMES_PAYLOAD_TAG }}
+          path: msix-in
+          merge-multiple: true
+
+      - name: Install makeappx + signtool + signing dlib
+        shell: bash
+        run: |
+          nuget install Microsoft.Windows.SDK.BuildTools \
+            -Version "$SDK_BUILDTOOLS_VERSION" -ExcludeVersion -OutputDirectory tools -NonInteractive
+          nuget install Microsoft.Trusted.Signing.Client \
+            -Version "$TRUSTED_SIGNING_VERSION" -ExcludeVersion -OutputDirectory tools -NonInteractive
+          # The bin folder inside the package carries the SDK build number
+          # (10.0.26100.0), not the four-part nuget package version, so a
+          # path built from the pin does not exist. Resolve the one
+          # installed folder instead.
+          shopt -s nullglob
+          bins=(tools/Microsoft.Windows.SDK.BuildTools/bin/*/x64)
+          if [ ${#bins[@]} -ne 1 ]; then
+            echo "::error::expected exactly 1 SDK bin dir, found ${#bins[@]}: ${bins[*]}"
+            exit 1
+          fi
+          bin="${bins[0]}"
+          for exe in makeappx.exe signtool.exe; do
+            if [ ! -f "$bin/$exe" ]; then
+              echo "::error::$exe not found under $bin"; exit 1
+            fi
+          done
+          echo "KITS_BIN=$bin" >> "$GITHUB_ENV"
+          echo "ATS_DLIB=tools/Microsoft.Trusted.Signing.Client/bin/x64/Azure.CodeSigning.Dlib.dll" >> "$GITHUB_ENV"
+
+      - name: Bundle the per-arch packages
+        # PowerShell, not bash: git-bash rewrites leading-slash args into
+        # Windows paths before the child sees them (makeappx got 'O:/' for
+        # '/o' — run 32307837608). pwsh passes /o /bv /d /p verbatim.
+        shell: pwsh
+        run: |
+          $msix = @(Get-ChildItem msix-in -Filter *.msix)
+          if ($msix.Count -ne 2) {
+            Write-Host "::error::expected exactly 2 .msix packages (x64 + arm64), found $($msix.Count): $($msix.Name -join ', ')"
+            exit 1
+          }
+          # HermesBundled-0.28.0-win-x64.msix → HermesBundled-0.28.0-win.msixbundle
+          $base = $msix[0].BaseName
+          $name = $base -replace '-[^-]+$', ''
+          # Bundle version: the numeric prefix of the app version, in the
+          # X.Y.Z.0 form the inner manifests carry (prerelease suffixes
+          # like -nightly.N are not representable in a bundle version).
+          $version = $name -replace '^[A-Za-z]+-', '' -replace '-win$', '' -replace '-.*$', ''
+          New-Item -ItemType Directory staging | Out-Null
+          Copy-Item $msix.FullName staging/
+          & "$env:KITS_BIN/makeappx.exe" bundle /o /bv "$version.0" /d staging /p "$name.msixbundle"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "BUNDLE_PATH=$name.msixbundle" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Azure login (OIDC)
+        if: vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # Single signing pass, minutes after job start — one fresh token is
+      # enough (no remint loop like the build legs, whose first signature
+      # comes 20+ minutes in).
+      - name: Sign the bundle
+        if: vars.AZURE_CLIENT_ID != ''
+        # pwsh for the same reason as the bundle step: /fd /td /tr /dlib
+        # /dmdf /pa are all shapes git-bash would rewrite.
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
+          AZURE_TOKEN_CREDENTIALS: prod
+        run: |
+          $file = Join-Path $env:RUNNER_TEMP 'azure-federated-token'
+          $resp = Invoke-RestMethod -Uri "$env:ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" `
+            -Headers @{ Authorization = "bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" }
+          # -NoNewline + ascii: notarytool precedent says trust the traced
+          # code, and the dlib reads the file verbatim — a BOM or trailing
+          # newline is part of the token to it.
+          [System.IO.File]::WriteAllText($file, $resp.value)
+          $env:AZURE_FEDERATED_TOKEN_FILE = $file
+          @{
+            Endpoint = $env:AZURE_SIGN_ENDPOINT
+            CodeSigningAccountName = $env:AZURE_SIGN_ACCOUNT
+            CertificateProfileName = $env:AZURE_SIGN_PROFILE
+          } | ConvertTo-Json | Set-Content sign-metadata.json
+          & "$env:KITS_BIN/signtool.exe" sign /fd SHA256 /td SHA256 `
+            /tr http://timestamp.acs.microsoft.com `
+            /dlib "$env:ATS_DLIB" /dmdf sign-metadata.json "$env:BUNDLE_PATH"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:KITS_BIN/signtool.exe" verify /pa "$env:BUNDLE_PATH"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-${{ matrix.variant }}-msixbundle-${{ env.HERMES_PAYLOAD_TAG }}
+          path: '*.msixbundle'
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload to GitHub release
+        if: inputs.upload_release == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Same contract as the per-target upload: the release must
+          # already exist, so a missing one fails the job instead of
+          # leaving the bundle off an otherwise-green release.
+          if ! gh release view "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot attach the msixbundle"
+            exit 1
+          fi
+          gh release upload "$HERMES_PAYLOAD_TAG" "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+
+  # ── Builds table ─────────────────────────────────────────────────────
+  # After EVERY matrix leg has uploaded, render the download tables into
+  # the release body's <!-- HERMES_BUILDS_TABLE --> marker from the
+  # release's actual asset names (never predicted ones — a missing
+  # artifact is a missing row, not a dead link). The universal .msixbundle
+  # and mac .zip stay out of the tables by design (store/sideload channel /
+  # updater delta target; the bare per-arch .msix never reaches the release
+  # at all). Their legs still gate this job through needs:. Both release
+  # kinds are drafts at this point, and gh resolves drafts by tag.
+  builds-table:
+    name: Render the release builds table
+    needs: build
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Render
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HERMES_PAYLOAD_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          # The release is created before the build starts, so a missing
+          # one here means the release process broke. Rendering nothing
+          # would ship a release whose body still holds the unrendered
+          # marker, so fail instead.
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot render the builds table"
+            exit 1
+          fi
+          python3 scripts/render-builds-table.py \
+            --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY"
+
+  # ── Publish the nightly ──────────────────────────────────────────────
+  # Both release kinds are created as drafts, because a published release
+  # with no installers on it is one users can reach and cannot use. They
+  # differ in who lifts the draft:
+  #
+  #   nightly — nobody is watching at 0300, so a green matrix publishes it
+  #             here. A failed or cancelled run leaves an inspectable
+  #             draft instead of a broken published nightly.
+  #   stable  — a human publishes, after checking the artifacts. Cutting a
+  #             stable release is a deliberate act and stays one.
+  #
+  # The tag shape is the whole condition: release.py builds nightly tags
+  # as vX.Y.0-nightly.<YYYYMMDDHHMMSS>, a shape no stable tag can take.
+  # Keying on it means a nightly cut by hand publishes exactly like the
+  # scheduled one, with no second code path.
+  publish-nightly:
+    name: Publish the nightly release
+    needs: [build, builds-table]
+    if: |
+      always()
+      && inputs.upload_release == true
+      && contains(inputs.tag, '-nightly.')
+      && needs.build.result == 'success'
+      && needs.builds-table.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published $TAG"

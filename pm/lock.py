@@ -132,6 +132,17 @@ class Facts:
     def entries_in_use(self) -> set[str]:
         return {f["entry"] for f in self._packages.values() if "entry" in f}
 
+    def drop(self, name: str) -> bool:
+        """Forget one package. Used when a leftover cache entry must not
+        ship in a sealed payload."""
+        on_disk = _read(self.path)["packages"]
+        if name not in on_disk and name not in self._packages:
+            return False
+        on_disk.pop(name, None)
+        self._packages = on_disk
+        _write(self.path, {"schema": SCHEMA, "packages": self._packages})
+        return True
+
 
 def _templatize(env: dict, store_root: Path) -> dict:
     root = str(store_root)

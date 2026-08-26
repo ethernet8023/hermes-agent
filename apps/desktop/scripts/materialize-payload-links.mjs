@@ -26,16 +26,19 @@ export function findPackedPayload(appOutDir, platform) {
 // The store keeps verified downloads under fetch-<sha16>/. A sealed
 // payload already has the unpacked entries. Apple's notary unpacks
 // every archive it finds and rejects unsigned Mach-O inside them
-// (uv tarball, agent-browser tgz). Drop the cache before codesign.
+// (uv tarball, leftover chromium). Drop the cache and leftover
+// chromium store entries before codesign.
 export function stripFetchCache(root) {
   if (!root) return 0
   const tools = path.join(root, 'tools')
   if (!fs.existsSync(tools)) return 0
   let removed = 0
   for (const ent of fs.readdirSync(tools, { withFileTypes: true })) {
-    if (!ent.isDirectory() || !ent.name.startsWith('fetch-')) continue
-    fs.rmSync(path.join(tools, ent.name), { recursive: true, force: true })
-    removed += 1
+    if (!ent.isDirectory()) continue
+    if (ent.name.startsWith('fetch-') || /^chromium(_headless_shell)?-\d+/.test(ent.name)) {
+      fs.rmSync(path.join(tools, ent.name), { recursive: true, force: true })
+      removed += 1
+    }
   }
   return removed
 }

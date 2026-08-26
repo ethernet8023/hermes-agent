@@ -489,3 +489,30 @@ def test_check_reports_venv_drift_and_missing_tools(venv_env):
     _pin(lockfile_path, "faketool", "9.9", "0" * 64)  # tool outdated now
     problems = check()
     assert "faketool: not installed or outdated" in problems
+
+
+def test_facts_drop_forgets_one_package(tmp_path):
+    from pm.lock import Facts
+
+    facts = Facts(tmp_path / "facts.json")
+    facts.record("chromium", "1", "chromium-1208", {}, tmp_path)
+    facts.record("uv", "1", "uv-1", {}, tmp_path)
+    assert facts.drop("chromium") is True
+    assert facts.get("chromium") is None
+    assert facts.get("uv") is not None
+    assert facts.drop("chromium") is False
+
+
+def test_bundle_package_names_skip_chromium(monkeypatch, tmp_path):
+    from pm.cli import _PAYLOAD_SKIP, _bundle_package_names
+    from pm.lock import Lockfile
+
+    lock = Lockfile(tmp_path / "lock.json")
+    for name in ("uv", "python", "ripgrep", "chromium", "chromium-headless-shell"):
+        lock.set_pin(name, "1", {"any": {"url": "x", "sha256": "0" * 64}})
+    lock.save()
+    monkeypatch.setattr("pm.cli._lockfile", lambda: lock)
+    names = _bundle_package_names()
+    assert "python" in names
+    assert "ripgrep" in names
+    assert not (_PAYLOAD_SKIP & set(names))

@@ -94,6 +94,24 @@ test('stripFetchCache removes only fetch- dirs under tools/', () => {
   }
 })
 
+test('stripFetchCache also drops leftover chromium store entries', () => {
+  const root = tempRoot()
+  try {
+    const tools = path.join(root, 'tools')
+    fs.mkdirSync(path.join(tools, 'chromium-1208'), { recursive: true })
+    fs.writeFileSync(path.join(tools, 'chromium-1208', 'INSTALLATION_COMPLETE'), '')
+    fs.mkdirSync(path.join(tools, 'chromium_headless_shell-1208'), { recursive: true })
+    fs.mkdirSync(path.join(tools, 'uv-0.12.3-darwin-arm64'), { recursive: true })
+    fs.writeFileSync(path.join(tools, 'uv-0.12.3-darwin-arm64', 'uv'), 'bin')
+    assert.equal(stripFetchCache(root), 2)
+    assert.equal(fs.existsSync(path.join(tools, 'chromium-1208')), false)
+    assert.equal(fs.existsSync(path.join(tools, 'chromium_headless_shell-1208')), false)
+    assert.equal(fs.existsSync(path.join(tools, 'uv-0.12.3-darwin-arm64', 'uv')), true)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('materializePayloadLinks does not flatten a framework file-symlink', () => {
   if (process.platform === 'win32') return
   const root = tempRoot()

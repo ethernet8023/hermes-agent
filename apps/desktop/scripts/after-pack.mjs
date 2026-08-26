@@ -21,10 +21,20 @@
 
 import path from 'node:path'
 
+import { findPackedPayload, materializePayloadLinks } from './materialize-payload-links.mjs'
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
 export default async function afterPack(context) {
-  if (context.electronPlatformName !== 'win32') {
+  const platform = context.electronPlatformName
+  if (platform === 'darwin') {
+    const payload = findPackedPayload(context.appOutDir, platform)
+    if (payload) {
+      const n = materializePayloadLinks(payload)
+      console.log(`[after-pack] materialized ${n} payload links so codesign can sign each path once`)
+    }
+    return
+  }
+  if (platform !== 'win32') {
     return
   }
 

@@ -23,6 +23,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { windowsFileVersion } from '../apps/desktop/scripts/windows-file-version.mjs'
+import { materializePayloadLinks } from '../apps/desktop/scripts/materialize-payload-links.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const PAYLOAD_DIR = path.join(REPO_ROOT, 'apps', 'desktop', 'build', 'agent-payload')
@@ -190,36 +191,9 @@ if (!fs.existsSync(path.join(plantedWeb, 'index.html'))) {
 }
 console.log('[build-bundled] planted hermes_cli/tui_dist/entry.js and hermes_cli/web_dist into the payload')
 
-// uv venv --relocatable hardlinks venv/bin/python* onto the store
-// interpreter. codesign then signs the store path, the venv inode
-// changes under it, and the next pass reports "file modified" and
-// retries forever. Copy each nlink>1 regular file onto itself so
-// the two trees are independent before osx-sign walks them.
 if (process.platform === 'darwin') {
-  let broken = 0
-  const walk = (dir) => {
-    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, ent.name)
-      if (ent.isDirectory()) {
-        walk(p)
-        continue
-      }
-      if (!ent.isFile()) continue
-      let st
-      try {
-        st = fs.lstatSync(p)
-      } catch {
-        continue
-      }
-      if (st.nlink <= 1) continue
-      const tmp = `${p}.__unlink__`
-      fs.copyFileSync(p, tmp)
-      fs.renameSync(tmp, p)
-      broken += 1
-    }
-  }
-  walk(PAYLOAD_DIR)
-  console.log(`[build-bundled] broke ${broken} hardlinks in the payload so codesign can sign each file once`)
+  const n = materializePayloadLinks(PAYLOAD_DIR)
+  console.log(`[build-bundled] materialized ${n} payload links so codesign can sign each path once`)
 }
 
 // ── 6. desktop build + package ──────────────────────────────────────────────

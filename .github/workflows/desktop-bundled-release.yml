@@ -327,6 +327,65 @@ jobs:
           fi
           gh release upload "$TAG" "${files[@]}" --clobber
 
+  builds-pending:
+    name: Mark the builds table as in progress
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Render the placeholder
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot mark the builds table"
+            exit 1
+          fi
+          python3 scripts/render-builds-table.py \
+            --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pending-run-url "$RUN_URL"
+
+  builds-table:
+    name: Render the release builds table
+    needs: [build, first-boot]
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Render
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+        run: |
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot render the builds table"
+            exit 1
+          fi
+          python3 scripts/render-builds-table.py \
+            --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY"
+
+  publish-nightly:
+    name: Publish the nightly release
+    needs: [build, first-boot, builds-table]
+    if: |
+      always()
+      && inputs.upload_release == true
+      && contains(inputs.tag, '-nightly.')
+      && needs.build.result == 'success'
+      && needs.first-boot.result == 'success'
+      && needs.builds-table.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published $TAG"
+
   first-boot:
     name: first-boot linux-x64
     needs: build

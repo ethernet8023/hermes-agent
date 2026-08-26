@@ -2471,6 +2471,9 @@ def generate_changelog(commits, tag_name, semver, repo_url="https://github.com/N
     else:
         lines.append(f"**Full Changelog**: [{tag_name}]({repo_url}/commits/{tag_name})")
     lines.append("")
+    lines.append("<!-- HERMES_BUILDS_TABLE -->")
+    lines.append("<!-- /HERMES_BUILDS_TABLE -->")
+    lines.append("")
 
     return "\n".join(lines)
 

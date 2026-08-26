@@ -7,8 +7,10 @@ import { test } from 'vitest'
 import {
   chromiumRoots,
   isMachO,
-  listSignableMachO,
+  listLooseMachO,
+  listTopLevelApps,
   parseDeveloperId,
+  repairFrameworkLinks,
   resolveSigningIdentity,
   signNestedChromium
 } from './sign-nested-chromium.mjs'
@@ -50,18 +52,39 @@ test('chromiumRoots only names chromium store entries', () => {
   }
 })
 
-test('listSignableMachO skips framework file-symlinks', () => {
+test('listTopLevelApps finds .app dirs and listLooseMachO skips them', () => {
+  const root = tempRoot()
+  try {
+    const app = path.join(root, 'Google Chrome for Testing.app')
+    fs.mkdirSync(path.join(app, 'Contents', 'MacOS'), { recursive: true })
+    fs.writeFileSync(path.join(app, 'Contents', 'MacOS', 'Chrome'), machoBuf())
+    const loose = path.join(root, 'chrome-headless-shell')
+    fs.writeFileSync(loose, machoBuf())
+    assert.deepEqual(listTopLevelApps(root), [app])
+    assert.deepEqual(listLooseMachO(root), [loose])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('repairFrameworkLinks turns a flattened Foo.framework/Foo into a symlink', () => {
   if (process.platform === 'win32') return
   const root = tempRoot()
   try {
-    const versioned = path.join(root, 'F.framework', 'Versions', 'A')
-    fs.mkdirSync(versioned, { recursive: true })
-    const real = path.join(versioned, 'F')
-    fs.writeFileSync(real, machoBuf())
-    const link = path.join(root, 'F.framework', 'F')
-    fs.symlinkSync(path.join('Versions', 'A', 'F'), link)
-    const files = listSignableMachO(root)
-    assert.deepEqual(files, [real])
+    const fw = path.join(root, 'F.framework')
+    const versioned = path.join(fw, 'Versions', 'A')
+    fs.mkdirSync(path.join(versioned, 'Resources'), { recursive: true })
+    fs.writeFileSync(path.join(versioned, 'F'), machoBuf())
+    fs.writeFileSync(path.join(versioned, 'Resources', 'Info.plist'), '<plist/>')
+    fs.writeFileSync(path.join(fw, 'F'), machoBuf())
+    fs.mkdirSync(path.join(fw, 'Resources'))
+    fs.writeFileSync(path.join(fw, 'Resources', 'Info.plist'), '<plist/>')
+
+    const n = repairFrameworkLinks(root)
+    assert.ok(n >= 2)
+    assert.equal(fs.lstatSync(path.join(fw, 'F')).isSymbolicLink(), true)
+    assert.equal(fs.lstatSync(path.join(fw, 'Versions', 'Current')).isSymbolicLink(), true)
+    assert.equal(fs.readFileSync(path.join(fw, 'F')).equals(machoBuf()), true)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -81,31 +104,24 @@ test('signNestedChromium no-ops without an identity', () => {
   const payload = tempRoot()
   try {
     const r = signNestedChromium(payload, { identity: null, entitlements: path.join(payload, 'missing.plist') })
-    assert.deepEqual(r, { signed: 0, identity: null })
+    assert.deepEqual(r, { signed: 0, repaired: 0, identity: null })
   } finally {
     fs.rmSync(payload, { recursive: true, force: true })
   }
 })
 
-test('signNestedChromium codesigns each regular Mach-O and skips the symlink', () => {
-  if (process.platform === 'win32') return
+test('signNestedChromium --deep signs the .app and file-signs loose Mach-O', () => {
   const payload = tempRoot()
   try {
     const entitlements = path.join(payload, 'entitlements.plist')
     fs.writeFileSync(entitlements, '<plist/>')
-    const versioned = path.join(
-      payload,
-      'tools',
-      'chromium-1208',
-      'F.framework',
-      'Versions',
-      'A'
-    )
-    fs.mkdirSync(versioned, { recursive: true })
-    const real = path.join(versioned, 'F')
-    fs.writeFileSync(real, machoBuf())
-    const link = path.join(payload, 'tools', 'chromium-1208', 'F.framework', 'F')
-    fs.symlinkSync(path.join('Versions', 'A', 'F'), link)
+    const app = path.join(payload, 'tools', 'chromium-1208', 'Google Chrome for Testing.app')
+    fs.mkdirSync(path.join(app, 'Contents', 'MacOS'), { recursive: true })
+    fs.writeFileSync(path.join(app, 'Contents', 'MacOS', 'Chrome'), machoBuf())
+    const looseDir = path.join(payload, 'tools', 'chromium_headless_shell-1208')
+    fs.mkdirSync(looseDir, { recursive: true })
+    const loose = path.join(looseDir, 'chrome-headless-shell')
+    fs.writeFileSync(loose, machoBuf())
     const calls = []
     const r = signNestedChromium(payload, {
       identity: 'Developer ID Application: Test',
@@ -114,13 +130,12 @@ test('signNestedChromium codesigns each regular Mach-O and skips the symlink', (
         calls.push([cmd, ...args])
       }
     })
-    assert.equal(r.signed, 1)
-    assert.equal(calls.length, 1)
-    assert.equal(calls[0][0], 'codesign')
-    assert.ok(calls[0].includes(real))
-    assert.ok(!calls[0].includes(link))
-    assert.ok(calls[0].includes('--timestamp'))
-    assert.ok(calls[0].includes('runtime'))
+    assert.equal(r.signed, 2)
+    assert.equal(calls.length, 2)
+    const appCall = calls.find(c => c.includes(app))
+    const fileCall = calls.find(c => c.includes(loose))
+    assert.ok(appCall.includes('--deep'))
+    assert.ok(!fileCall.includes('--deep'))
   } finally {
     fs.rmSync(payload, { recursive: true, force: true })
   }

@@ -36,7 +36,7 @@ export default async function afterPack(context) {
       const { identity, keychain } = await resolveSigningIdentity(context.packager)
       const nested = signNestedChromium(payload, { entitlements, identity, keychain })
       console.log(
-        `[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links; signed ${nested.signed} nested chromium Mach-O` +
+        `[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links; repaired ${nested.repaired} framework links; signed ${nested.signed} nested chromium targets` +
           (identity ? ` as ${identity}` : ' (no Developer ID in the builder keychain)')
       )
     }

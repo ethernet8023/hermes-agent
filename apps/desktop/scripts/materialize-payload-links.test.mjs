@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'vitest'
 
-import { findPackedPayload, materializePayloadLinks } from './materialize-payload-links.mjs'
+import { findPackedPayload, materializePayloadLinks, stripFetchCache } from './materialize-payload-links.mjs'
 
 function tempRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-materialize-'))
@@ -72,6 +72,23 @@ test('materializePayloadLinks splits a hardlinked pair', () => {
     assert.equal(fs.lstatSync(twin).nlink, 1)
     fs.writeFileSync(twin, 'signed')
     assert.equal(fs.readFileSync(real, 'utf8'), 'interpreter-bytes')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('stripFetchCache removes only fetch- dirs under tools/', () => {
+  const root = tempRoot()
+  try {
+    const tools = path.join(root, 'tools')
+    fs.mkdirSync(path.join(tools, 'fetch-546f7f8a6c70ff13'), { recursive: true })
+    fs.writeFileSync(path.join(tools, 'fetch-546f7f8a6c70ff13', 'uv.tar.gz'), 'x')
+    fs.mkdirSync(path.join(tools, 'uv-0.12.3-darwin-arm64'), { recursive: true })
+    fs.writeFileSync(path.join(tools, 'uv-0.12.3-darwin-arm64', 'uv'), 'bin')
+    assert.equal(stripFetchCache(root), 1)
+    assert.equal(fs.existsSync(path.join(tools, 'fetch-546f7f8a6c70ff13')), false)
+    assert.equal(fs.existsSync(path.join(tools, 'uv-0.12.3-darwin-arm64', 'uv')), true)
+    assert.equal(stripFetchCache(root), 0)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

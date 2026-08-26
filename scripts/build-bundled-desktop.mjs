@@ -23,7 +23,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { windowsFileVersion } from '../apps/desktop/scripts/windows-file-version.mjs'
-import { materializePayloadLinks } from '../apps/desktop/scripts/materialize-payload-links.mjs'
+import { materializePayloadLinks, stripFetchCache } from '../apps/desktop/scripts/materialize-payload-links.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const PAYLOAD_DIR = path.join(REPO_ROOT, 'apps', 'desktop', 'build', 'agent-payload')
@@ -191,6 +191,8 @@ if (!fs.existsSync(path.join(plantedWeb, 'index.html'))) {
 }
 console.log('[build-bundled] planted hermes_cli/tui_dist/entry.js and hermes_cli/web_dist into the payload')
 
+const dropped = stripFetchCache(PAYLOAD_DIR)
+console.log(`[build-bundled] dropped ${dropped} fetch- cache dirs from the payload`)
 if (process.platform === 'darwin') {
   const n = materializePayloadLinks(PAYLOAD_DIR)
   console.log(`[build-bundled] materialized ${n} payload links so codesign can sign each path once`)

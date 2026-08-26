@@ -21,7 +21,7 @@
 
 import path from 'node:path'
 
-import { findPackedPayload, materializePayloadLinks } from './materialize-payload-links.mjs'
+import { findPackedPayload, materializePayloadLinks, stripFetchCache } from './materialize-payload-links.mjs'
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
 export default async function afterPack(context) {
@@ -29,8 +29,9 @@ export default async function afterPack(context) {
   if (platform === 'darwin') {
     const payload = findPackedPayload(context.appOutDir, platform)
     if (payload) {
+      const dropped = stripFetchCache(payload)
       const n = materializePayloadLinks(payload)
-      console.log(`[after-pack] materialized ${n} payload links so codesign can sign each path once`)
+      console.log(`[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links`)
     }
     return
   }

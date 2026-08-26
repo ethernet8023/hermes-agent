@@ -1,0 +1,478 @@
+name: Desktop Bundled Release
+
+# Builds the bundled desktop installer for each (os, arch) target.
+#
+#   tag validation → 6-target matrix → pm bundle → electron-builder
+#   → artifacts + (optional) GitHub release upload of installers,
+#   blockmaps, and latest.yml / nightly.yml.
+#
+# Payload staging is `hermes pm bundle` on the native runner. There is
+# no cross-target staging. Signing and notarization are a later commit;
+# this file produces unsigned artifacts on forks. When the
+# release-signing environment has the Apple and Azure identifiers,
+# the same job signs and notarizes.
+#
+# scripts/build-bundled-desktop.mjs is the one driver. Local and CI run
+# the same command. This workflow adds caching and upload only.
+#
+# Triggers: workflow_dispatch with an explicit tag. A tag push does not
+# start this workflow (a bot-pushed nightly tag would never fire).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bundle (vX.Y.Z or vX.Y.0-nightly.YYYYMMDDHHMMSS). Must exist on the repo.'
+        required: true
+        type: string
+      upload_release:
+        description: 'Attach artifacts to the GitHub release for the tag'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: desktop-bundled-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate the tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-tags: true
+
+      - name: Validate tag shape and pyproject lockstep
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*-nightly.20[0-9][0-9][0-9][0-9][0-9][0-9]*)
+              echo "nightly tag: $TAG"
+              ;;
+            v[0-9]*.[0-9]*.[0-9]*)
+              echo "tag: $TAG"
+              PYVER=$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1)
+              if [ "$TAG" != "v$PYVER" ]; then
+                echo "::error::tag $TAG does not match pyproject.toml version $PYVER"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::'$TAG' is not a release tag (vX.Y.Z or vX.Y.0-nightly.YYYYMMDDHHMMSS)"
+              exit 1
+              ;;
+          esac
+          git rev-parse --verify "$TAG^{commit}" >/dev/null
+
+  build:
+    name: bundled ${{ matrix.target.label }}
+    needs: validate
+    runs-on: ${{ matrix.target.runner }}
+    environment: release-signing
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - label: linux-x64
+            runner: ubuntu-24.04
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+          - label: darwin-arm64
+            runner: macos-15
+          - label: darwin-x64
+            runner: macos-15-intel
+          - label: win32-x64
+            runner: windows-2025
+          - label: win32-arm64
+            runner: windows-11-arm
+    env:
+      HERMES_DESKTOP_VARIANT: bundled
+      HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      electron_config_cache: ${{ github.workspace }}/.cache/electron
+    steps:
+      - name: Disable Spotlight indexing and XProtect
+        if: startsWith(matrix.target.label, 'darwin-')
+        shell: bash
+        run: |
+          sudo mdutil -a -i off || true
+          sudo pkill -9 XProtect >/dev/null || true
+          while pgrep XProtect; do sleep 3; done
+
+      - name: Exclude build write paths from Defender scanning
+        if: startsWith(matrix.target.label, 'win32-')
+        shell: powershell
+        run: |
+          $paths = @(
+            $env:GITHUB_WORKSPACE,
+            $env:RUNNER_TEMP,
+            (npm config get cache)
+          )
+          foreach ($p in $paths) {
+            try {
+              Add-MpPreference -ExclusionPath $p
+              Write-Host "Defender exclusion added for $p"
+            } catch {
+              Write-Host "Defender exclusion not applied for $p ($($_.Exception.Message)) - continuing"
+            }
+          }
+          try {
+            Set-MpPreference -DisableRealtimeMonitoring $true
+          } catch {
+            Write-Host "Could not disable windows defender"
+          }
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-tags: true
+
+      - name: Resolve toolchain pins from pm/lock.json
+        id: pins
+        shell: bash
+        # The host toolchain that BUILDS the artifact comes from the same
+        # pin table as the embedded runtimes (pm/lock.json), so gate == pin
+        # by construction in build-bundled-desktop.mjs's toolchain gates.
+        run: |
+          python -c '
+          import json
+          pkgs = json.load(open("pm/lock.json"))["packages"]
+          for tool in ("node", "npm", "uv"):
+              print(tool + "=" + pkgs[tool]["version"])
+          ' >> "$GITHUB_OUTPUT"
+
+      - name: Resolve toolchain cache key
+        id: toolchain
+        shell: bash
+        run: |
+          node -e '
+            const l = require("./package-lock.json")
+            const el = l.packages["apps/desktop/node_modules/electron"].version
+            const eb = l.packages["node_modules/electron-builder"].version
+            if (!el || !eb) process.exit(1)
+            console.log(`electron=${el}`)
+            console.log(`builder=${eb}`)
+          ' >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ steps.pins.outputs.node }}
+          cache: npm
+
+      - name: Install pinned npm
+        shell: bash
+        env:
+          NPM_PIN: ${{ steps.pins.outputs.npm }}
+        run: npm --version | grep -qx "$NPM_PIN" || npm i -g "npm@$NPM_PIN"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # 9.0.0
+        with:
+          version: ${{ steps.pins.outputs.uv }}
+          enable-cache: false
+
+      - name: Cache vcpkg OpenSSL (arm64)
+        if: matrix.target.label == 'win32-arm64'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\vcpkg\installed\arm64-windows-static-md
+          key: vcpkg-openssl-arm64-windows-static-md-${{ runner.os }}
+
+      - name: Install OpenSSL (arm64)
+        if: matrix.target.label == 'win32-arm64'
+        shell: bash
+        run: |
+          if [ ! -f "/c/vcpkg/installed/arm64-windows-static-md/lib/libcrypto.lib" ]; then
+            "$VCPKG_INSTALLATION_ROOT/vcpkg" install openssl:arm64-windows-static-md
+          fi
+          {
+            printf 'OPENSSL_DIR=C:\\vcpkg\\installed\\arm64-windows-static-md\n'
+            printf 'OPENSSL_STATIC=1\n'
+          } >> "$GITHUB_ENV"
+
+      - name: Cache pm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/build/agent-payload/tools
+          key: pm-store-${{ matrix.target.label }}-${{ hashFiles('pm/lock.json', 'uv.lock') }}
+
+      - name: Cache signed Windows binaries
+        if: startsWith(matrix.target.label, 'win32-')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/desktop/build/sign-cache
+          key: sign-cache-${{ matrix.target.label }}-${{ hashFiles('pm/lock.json', 'uv.lock') }}
+          restore-keys: |
+            sign-cache-${{ matrix.target.label }}-
+
+      - name: Cache electron + electron-builder toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/electron-builder
+            ${{ github.workspace }}/.cache/electron
+          key: eb-${{ runner.os }}-${{ runner.arch }}-electron-${{ steps.toolchain.outputs.electron }}-builder-${{ steps.toolchain.outputs.builder }}
+
+      - name: Cache node_modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            ui-tui/node_modules
+            ui-tui/packages/*/node_modules
+            web/node_modules
+            tests-js/node_modules
+          key: node-modules-${{ matrix.target.label }}-node${{ steps.pins.outputs.node }}-npm${{ steps.pins.outputs.npm }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Azure login (OIDC)
+        if: startsWith(matrix.target.label, 'win32-') && vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Mint federated token for the signing dlib
+        if: startsWith(matrix.target.label, 'win32-') && vars.AZURE_CLIENT_ID != ''
+        shell: bash
+        run: |
+          file="$RUNNER_TEMP/azure-federated-token"
+          mint() {
+            curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+              | jq -r .value > "$file.tmp" && mv -f "$file.tmp" "$file"
+          }
+          mint
+          ( while sleep 240; do mint || true; done ) &
+          echo "AZURE_FEDERATED_TOKEN_FILE=$file" >> "$GITHUB_ENV"
+
+      - name: Write App Store Connect key for notarytool
+        if: startsWith(matrix.target.label, 'darwin-')
+        shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [ -n "$APPLE_API_KEY_P8" ]; then
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple-api-key.p8"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/apple-api-key.p8" >> "$GITHUB_ENV"
+          else
+            echo "APPLE_API_KEY_P8 secret not set — notarization will be skipped"
+          fi
+
+      - name: Build and package
+        shell: bash
+        timeout-minutes: 85
+        env:
+          PYTHONUTF8: '1'
+          CC_aarch64_pc_windows_msvc: ${{ matrix.target.label == 'win32-arm64' && 'clang' || '' }}
+          DEBUG: 'electron-osx-sign*,electron-notarize*'
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_TOKEN_CREDENTIALS: prod
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ulimit -n 16384 2>/dev/null || true
+            echo "file descriptor limit: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
+          fi
+          node scripts/build-bundled-desktop.mjs --tag="$HERMES_PAYLOAD_TAG" --variant=bundled
+
+      - name: Audit bundle architecture
+        shell: bash
+        run: |
+          MATRIX_LABEL="${{ matrix.target.label }}"
+          node apps/desktop/scripts/audit-bundle-arch.mjs \
+            --arch="${MATRIX_LABEL##*-}" --root=apps/desktop/release
+
+      - name: Pack unpacked app for upload
+        shell: bash
+        run: |
+          cd apps/desktop/release
+          dirs=()
+          for d in *-unpacked mac mac-*; do
+            [ -d "$d" ] && dirs+=("$d")
+          done
+          if [ ${#dirs[@]} -eq 0 ]; then
+            echo "::error::no unpacked app directory found"; exit 1
+          fi
+          tar -czf "unpacked-bundled-${{ matrix.target.label }}.tar.gz" "${dirs[@]}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hermes-bundled-${{ matrix.target.label }}-${{ inputs.tag }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.msix
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+            apps/desktop/release/nightly*.yml
+            apps/desktop/release/unpacked-*.tar.gz
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload to GitHub release
+        if: inputs.upload_release == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          shopt -s nullglob
+          files=(apps/desktop/release/*.dmg apps/desktop/release/*.zip \
+                 apps/desktop/release/*.msix \
+                 apps/desktop/release/*.AppImage \
+                 apps/desktop/release/*.blockmap apps/desktop/release/latest*.yml \
+                 apps/desktop/release/nightly*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no release artifacts found"; exit 1
+          fi
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $TAG — create it (as a draft) before the build uploads to it"
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
+
+  builds-pending:
+    name: Mark the builds table as in progress
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Render the placeholder
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot mark the builds table"
+            exit 1
+          fi
+          python3 scripts/render-builds-table.py \
+            --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pending-run-url "$RUN_URL"
+
+  builds-table:
+    name: Render the release builds table
+    needs: [build, first-boot]
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Render
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+        run: |
+          if ! gh release view "$HERMES_PAYLOAD_TAG" >/dev/null 2>&1; then
+            echo "::error::no release exists for $HERMES_PAYLOAD_TAG — cannot render the builds table"
+            exit 1
+          fi
+          python3 scripts/render-builds-table.py \
+            --tag "$HERMES_PAYLOAD_TAG" --repo "$GITHUB_REPOSITORY"
+
+  publish-nightly:
+    name: Publish the nightly release
+    needs: [build, first-boot, builds-table]
+    if: |
+      always()
+      && inputs.upload_release == true
+      && contains(inputs.tag, '-nightly.')
+      && needs.build.result == 'success'
+      && needs.first-boot.result == 'success'
+      && needs.builds-table.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "Published $TAG"
+
+  first-boot:
+    name: first-boot linux-x64
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          sparse-checkout: |
+            scripts/smoke-payload.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Download linux-x64 unpacked tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: hermes-bundled-linux-x64-${{ inputs.tag }}
+          path: packed
+
+      - name: Adopt the payload venv and smoke it
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf packed/unpacked-bundled-linux-x64.tar.gz
+          payload=""
+          for cand in linux-unpacked/resources/agent-payload \
+                      linux-x64-unpacked/resources/agent-payload; do
+            if [ -f "$cand/manifest.json" ]; then
+              payload=$cand
+              break
+            fi
+          done
+          if [ -z "$payload" ]; then
+            echo "::error::no agent-payload under the unpacked linux app"
+            find . -name manifest.json | head
+            exit 1
+          fi
+          python3 - "$payload" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          manifest = json.loads((root / "manifest.json").read_text())
+          if manifest.get("external") is True:
+              raise SystemExit("payload is the external stub — bundled build did not stage")
+          for key in ("repo", "store", "venv"):
+              if not isinstance(manifest.get(key), str):
+                  raise SystemExit(f"manifest missing {key}")
+          facts = json.loads((root / manifest["store"] / "facts.json").read_text())
+          entry = facts["packages"]["python"]["entry"]
+          home = root / manifest["store"] / entry / "bin"
+          cfg = root / manifest["venv"] / "pyvenv.cfg"
+          lines = cfg.read_text().splitlines()
+          out = []
+          for line in lines:
+              if line.lower().startswith("home ="):
+                  out.append(f"home = {home}")
+              else:
+                  out.append(line)
+          cfg.write_text("\n".join(out) + "\n")
+          again = cfg.read_text()
+          if f"home = {home}" not in again:
+              raise SystemExit("adopt did not write home")
+          print(f"adopted home = {home}")
+          PY
+          bash scripts/smoke-payload.sh "$payload"

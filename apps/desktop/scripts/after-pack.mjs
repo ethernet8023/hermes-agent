@@ -21,16 +21,47 @@
 
 import path from 'node:path'
 
+import { findPackedPayload, materializePayloadLinks, stripFetchCache } from './materialize-payload-links.mjs'
+import { resolveSigningIdentity, signNestedChromium } from './sign-nested-chromium.mjs'
+import { sanitizeTree } from './sanitize-pe-signatures.mjs'
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
 export default async function afterPack(context) {
-  if (context.electronPlatformName !== 'win32') {
+  const platform = context.electronPlatformName
+  if (platform === 'darwin') {
+    const payload = findPackedPayload(context.appOutDir, platform)
+    if (payload) {
+      const dropped = stripFetchCache(payload)
+      const n = materializePayloadLinks(payload)
+      const entitlements = path.join(import.meta.dirname, '..', 'electron', 'entitlements.mac.inherit.plist')
+      const { identity, keychain } = await resolveSigningIdentity(context.packager)
+      const nested = signNestedChromium(payload, { entitlements, identity, keychain })
+      console.log(
+        `[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links; repaired ${nested.repaired} framework links; signed ${nested.signed} nested chromium targets` +
+          (identity ? ` as ${identity}` : ' (no Developer ID in the builder keychain)')
+      )
+    }
+    return
+  }
+  if (platform !== 'win32') {
     return
   }
 
   const productName = context.packager?.appInfo?.productFilename || 'Hermes'
   const exe = path.join(context.appOutDir, `${productName}.exe`)
   const desktopRoot = path.resolve(import.meta.dirname, '..')
+
+  // Repair dangling PE certificate tables BEFORE electron-builder signs the
+  // tree. A stripped-but-still-declared signature makes signtool reject the
+  // file with 0x800700C1, and AppxSIP inspects every PE inside the MSIX, so
+  // one bad payload DLL fails the whole package. Unlike the stamp below this
+  // is NOT best-effort: shipping past it means shipping an unsignable bundle.
+  // this is a hack until https://github.com/astral-sh/python-build-standalone/pull/1217 is merged.
+  const { scanned, repaired } = sanitizeTree(context.appOutDir)
+  console.log(`[after-pack] ${scanned} PEs scanned, ${repaired.length} dangling certificate tables cleared`)
+  for (const file of repaired) {
+    console.log(`  ${file}`)
+  }
 
   try {
     await stampExeIdentity(exe, desktopRoot)

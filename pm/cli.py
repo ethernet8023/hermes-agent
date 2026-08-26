@@ -55,6 +55,48 @@ def _install_names(names: list[str]) -> int:
     return failed
 
 
+# Optional browsers ship pre-signed Mach-O that Apple's notary rejects
+# (no Developer ID timestamp, no hardened runtime). They install on
+# demand after first boot. python is optional for a git checkout but
+# required in a payload (the relocatable venv sits on it).
+_PAYLOAD_SKIP = frozenset({"chromium", "chromium-headless-shell"})
+
+
+def _bundle_package_names() -> list[str]:
+    names = [
+        n
+        for n in _lockfile().names()
+        if n not in _PAYLOAD_SKIP
+        and (not get_package(n).internal or n == "uv")
+    ]
+    if "python" not in names:
+        names.append("python")
+    return names
+
+
+def _drop_payload_browsers(store_dir: Path) -> None:
+    """Forget leftover chromium entries a CI store cache can restore."""
+    facts = _facts()
+    facts.reload()
+    for name in _PAYLOAD_SKIP:
+        fact = facts.get(name)
+        if fact and "entry" in fact:
+            shutil.rmtree(store_dir / fact["entry"], ignore_errors=True)
+        if facts.drop(name):
+            print(f"✓ dropped leftover {name} from the payload")
+
+
+def _drop_unloadable_runtime_files(store_dir: Path) -> None:
+    """Drop the x64 VC runtime that python-build-standalone ships beside ARM64 Python."""
+    if current_target() != "win32-arm64":
+        return
+    facts = _facts()
+    facts.reload()
+    python = facts.get("python")
+    if python and "entry" in python:
+        (store_dir / python["entry"] / "vcruntime140_1.dll").unlink(missing_ok=True)
+
+
 def cmd_install(args) -> int:
     names = args.names or [
         n for n in _lockfile().names() if not get_package(n).optional
@@ -231,15 +273,12 @@ def cmd_bundle(args) -> int:
     paths._stamp.cache_clear()
 
     failed = 0
-    names = [
-        n for n in _lockfile().names()
-        if not get_package(n).internal or n == "uv"
-    ]
-    if "python" not in names:
-        names.append("python")
+    names = _bundle_package_names()
     failed += _install_names(
         [n for n in names if get_package(n).missing_reason(current_target()) is None]
     )
+    _drop_payload_browsers(store_dir)
+    _drop_unloadable_runtime_files(store_dir)
 
     uv_bin, env = pm_uv()
     if uv_bin is None:
@@ -257,6 +296,8 @@ def cmd_bundle(args) -> int:
     # Build + sync INSIDE the staged repo: the editable project install
     # must point at the payload's own tree, not this checkout.
     venv_dir = out / "venv"
+    if venv_dir.exists():
+        shutil.rmtree(venv_dir)
     env["VIRTUAL_ENV"] = str(venv_dir)
     env.pop("UV_NO_CONFIG", None)
     if current_target().startswith("darwin"):

@@ -21,9 +21,9 @@ break an update (every public entry point is exception-swallowing):
    become a loud, actionable report instead of a latent state.
 
 Deployment-kind awareness (docker/image-managed installs) rides on
-``hermes_cli.build_info.get_code_identity()``: an image build reports
-``source="build-file"`` and the receipt records that the install is not
-in-place updatable.
+``hermes_cli.version_info.get_code_identity()``: a packaged build reports
+its install-stamp provenance (``source="docker"``/``"nix"``/…) and the
+receipt records that the install is not in-place updatable.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ class UpdateReceipt:
             "fleet": [],
         }
         try:
-            from hermes_cli.build_info import get_code_identity
+            from hermes_cli.version_info import get_code_identity
 
             self.data["pre_update"] = get_code_identity()
         except Exception:
@@ -116,7 +116,7 @@ class UpdateReceipt:
         self.data["outcome"] = outcome
         self.data["finished_at"] = _utc_now_iso()
         try:
-            from hermes_cli.build_info import get_code_identity
+            from hermes_cli.version_info import get_code_identity
 
             self.data["post_update"] = get_code_identity(refresh=True)
         except Exception:
@@ -267,7 +267,7 @@ def read_latest_receipt() -> Optional[dict[str, Any]]:
         path = _receipt_dir() / "latest.json"
         if not path.is_file():
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
         return payload if isinstance(payload, dict) else None
     except Exception:
         return None
@@ -313,7 +313,7 @@ def collect_fleet_versions(
     _pre_restart = {int(p) for p in (pre_restart_pids or []) if isinstance(p, int)}
     results: list[dict[str, Any]] = []
     try:
-        from hermes_cli.build_info import get_code_identity
+        from hermes_cli.version_info import get_code_identity
 
         expected_sha = (get_code_identity(refresh=True) or {}).get("sha")
     except Exception:

@@ -86,6 +86,17 @@ def _drop_payload_browsers(store_dir: Path) -> None:
             print(f"✓ dropped leftover {name} from the payload")
 
 
+def _drop_unloadable_runtime_files(store_dir: Path) -> None:
+    """Drop the x64 VC runtime that python-build-standalone ships beside ARM64 Python."""
+    if current_target() != "win32-arm64":
+        return
+    facts = _facts()
+    facts.reload()
+    python = facts.get("python")
+    if python and "entry" in python:
+        (store_dir / python["entry"] / "vcruntime140_1.dll").unlink(missing_ok=True)
+
+
 def cmd_install(args) -> int:
     names = args.names or [
         n for n in _lockfile().names() if not get_package(n).optional
@@ -267,6 +278,7 @@ def cmd_bundle(args) -> int:
         [n for n in names if get_package(n).missing_reason(current_target()) is None]
     )
     _drop_payload_browsers(store_dir)
+    _drop_unloadable_runtime_files(store_dir)
 
     uv_bin, env = pm_uv()
     if uv_bin is None:
@@ -284,6 +296,8 @@ def cmd_bundle(args) -> int:
     # Build + sync INSIDE the staged repo: the editable project install
     # must point at the payload's own tree, not this checkout.
     venv_dir = out / "venv"
+    if venv_dir.exists():
+        shutil.rmtree(venv_dir)
     env["VIRTUAL_ENV"] = str(venv_dir)
     env.pop("UV_NO_CONFIG", None)
     if current_target().startswith("darwin"):

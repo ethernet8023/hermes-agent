@@ -17,7 +17,7 @@
 // --root is scanned for the unpacked app dirs electron-builder produces
 // (win-unpacked, win-arm64-unpacked, linux-unpacked, mac/, mac-arm64/, …).
 // Auditing the unpacked tree covers the exact bytes the installer embeds:
-// NSIS/DMG/AppImage add compression around it, not content.
+// MSIX/DMG/AppImage add compression around it, not content.
 
 import fs from "node:fs"
 import path from "node:path"
@@ -190,9 +190,6 @@ const EXEMPT_PATTERNS = [
   // when it writes a console-script shim. Present on every platform.
   // Live under the payload python store entry AND the relocatable venv.
   /agent-payload[/\\](tools[/\\]python-[^/\\]+[/\\](Lib|lib[/\\]python[\d.]+)|venv[/\\](Lib|lib[/\\]python[\d.]+))[/\\]site-packages[/\\](setuptools|pip[/\\]_vendor[/\\]distlib)[/\\]/i,
-  // electron-builder's NSIS finalize task drops its elevation helper into
-  // resources/ (see e-b #9852). ia32 BY DESIGN.
-  /^resources[/\\]elevate\.exe$/i,
   // PortableGit internals under the payload tool store.
   /agent-payload[/\\]tools[/\\]git(-[^/\\]+)?[/\\](mingw64|clangarm64|usr|cmd)[/\\]/i,
   // discord.py ships x64 and x86 opus; opus.py loads by bitness.

@@ -516,3 +516,42 @@ def test_bundle_package_names_skip_chromium(monkeypatch, tmp_path):
     assert "python" in names
     assert "ripgrep" in names
     assert not (_PAYLOAD_SKIP & set(names))
+
+
+def test_drop_unloadable_runtime_files_removes_only_arm64_x64_vc_runtime(monkeypatch, tmp_path):
+    import pm.cli as cli
+
+    store = tmp_path / "store"
+    entry = store / "python-3.11-win32-arm64"
+    entry.mkdir(parents=True)
+    stray = entry / "vcruntime140_1.dll"
+    keep = entry / "vcruntime140.dll"
+    stray.write_bytes(b"x64")
+    keep.write_bytes(b"arm64")
+    facts = Facts(store / "facts.json")
+    facts.record("python", "3.11", entry.name, {}, store)
+
+    monkeypatch.setattr(cli, "_facts", lambda: facts)
+    monkeypatch.setattr(cli, "current_target", lambda: "win32-arm64")
+    cli._drop_unloadable_runtime_files(store)
+
+    assert not stray.exists()
+    assert keep.is_file()
+
+
+def test_drop_unloadable_runtime_files_keeps_other_targets(monkeypatch, tmp_path):
+    import pm.cli as cli
+
+    store = tmp_path / "store"
+    entry = store / "python-3.11-win32-x64"
+    entry.mkdir(parents=True)
+    runtime = entry / "vcruntime140_1.dll"
+    runtime.write_bytes(b"x64")
+    facts = Facts(store / "facts.json")
+    facts.record("python", "3.11", entry.name, {}, store)
+
+    monkeypatch.setattr(cli, "_facts", lambda: facts)
+    monkeypatch.setattr(cli, "current_target", lambda: "win32-x64")
+    cli._drop_unloadable_runtime_files(store)
+
+    assert runtime.is_file()

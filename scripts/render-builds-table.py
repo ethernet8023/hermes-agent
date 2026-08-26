@@ -40,15 +40,15 @@ END_MARKER = "<!-- /HERMES_BUILDS_TABLE -->"
 # Asset name shapes (electron-builder artifactName in
 # apps/desktop/electron-builder.config.cjs):
 #   Hermes-0.28.0-mac-arm64.dmg        (bundled)
-#   HermesLight-0.28.0-win-x64.exe     (light)
+#   HermesBundled-0.28.0-win-x64.msix  (bundled)
 _ASSET_RE = re.compile(
     r"^(?P<app>HermesBundled|HermesLight)-(?P<version>[^-]+(?:-nightly\.\d{8}(?:\d{6})?)?)"
-    r"-(?P<os>mac|win|linux)-(?P<arch>x64|arm64)\.(?P<ext>dmg|exe|AppImage)$"
+    r"-(?P<os>mac|win|linux)-(?P<arch>x64|arm64)\.(?P<ext>dmg|msix|AppImage)$"
 )
 
 _OS_LABEL = {"mac": "macOS", "win": "Windows", "linux": "Linux"}
 _ARCH_LABEL = {"x64": "x64 (Intel/AMD)", "arm64": "arm64 (Apple Silicon/ARM)"}
-_KIND_LABEL = {"dmg": "DMG", "exe": "Installer (NSIS)", "AppImage": "AppImage"}
+_KIND_LABEL = {"dmg": "DMG", "msix": "MSIX", "AppImage": "AppImage"}
 _ROW_ORDER = [("mac", "arm64"), ("mac", "x64"), ("win", "x64"), ("win", "arm64"),
               ("linux", "x64"), ("linux", "arm64")]
 

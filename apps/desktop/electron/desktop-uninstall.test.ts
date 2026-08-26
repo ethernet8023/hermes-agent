@@ -79,19 +79,11 @@ test('resolveRemovableAppPath: dev-run .app resolves (safety is shouldRemoveAppB
   assert.equal(resolveRemovableAppPath('/usr/bin/electron', 'darwin'), null)
 })
 
-test('resolveRemovableAppPath finds the install dir on Windows', () => {
+test('resolveRemovableAppPath leaves Windows package removal to the OS', () => {
   assert.equal(
-    resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Hermes\\Hermes.exe', 'win32'),
-    'C:\\Users\\x\\AppData\\Local\\Programs\\Hermes'
+    resolveRemovableAppPath('C:\\Program Files\\WindowsApps\\NousResearch.Hermes\\Hermes.exe', 'win32'),
+    null
   )
-  assert.equal(
-    resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\hermes-desktop\\Hermes.exe', 'win32'),
-    'C:\\Users\\x\\AppData\\Local\\hermes-desktop'
-  )
-})
-
-test('resolveRemovableAppPath returns null for an unrecognized Windows dir', () => {
-  assert.equal(resolveRemovableAppPath('C:\\Temp\\foo\\Hermes.exe', 'win32'), null)
 })
 
 test('resolveRemovableAppPath uses APPIMAGE on Linux when set', () => {

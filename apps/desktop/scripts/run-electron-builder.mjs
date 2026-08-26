@@ -2,8 +2,8 @@
 // the first spawn with no shell in between.
 //
 // electron-builder downloads and extracts Electron itself (via electronVersion
-// + ELECTRON_MIRROR). A local dist is reused when present so a 26.8.x unpack
-// bug cannot replace a working Electron.app (#38673, #47917).
+// + ELECTRON_MIRROR). Passing the local Electron dist makes v27 copy framework
+// links as regular files. Its archive extraction preserves those links.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -12,42 +12,22 @@ import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 
-function electronDistDir() {
-  try {
-    return path.join(path.dirname(require.resolve('electron/package.json')), 'dist')
-  } catch {
-    return null
-  }
-}
-
-function distBinary(dist) {
-  if (process.platform === 'darwin') {
-    return path.join(dist, 'Electron.app', 'Contents', 'MacOS', 'Electron')
-  }
-  if (process.platform === 'win32') {
-    return path.join(dist, 'electron.exe')
-  }
-  return path.join(dist, 'electron')
-}
-
 function electronBuilderCli() {
-  const pkgJson = require.resolve('electron-builder/package.json')
-  const bin = require(pkgJson).bin
+  const entry = require.resolve('electron-builder')
+  let dir = path.dirname(entry)
+  while (!fs.existsSync(path.join(dir, 'package.json'))) {
+    const parent = path.dirname(dir)
+    if (parent === dir) {
+      throw new Error('electron-builder package root not found')
+    }
+    dir = parent
+  }
+  const bin = require(path.join(dir, 'package.json')).bin
   const rel = typeof bin === 'string' ? bin : bin['electron-builder']
-  return path.join(path.dirname(pkgJson), rel)
+  return path.join(dir, rel)
 }
 
-const args = []
-const dist = electronDistDir()
-if (dist && fs.existsSync(distBinary(dist))) {
-  args.push(`-c.electronDist=${dist}`)
-} else {
-  console.warn(
-    '[run-electron-builder] no local electron dist; electron-builder will fetch ' +
-      'via @electron/get (electronVersion + ELECTRON_MIRROR).'
-  )
-}
-args.push(...process.argv.slice(2))
+const args = [...process.argv.slice(2)]
 
 // package.json has no "build" field. Name the config file or electron-builder
 // would look for one and silently use defaults.

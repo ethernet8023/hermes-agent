@@ -10,12 +10,16 @@
 // @ts-check
 'use strict'
 
+const fs = require('node:fs')
+const path = require('node:path')
+
 const {
   light,
   displayName,
   appId,
   appNamePascal,
-  channel
+  channel,
+  msixAppIdWithOrg
 } = require('./product-identity.cjs')
 
 /** @typedef {import("app-builder-lib").Configuration} Configuration */
@@ -62,7 +66,7 @@ module.exports = {
   beforeBuild: 'scripts/before-build.mjs',
   beforePack: 'scripts/before-pack.mjs',
   afterPack: 'scripts/after-pack.mjs',
-  afterSign: 'scripts/notarize.mjs',
+  ...(process.platform === 'darwin' ? { afterSign: 'scripts/notarize.mjs' } : {}),
   extraResources: [
     {
       from: 'build/install-stamp.json',
@@ -77,41 +81,36 @@ module.exports = {
       to: 'icon.ico'
     }
   ],
-  asar: true,
-  asarUnpack: ['**/*.node', '**/prebuilds/**', 'dist/**'],
+  asar: {
+    unpack: ['**/*.node', '**/prebuilds/**', 'dist/**']
+  },
   mac: {
     category: 'public.app-category.developer-tools',
-    entitlements: 'electron/entitlements.mac.plist',
-    entitlementsInherit: 'electron/entitlements.mac.inherit.plist',
-    hardenedRuntime: true,
     extendInfo: {
       CFBundleDisplayName: displayName,
       CFBundleExecutable: displayName,
       CFBundleName: displayName,
-      // Refuse Rosetta translation: without this, the x64 build launches
-      // silently emulated on Apple silicon and stays emulated through every
-      // update (electron-updater keys the feed on process.arch).
       LSRequiresNativeExecution: true,
       NSAudioCaptureUsageDescription: `${displayName} uses audio capture for voice conversations.`,
       NSCameraUsageDescription: `${displayName} uses the camera when a plugin or feature you enable requests it.`,
       NSMicrophoneUsageDescription: `${displayName} uses the microphone for voice input and voice conversations.`
     },
     target: ['dmg', 'zip'],
-    // electron-builder 26 treats mac.sign as a hook function. A nested
-    // options object is resolved as customSign and then called.
-    // Entitlements and hardenedRuntime live on mac.* (schema keys).
-    // signIgnore is tested against the full path. Skip data files so
-    // osx-sign does not codesign every botocore .json.gz and chromium
-    // .pak (measured: one codesign per file, Apple timestamp each).
-    signIgnore: [
-      '\.(gif|png|jpe?g|webp|svg|ico|icns|woff2?|ttf|otf)$',
-      '\.(whl|zip|gz|bz2|xz|pak|dat|bin|wasm|wav|onnx|tflite)$',
-      '\.(pyc|py|txt|md|rst|json|ya?ml|toml|ini|cfg|xml|html|css|js|map|csv)$',
-      '\.(plist|strings|nib|car)$',
-      '\.dist-info/',
-      'Google Chrome for Testing\.app',
-      'chrome-headless-shell-mac-'
-    ]
+    sign: {
+      entitlements: 'electron/entitlements.mac.plist',
+      entitlementsInherit: 'electron/entitlements.mac.inherit.plist',
+      hardenedRuntime: true,
+      ignore: (/** @type {string} */ file) => {
+        try {
+          if (fs.lstatSync(file).isDirectory()) {
+            return false
+          }
+          return !isMachO(file)
+        } catch {
+          return true
+        }
+      }
+    }
   },
   dmg: {
     title: `Install ${displayName}`,
@@ -137,8 +136,20 @@ module.exports = {
   },
   win: {
     legalTrademarks: displayName,
-    target: ['nsis'],
+    target: ['msix'],
     ...windowsSigning()
+  },
+  msix: {
+    identityName: msixAppIdWithOrg,
+    applicationId: appNamePascal,
+    displayName,
+    publisher: 'CN=Nous Research Inc., O=Nous Research Inc., L=Austin, S=Texas, C=US',
+    publisherDisplayName: 'Nous Research',
+    minVersion: '10.0.22621.0',
+    maxVersionTested: '10.0.26100.0',
+    customExtensionsPath: writeMsixExtensions(),
+    customManifestPath: 'assets/msix-manifest.xml',
+    showNameOnTiles: true
   },
   linux: {
     category: 'Development',
@@ -147,33 +158,88 @@ module.exports = {
       ? 'Remote-only desktop client for Hermes Agent.'
       : 'Native desktop shell for Hermes Agent.',
     target: ['AppImage']
-  },
-  nsis: {
-    oneClick: true,
-    perMachine: false,
-    installerIcon: 'assets/icon.ico',
-    uninstallerIcon: 'assets/icon.ico',
-    installerHeaderIcon: 'assets/icon.ico',
-    shortcutName: displayName,
-    uninstallDisplayName: displayName,
-    warningsAsErrors: false
   }
 }
 
-// Azure Trusted Signing. Composed here, not as -c.win.* CLI arguments:
-// the publisherName holds spaces and commas that do not survive cmd.exe
-// argument hops. electron-builder 26 reads win.azureSignOptions. Absent
-// env vars leave the build unsigned — the fork / local path.
+function stageMsixAssets() {
+  const sourceDir = path.join(__dirname, 'assets', 'appx')
+  const stageDir = path.join(__dirname, 'build', 'appx')
+  const names = [
+    'Square44x44Logo.png',
+    'Square150x150Logo.png',
+    'StoreLogo.png',
+    'Wide310x150Logo.png'
+  ]
+
+  fs.mkdirSync(stageDir, { recursive: true })
+  for (const name of names) {
+    const source = path.join(sourceDir, name)
+    if (!fs.existsSync(source)) {
+      throw new Error(`missing MSIX asset ${source}`)
+    }
+    fs.copyFileSync(source, path.join(stageDir, name))
+  }
+}
+
+function writeMsixExtensions() {
+  const output = path.join('build', 'msix-extensions.xml')
+  const file = path.join(__dirname, output)
+  const aliases = light
+    ? ''
+    : `<uap5:Extension
+    xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+    Category="windows.appExecutionAlias"
+    Executable="${['app', 'resources', 'agent-payload', 'venv', 'Scripts', 'hermes.exe'].join(String.fromCharCode(92))}"
+    EntryPoint="Windows.FullTrustApplication">
+  <uap5:AppExecutionAlias>
+    <uap5:ExecutionAlias Alias="hermes.exe" />
+    <uap5:ExecutionAlias Alias="hermes-agent.exe" />
+    <uap5:ExecutionAlias Alias="hermes-acp.exe" />
+  </uap5:AppExecutionAlias>
+</uap5:Extension>`
+
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, aliases)
+  return output
+}
+
+stageMsixAssets()
+
+// Azure Trusted Signing. The custom hook keeps signed bytes by their unsigned
+// hash. Rebuilds only send changed binaries to the remote signing service.
+const MACHO_MAGICS = new Set([
+  0xfeedface,
+  0xcefaedfe,
+  0xfeedfacf,
+  0xcffaedfe,
+  0xcafebabe,
+  0xbebafeca
+])
+
+/** @param {string} file */
+function isMachO(file) {
+  const buf = Buffer.alloc(4)
+  const fd = fs.openSync(file, 'r')
+  try {
+    if (fs.readSync(fd, buf, 0, 4, 0) !== 4) {
+      return false
+    }
+  } finally {
+    fs.closeSync(fd)
+  }
+  return MACHO_MAGICS.has(buf.readUInt32BE(0))
+}
+
 function windowsSigning() {
   if (!process.env.AZURE_SIGN_ENDPOINT || !process.env.AZURE_CLIENT_ID) {
     return {}
   }
   return {
-    azureSignOptions: {
-      publisherName: process.env.AZURE_SIGN_PUBLISHER,
-      endpoint: process.env.AZURE_SIGN_ENDPOINT,
-      codeSigningAccountName: process.env.AZURE_SIGN_ACCOUNT,
-      certificateProfileName: process.env.AZURE_SIGN_PROFILE
+    sign: {
+      type: 'signtool',
+      sign: './scripts/sign-cached.mjs',
+      signingHashAlgorithms: ['sha256'],
+      publisherName: process.env.AZURE_SIGN_PUBLISHER
     }
   }
 }

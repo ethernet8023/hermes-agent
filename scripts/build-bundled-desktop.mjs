@@ -119,7 +119,7 @@ const fileVersion = windowsFileVersion(tag)
 const passes = {
   linux: [{ targets: '--linux AppImage' }],
   darwin: [{ targets: '--mac dmg zip' }],
-  win32: [{ targets: '--win nsis' }]
+  win32: [{ targets: '--win msix' }]
 }[process.platform]
 if (!passes) {
   fail(`unsupported platform: ${process.platform}`)

@@ -22,6 +22,7 @@
 import path from 'node:path'
 
 import { findPackedPayload, materializePayloadLinks, stripFetchCache } from './materialize-payload-links.mjs'
+import { signNestedChromium } from './sign-nested-chromium.mjs'
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
 export default async function afterPack(context) {
@@ -31,7 +32,11 @@ export default async function afterPack(context) {
     if (payload) {
       const dropped = stripFetchCache(payload)
       const n = materializePayloadLinks(payload)
-      console.log(`[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links`)
+      const entitlements = path.join(import.meta.dirname, '..', 'electron', 'entitlements.mac.inherit.plist')
+      const nested = signNestedChromium(payload, { entitlements })
+      console.log(
+        `[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links; signed ${nested.signed} nested chromium Mach-O`
+      )
     }
     return
   }

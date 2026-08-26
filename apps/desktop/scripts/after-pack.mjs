@@ -21,10 +21,28 @@
 
 import path from 'node:path'
 
+import { findPackedPayload, materializePayloadLinks, stripFetchCache } from './materialize-payload-links.mjs'
+import { resolveSigningIdentity, signNestedChromium } from './sign-nested-chromium.mjs'
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
 export default async function afterPack(context) {
-  if (context.electronPlatformName !== 'win32') {
+  const platform = context.electronPlatformName
+  if (platform === 'darwin') {
+    const payload = findPackedPayload(context.appOutDir, platform)
+    if (payload) {
+      const dropped = stripFetchCache(payload)
+      const n = materializePayloadLinks(payload)
+      const entitlements = path.join(import.meta.dirname, '..', 'electron', 'entitlements.mac.inherit.plist')
+      const { identity, keychain } = await resolveSigningIdentity(context.packager)
+      const nested = signNestedChromium(payload, { entitlements, identity, keychain })
+      console.log(
+        `[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links; repaired ${nested.repaired} framework links; signed ${nested.signed} nested chromium targets` +
+          (identity ? ` as ${identity}` : ' (no Developer ID in the builder keychain)')
+      )
+    }
+    return
+  }
+  if (platform !== 'win32') {
     return
   }
 

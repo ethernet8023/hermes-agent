@@ -105,10 +105,12 @@ module.exports = {
     // .pak (measured: one codesign per file, Apple timestamp each).
     signIgnore: [
       '\.(gif|png|jpe?g|webp|svg|ico|icns|woff2?|ttf|otf)$',
-      '\.(whl|zip|gz|bz2|xz|pak|dat|bin|wasm)$',
+      '\.(whl|zip|gz|bz2|xz|pak|dat|bin|wasm|wav|onnx|tflite)$',
       '\.(pyc|py|txt|md|rst|json|ya?ml|toml|ini|cfg|xml|html|css|js|map|csv)$',
       '\.(plist|strings|nib|car)$',
-      '\.dist-info/'
+      '\.dist-info/',
+      'Google Chrome for Testing\.app',
+      'chrome-headless-shell-mac-'
     ]
   },
   dmg: {

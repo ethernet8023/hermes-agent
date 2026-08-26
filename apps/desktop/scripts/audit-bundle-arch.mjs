@@ -186,38 +186,20 @@ function* walkFiles(dir) {
  * MSYS2/.NET layout.
  */
 const EXEMPT_PATTERNS = [
-  /agent-payload[/\\]python[/\\]cpython-[^/\\]+[/\\]lib([/\\]python[\d.]+)?[/\\]site-packages[/\\](setuptools|pip[/\\]_vendor[/\\]distlib)[/\\]/i,
+  // pip / setuptools launcher STUB TEMPLATES. x86 PE templates pip copies
+  // when it writes a console-script shim. Present on every platform.
+  // Live under the payload python store entry AND the relocatable venv.
+  /agent-payload[/\\](tools[/\\]python-[^/\\]+[/\\](Lib|lib[/\\]python[\d.]+)|venv[/\\](Lib|lib[/\\]python[\d.]+))[/\\]site-packages[/\\](setuptools|pip[/\\]_vendor[/\\]distlib)[/\\]/i,
   // electron-builder's NSIS finalize task drops its elevation helper into
-  // resources/ (see e-b #9852; electron-updater runs it for elevated
-  // installs). It is ia32 BY DESIGN: one binary that runs on every
-  // Windows arch through the always-present x86 emulation layer.
+  // resources/ (see e-b #9852). ia32 BY DESIGN.
   /^resources[/\\]elevate\.exe$/i,
-  // PortableGit — see comment above. The staging script's own PE probe on
-  // cmd/git.exe is the authoritative arch check for the bundled git.
-  //
-  // Scoped to the WINDOWS layout (mingw64/ on x64, clangarm64/ on arm64,
-  // plus usr/, cmd/) rather than the whole git/ tree: the .NET-assembly
-  // and MSYS2-helper reasoning is PortableGit's alone. dugite-native
-  // (macOS/Linux) is plain Mach-O and ELF with no format-neutral binaries
-  // in it, so exempting it would hide a genuinely wrong-arch git — the
-  // exact defect this audit exists to catch, in the payload that cannot
-  // fall back to a system git.
-  //
-  // The git dir is a STORE ENTRY: `git-<version>-<target>` (the payload is
-  // its own tool store; see installation/registry.py store_entry_name).
-  // The bare `git` alternative keeps any pre-store layout passing. This
-  // pattern diverging from the store naming is exactly how the win32-x64
-  // lane failed with 91 GCM ia32 "mismatches".
-  /agent-payload[/\\]git(-[^/\\]+)?[/\\](mingw64|clangarm64|usr|cmd)[/\\]/i,
-  // discord.py's bundled libopus on win32-arm64. The wheel ships exactly
-  // two DLLs, x64 and x86 — upstream publishes no arm64 build — and
-  // `discord/opus.py::_load_default` selects by BITNESS
-  // (`struct.calcsize('P') * 8`), which is 64 on win-arm64, so it asks
-  // for the x64 DLL and Windows runs it under x64 emulation. The staging
-  // prune already deletes the x86 one and everything off Windows; this
-  // single x64 file on an arm64 Windows bundle is the one foreign-arch
-  // binary that is deliberately there and genuinely loadable.
-  /agent-payload[/\\]site-packages[/\\]discord[/\\]bin[/\\]libopus-0\.x64\.dll$/i,
+  // PortableGit internals under the payload tool store.
+  /agent-payload[/\\]tools[/\\]git(-[^/\\]+)?[/\\](mingw64|clangarm64|usr|cmd)[/\\]/i,
+  // discord.py ships x64 and x86 opus; opus.py loads by bitness.
+  /agent-payload[/\\]venv[/\\](Lib|lib[/\\]python[\d.]+)[/\\]site-packages[/\\]discord[/\\]bin[/\\]libopus-0\.(x64|x86)\.dll$/i,
+  // pvporcupine ships one native lib per OS/arch in the same wheel.
+  // Only the matching sibling is loaded.
+  /agent-payload[/\\]venv[/\\](Lib|lib[/\\]python[\d.]+)[/\\]site-packages[/\\]pvporcupine[/\\]lib[/\\]/i,
 ]
 
 export function isExemptPath(relPath) {

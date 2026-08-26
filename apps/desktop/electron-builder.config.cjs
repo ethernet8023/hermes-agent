@@ -4,19 +4,11 @@
 // ignored anyway, and splitting the config across JSON + this overlay is
 // how the two halves drift.
 //
-// A .cjs module (not JSON) for two reasons:
-//   * mac.sign.ignore must be a FUNCTION. osx-sign's walk selects files to
-//     sign with a generic binary-content probe, which flags plain binary
-//     resources (the payload CPython's idlelib GIFs, wheels, .zip) as
-//     signable. Signing those is wrong (non-Mach-O resources are covered
-//     by the bundle's CodeResources seal) and each bogus signing hits
-//     Apple's timestamp service. The function scopes signing to real Mach-O.
-//   * the variant is decided at require time: HERMES_DESKTOP_VARIANT=light
-//     builds "Hermes Light". The whole config derives from that one flag.
+// A .cjs module (not JSON) so the variant is decided at require time:
+// HERMES_DESKTOP_VARIANT=light builds "Hermes Light". The whole config
+// derives from that one flag.
 // @ts-check
 'use strict'
-
-const fs = require('node:fs')
 
 const {
   light,
@@ -105,21 +97,23 @@ module.exports = {
       NSMicrophoneUsageDescription: `${displayName} uses the microphone for voice input and voice conversations.`
     },
     target: ['dmg', 'zip'],
-    sign: {
-      entitlements: 'electron/entitlements.mac.plist',
-      entitlementsInherit: 'electron/entitlements.mac.inherit.plist',
-      hardenedRuntime: true,
-      ignore: (/** @type {string} */ file) => {
-        try {
-          if (fs.lstatSync(file).isDirectory()) {
-            return false
-          }
-          return !isMachO(file)
-        } catch {
-          return true
-        }
-      }
-    }
+    // electron-builder 26 treats mac.sign as a hook function. A nested
+    // options object is resolved as customSign and then called.
+    // Entitlements and hardenedRuntime live on mac.* (schema keys).
+    signIgnore: [
+      '\\.gif$',
+      '\\.png$',
+      '\\.jpg$',
+      '\\.webp$',
+      '\\.whl$',
+      '\\.zip$',
+      '\\.pyc$',
+      '\\.py$',
+      '\\.txt$',
+      '\\.md$',
+      '\\.json$',
+      '\\.dist-info/'
+    ]
   },
   dmg: {
     title: `Install ${displayName}`,
@@ -182,29 +176,9 @@ function windowsSigning() {
       endpoint: process.env.AZURE_SIGN_ENDPOINT,
       codeSigningAccountName: process.env.AZURE_SIGN_ACCOUNT,
       certificateProfileName: process.env.AZURE_SIGN_PROFILE
-    }
+    },
+    // extraResources payload PEs are not under app.asar.unpacked.
+    // 26 only signs those if signExts matches during the extra-file copy.
+    signExts: ['.exe', '.dll']
   }
-}
-
-const MACHO_MAGICS = new Set([
-  0xfeedface,
-  0xcefaedfe,
-  0xfeedfacf,
-  0xcffaedfe,
-  0xcafebabe,
-  0xbebafeca
-])
-
-/** @param {string} file */
-function isMachO(file) {
-  const buf = Buffer.alloc(4)
-  const fd = fs.openSync(file, 'r')
-  try {
-    if (fs.readSync(fd, buf, 0, 4, 0) !== 4) {
-      return false
-    }
-  } finally {
-    fs.closeSync(fd)
-  }
-  return MACHO_MAGICS.has(buf.readUInt32BE(0))
 }

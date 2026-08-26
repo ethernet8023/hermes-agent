@@ -108,9 +108,7 @@ module.exports = {
       '\.(whl|zip|gz|bz2|xz|pak|dat|bin|wasm|wav|onnx|tflite)$',
       '\.(pyc|py|txt|md|rst|json|ya?ml|toml|ini|cfg|xml|html|css|js|map|csv)$',
       '\.(plist|strings|nib|car)$',
-      '\.dist-info/',
-      'Google Chrome for Testing\.app',
-      'chrome-headless-shell-mac-'
+      '\.dist-info/'
     ]
   },
   dmg: {

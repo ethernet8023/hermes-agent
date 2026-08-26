@@ -517,6 +517,389 @@ def _fail_and_issue(text: str, detail: str, fix: str, issues: list[str]) -> None
     issues.append(fix)
 
 
+# ---------------------------------------------------------------------------
+# pm-managed runtime checks
+# ---------------------------------------------------------------------------
+
+
+def _pm_tool_path(tool: str) -> "Path | None":
+    """The pm-store binary for *tool*, or None when pm has not staged it.
+
+    Facts are the only authority — the same rule pm's own resolution uses,
+    so doctor can never report a path Hermes would not actually run.
+    """
+    from pm import paths as pm_paths
+    from pm.lock import Facts
+    from pm.registry import get_package
+    from pm.store import Store, current_target
+
+    facts = Facts(pm_paths.facts_path())
+    fact = facts.get(tool)
+    if fact is None or "entry" not in fact:
+        return None
+    package = get_package(tool)
+    binary = package.binary(
+        Store(pm_paths.store_root()).entry(fact["entry"]), current_target()
+    )
+    if binary is None or not binary.is_file():
+        return None
+    return binary
+
+
+def _managed_pm_tool(tool: str) -> "tuple[str | None, str]":
+    """Locate a pinned tool the way Hermes locates it, plus a label.
+
+    Hermes runs pinned tools out of the pm store, and nothing puts the
+    store on an interactive shell's PATH — so a PATH-only probe misreports
+    a healthy managed install as "not found", which is the normal case.
+
+    PATH stays as the second rung, because doctor reports what is on the
+    machine and an unmanaged system copy is still worth naming.
+    """
+    try:
+        binary = _pm_tool_path(tool)
+    except Exception:
+        binary = None
+    if binary is not None:
+        return str(binary), "managed"
+    system = _safe_which("rg" if tool == "ripgrep" else tool)
+    return system, "system"
+
+
+def _check_managed_runtimes() -> None:
+    """Report the managed runtime tools from the pm store's facts file.
+
+    pm is the only writer of facts.json, so doctor reads it rather than
+    re-deriving existence by probing paths. Tools the lockfile does not
+    know about are not reported here — pm only vouches for what it pinned.
+
+    Drift is a WARNING in a git checkout and an ERROR in a sealed tree.
+    A checkout heals itself on the next `hermes update`; a sealed tree
+    cannot install anything, so a mismatch there means the artifact was
+    built against a different lockfile than the code it ships, and only
+    its steward can fix it.
+    """
+    try:
+        from pm import paths as pm_paths
+        from pm.ensure import sealed
+        from pm.lock import Facts, Lockfile
+        from pm.registry import get_package
+        from pm.store import current_target
+
+        lockfile = Lockfile(pm_paths.lockfile_path())
+        facts = Facts(pm_paths.facts_path())
+        store_root = pm_paths.store_root()
+        target = current_target()
+        is_sealed = sealed()
+    except Exception as exc:
+        check_warn("Managed runtimes unreadable", f"({exc})")
+        return
+
+    if not pm_paths.facts_path().is_file():
+        # pm has never installed anything for this store — nothing is
+        # vouched for, so there is no drift to report either.
+        check_info("pm store not initialized yet (nothing installed by pm)")
+        return
+
+    # What a user can actually do about drift differs per install kind:
+    # a checkout runs an update, a sealed tree rebuilds with its steward.
+    remedy = (
+        "(rebuild this sealed artifact — a sealed install cannot install)"
+        if is_sealed
+        else "(reinstalled on the next 'hermes update' or 'hermes pm install')"
+    )
+    report_drift = check_fail if is_sealed else check_warn
+
+    for tool in lockfile.names():
+        try:
+            package = get_package(tool)
+        except KeyError:
+            # Version skew during a partial update: the lockfile names a
+            # package this build does not know. Skipped, not fatal.
+            continue
+        if package.missing_reason(target) is not None:
+            continue
+        fact = facts.get(tool)
+        if fact is None:
+            # An OPTIONAL tool nobody installed is a capability nobody
+            # asked for, not drift. Say only what this sweep knows — that
+            # nothing was staged; the capability may still resolve another
+            # way (a system browser, npx) and those checks own the verdict.
+            if package.optional:
+                check_info(f"{tool} not staged from the lockfile (optional)")
+                continue
+            system = _safe_which("rg" if tool == "ripgrep" else tool)
+            if system:
+                check_ok(f"{tool} (system)", f"at {system}")
+            else:
+                report_drift(f"{tool} not installed", remedy)
+            continue
+        if "entry" in fact and not (store_root / fact["entry"]).exists():
+            # The fact's entry is STORE-relative: bytes live in the shared
+            # pm store, and a recorded entry that vanished means the store
+            # was modified out from under the facts.
+            report_drift(
+                f"{tool} recorded but missing from the pm store",
+                ("(store was modified) " + remedy) if not is_sealed else remedy,
+            )
+            continue
+        # Exact pins make currency an equality check, not a range check —
+        # the same comparison pm.check() makes at startup.
+        pinned = lockfile.version(tool)
+        recorded = fact.get("version", fact.get("stamp", ""))
+        if pinned is not None and fact.get("version") not in (None, pinned):
+            report_drift(
+                f"{tool} {fact.get('version')} does not match the pin {pinned}",
+                remedy,
+            )
+            continue
+        check_ok(f"{tool} {recorded}".rstrip(), "(managed)")
+
+
+def _check_install_state_hygiene() -> None:
+    """Orphaned install-state folders and unreferenced pm-store entries.
+
+    Both are derived-state leaks, not breakage: a deleted worktree leaves
+    its ``installs/<sha16>/`` folder behind (nothing can ever claim it —
+    the key is the hash of a path that no longer exists), and a pin bump
+    strands the store entry of the version nobody's facts name anymore.
+    Doctor reports; the user deletes. No auto-delete from a diagnostic
+    command — the whole point of the shared store is that another install
+    might be mid-provision while doctor runs.
+
+    Deliberately self-contained (no boot-bootstrap import): the records it
+    reads are plain folders and JSON, and an install where they do not
+    exist yet simply has nothing to report.
+    """
+    import json as _json
+
+    try:
+        from hermes_cli.profiles import _get_default_hermes_home
+        from hermes_cli.sizefmt import format_bytes
+        from pm import paths as pm_paths
+        from pm.lock import Facts
+
+        installs_root = _get_default_hermes_home() / "installs"
+        store_root = pm_paths.store_root()
+    except Exception as exc:
+        check_warn("Install-state hygiene unreadable", f"({exc})")
+        return
+
+    # installs/<sha16>/install.json records whose recorded root vanished.
+    install_orphans: list[tuple[Path, str]] = []
+    if installs_root.is_dir():
+        for entry in sorted(installs_root.iterdir()):
+            if not entry.is_dir():
+                continue
+            try:
+                recorded = _json.loads(
+                    (entry / "install.json").read_text(encoding="utf-8-sig")
+                ).get("root", "")
+            except (OSError, ValueError):
+                install_orphans.append((entry, "<unreadable install.json>"))
+                continue
+            if not recorded or not Path(recorded).exists():
+                install_orphans.append((entry, recorded or "<empty>"))
+
+    # pm-store entries no fact references. facts.json lives IN the store,
+    # so the store's own facts file is the complete reference set. Doubt
+    # errs toward KEEP: fetch-* entries are content-addressed download
+    # caches and scratch dirs are in-flight installs — neither is a leak.
+    store_orphans: list[tuple[Path, int]] = []
+    if store_root.is_dir():
+        try:
+            referenced = Facts(pm_paths.facts_path()).entries_in_use()
+            for entry in sorted(store_root.iterdir()):
+                if not entry.is_dir():
+                    continue
+                if entry.name.startswith((".", "fetch-")):
+                    continue
+                if entry.name in referenced:
+                    continue
+                try:
+                    size = sum(
+                        f.stat().st_size for f in entry.rglob("*") if f.is_file()
+                    )
+                except OSError:
+                    size = 0
+                store_orphans.append((entry, size))
+        except Exception:
+            # Unreadable facts make every reference unknowable — report
+            # nothing rather than flag entries the store may still own.
+            store_orphans = []
+
+    if not installs_root.is_dir() and not pm_paths.facts_path().is_file():
+        check_info("Install state not yet bootstrapped (no records to sweep)")
+        return
+
+    if not install_orphans and not store_orphans:
+        check_ok("Install state", "(no orphaned folders or store entries)")
+        return
+
+    for folder, recorded in install_orphans:
+        check_warn(
+            f"Orphaned install state: {folder.name}",
+            f"(its install at {recorded} is gone — safe to delete {folder})",
+        )
+    if store_orphans:
+        total = sum(size for _entry, size in store_orphans)
+        names = ", ".join(entry.name for entry, _size in store_orphans[:4])
+        more = f" +{len(store_orphans) - 4} more" if len(store_orphans) > 4 else ""
+        check_warn(
+            f"{len(store_orphans)} unreferenced pm-store "
+            f"entr{'y' if len(store_orphans) == 1 else 'ies'} "
+            f"({format_bytes(total)})",
+            f"({names}{more} — no fact names them; safe to delete)",
+        )
+
+
+def _check_lazy_features() -> None:
+    """Opt-in packages this install has activated, and their state.
+
+    A lazy feature has two halves that can disagree: the record of what
+    was activated (a fact in facts.json) and the bytes in the pm store.
+    pm's own startup check skips optional packages entirely, so nothing
+    else reports them — an optional tool the user installed and no longer
+    has looks identical to one they never installed.
+    """
+    try:
+        from pm import paths as pm_paths
+        from pm.ensure import enabled_extras
+        from pm.lock import Facts, Lockfile
+        from pm.registry import get_package
+        from pm.store import current_target
+
+        lockfile = Lockfile(pm_paths.lockfile_path())
+        facts = Facts(pm_paths.facts_path())
+        store_root = pm_paths.store_root()
+        target = current_target()
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must not raise
+        check_warn("Optional backends unreadable", f"({exc})")
+        return
+
+    extras = []
+    try:
+        extras = enabled_extras()
+    except Exception:
+        pass
+    if extras:
+        check_ok(f"{len(extras)} venv extra(s) enabled", f"({', '.join(sorted(extras))})")
+
+    report: list[tuple[str, str]] = []
+    for name in lockfile.names():
+        try:
+            package = get_package(name)
+        except KeyError:
+            continue
+        if not package.optional:
+            continue
+        fact = facts.get(name)
+        if fact is None:
+            continue  # never activated — not a state to report
+        if package.missing_reason(target) is not None:
+            report.append((name, "unsupported"))
+        elif "entry" in fact and not (store_root / fact["entry"]).exists():
+            report.append((name, "missing"))
+        elif fact.get("version") not in (None, lockfile.version(name)):
+            report.append((name, "stale"))
+        else:
+            report.append((name, "installed"))
+
+    if not report and not extras:
+        check_ok("Optional backends", "(none activated)")
+        return
+
+    installed = [f for f, state in report if state == "installed"]
+    if installed:
+        shown = ", ".join(installed[:6])
+        more = f" +{len(installed) - 6} more" if len(installed) > 6 else ""
+        check_ok(f"{len(installed)} optional backend(s) installed", f"({shown}{more})")
+
+    for feature, state in report:
+        if state == "stale":
+            check_warn(
+                f"Optional backend out of date: {feature}",
+                "(a pin moved — `hermes update` refreshes it)",
+            )
+        elif state == "missing":
+            check_warn(
+                f"Optional backend recorded but absent: {feature}",
+                "(its store entry is gone — reinstall with `hermes pm install`)",
+            )
+        elif state == "unsupported":
+            check_info(f"Optional backend unavailable on this host: {feature}")
+
+
+def check_legacy_desktop_checkout() -> None:
+    """Report the unused legacy checkout under an embedded desktop install.
+
+    Before the embedded runtime existed, the desktop app installed a git
+    checkout at $HERMES_HOME/hermes-agent. An embedded app never uses it,
+    so it sits on disk (1-2 GB of tree + venv). Doctor reports it and
+    suggests deletion ONLY when the tree is demonstrably untouched: clean
+    status, on main, no stashes. A false "dirty" is safe (the user keeps a
+    clean tree); a false "pristine" is not (the suggestion could cost
+    local work). Doctor never deletes anything itself.
+    """
+    from hermes_cli.steward import STEWARD_DESKTOP, sealed_steward
+
+    try:
+        from hermes_cli.main import PROJECT_ROOT
+    except Exception:
+        return
+
+    if sealed_steward(Path(PROJECT_ROOT)) != STEWARD_DESKTOP:
+        return
+
+    checkout = HERMES_HOME / "hermes-agent"
+    if not (checkout / ".git").exists():
+        return
+
+    _section("Legacy Desktop Checkout")
+
+    def _git(*args: str):
+        try:
+            return subprocess.run(
+                ["git", "-C", str(checkout), *args],
+                capture_output=True, text=True, encoding="utf-8", timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    status = _git("status", "--porcelain")
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    stashes = _git("stash", "list")
+
+    # Conservative pristineness: every probe must succeed AND come back
+    # clean. Any probe failure counts as "has local work".
+    pristine = (
+        status is not None and status.returncode == 0 and status.stdout.strip() == ""
+        and branch is not None and branch.returncode == 0 and branch.stdout.strip() == "main"
+        and stashes is not None and stashes.returncode == 0 and stashes.stdout.strip() == ""
+    )
+
+    size_note = ""
+    try:
+        total = sum(f.stat().st_size for f in checkout.rglob("*") if f.is_file())
+        size_note = f" (~{total / 1_000_000_000:.1f} GB)"
+    except OSError:
+        pass
+
+    if pristine:
+        check_warn(
+            f"Unused checkout at {_DHH}/hermes-agent{size_note}",
+            "(the desktop app runs embedded and does not use it)",
+        )
+        print(f"    The tree is pristine. You can delete it to free the space:")
+        print(f"      rm -rf {checkout}")
+    else:
+        check_info(
+            f"A checkout exists at {_DHH}/hermes-agent but holds local work "
+            "(changes, a branch, or stashes). The desktop app does not use "
+            "it; review it before you remove anything."
+        )
+
+
 # Deprecated / legacy config keys still read for back-compat. Doctor surfaces
 # them as non-failing warnings with the modern replacement — it does not
 # auto-migrate or delete (migrations live in config.py version steps).
@@ -705,7 +1088,7 @@ def _read_pyproject_version() -> str | None:
     """
     pyproject = PROJECT_ROOT / "pyproject.toml"
     try:
-        text = pyproject.read_text(encoding="utf-8")
+        text = pyproject.read_text(encoding="utf-8-sig")
     except OSError:
         return None
     in_project = False
@@ -719,6 +1102,37 @@ def _read_pyproject_version() -> str | None:
             value = value.split("#", 1)[0].strip().strip("\"'")
             return value or None
     return None
+
+
+def _check_channel_record_hygiene() -> None:
+    """Stale per-install channel records (``update.installs.<sha16>``).
+
+    Same report-don't-delete posture as the state sweep. Three shapes
+    (hermes_cli.update_channel.stale_channel_records): a record whose path
+    holds a DIFFERENT install now (``replaced``), a record whose path is
+    gone (``missing``), and a record no live install-state folder claims
+    (``unclaimed``). Keep-on-doubt: doctor names the config key, the user
+    removes it.
+    """
+    try:
+        from hermes_cli.config import load_config
+        from hermes_cli.update_channel import stale_channel_records
+
+        stale = stale_channel_records(load_config() or {})
+    except Exception as exc:
+        check_warn("Channel-record hygiene unreadable", f"({exc})")
+        return
+    if not stale:
+        return
+    for sha16, record, reason in stale:
+        recorded = record.get("path") or "<no path>"
+        if reason == "replaced":
+            detail = f"(the install at {recorded} is a different install now — stale channel entry)"
+        elif reason == "missing":
+            detail = f"(nothing at {recorded} — safe to remove update.installs.{sha16})"
+        else:  # unclaimed
+            detail = f"(no live install claims {sha16} — safe to remove update.installs.{sha16})"
+        check_warn(f"Stale channel record: {sha16}", detail)
 
 
 def _check_version_consistency(issues: list[str]) -> None:
@@ -1176,7 +1590,7 @@ def check_macos_tcc_anchor_removed() -> None:
         if not marker.is_file():
             continue
         try:
-            source = Path(marker.read_text(encoding="utf-8").strip())
+            source = Path(marker.read_text(encoding="utf-8-sig").strip())
             venv_py = venv_bin / "python"
             if source.is_file() and venv_py.is_file() and not venv_py.is_symlink():
                 tmp = venv_bin / ".python-unanchor-tmp"
@@ -1435,6 +1849,10 @@ def run_doctor(args):
     # (a git conflict resolution can silently revert one but not the other).
     _check_version_consistency(issues)
 
+    # Stale per-install update-channel records (update.installs.<sha16>):
+    # report-don't-delete, same posture as the state sweep.
+    _check_channel_record_hygiene()
+
     # macOS TCC grant persistence (issue #86385): a locally-built desktop
     # bundle whose DR is cdhash-pinned loses every permission grant on each
     # rebuild; a post-#73681 identifier-pinned DR survives, but grants made
@@ -1485,7 +1903,7 @@ def run_doctor(args):
         # latin-1 for Windows Notepad/cp1252 files that are not valid UTF-8 —
         # matches hermes_cli.env_loader._load_dotenv_with_fallback.
         try:
-            content = env_path.read_text(encoding="utf-8")
+            content = env_path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
             content = env_path.read_text(encoding="latin-1")
         if _has_provider_env_config(content):
@@ -1989,6 +2407,8 @@ def run_doctor(args):
     except Exception:
         pass
 
+    check_legacy_desktop_checkout()
+
     _section("Directory Structure")
     hermes_home = HERMES_HOME
     if hermes_home.exists():
@@ -2016,7 +2436,7 @@ def run_doctor(args):
     # Check for SOUL.md persona file
     soul_path = hermes_home / "SOUL.md"
     if soul_path.exists():
-        content = soul_path.read_text(encoding="utf-8").strip()
+        content = soul_path.read_text(encoding="utf-8-sig").strip()
         # Check if it's just the template comments (no real content)
         lines = [l for l in content.splitlines() if l.strip() and not l.strip().startswith(("<!--", "-->", "#"))]
         if lines:
@@ -2043,12 +2463,12 @@ def run_doctor(args):
         memory_file = memories_dir / "MEMORY.md"
         user_file = memories_dir / "USER.md"
         if memory_file.exists():
-            size = len(memory_file.read_text(encoding="utf-8").strip())
+            size = len(memory_file.read_text(encoding="utf-8-sig").strip())
             check_ok(f"MEMORY.md exists ({size} chars)")
         else:
             check_info("MEMORY.md not created yet (will be created when the agent first writes a memory)")
         if user_file.exists():
-            size = len(user_file.read_text(encoding="utf-8").strip())
+            size = len(user_file.read_text(encoding="utf-8-sig").strip())
             check_ok(f"USER.md exists ({size} chars)")
         else:
             check_info("USER.md not created yet (will be created when the agent first writes a memory)")
@@ -2306,6 +2726,20 @@ def run_doctor(args):
     else:
         check_warn("ripgrep (rg) not found", "(file search uses grep fallback)")
         check_info(f"Install for faster search: {_system_package_install_cmd('ripgrep')}")
+
+    # Managed runtimes: what the pm store's facts say this install staged.
+    # A tool that is missing here is not a "go install it yourself"
+    # problem — pm owns it and retries on the next update.
+    _check_managed_runtimes()
+
+    # Derived-state leaks: orphaned installs/<sha16>/ folders and
+    # pm-store entries nobody's facts reference (report-only).
+    _check_install_state_hygiene()
+
+    # Opt-in backends: what the user activated, and whether the pm store
+    # actually holds the bytes (the record and the store are separate
+    # halves and can disagree).
+    _check_lazy_features()
     
     # Docker (optional)
     terminal_env = os.getenv("TERMINAL_ENV", "local")
@@ -3199,7 +3633,7 @@ def run_doctor(args):
         if lock_file.exists():
             try:
                 import json
-                lock_data = json.loads(lock_file.read_text(encoding="utf-8"))
+                lock_data = json.loads(lock_file.read_text(encoding="utf-8-sig"))
                 count = len(lock_data.get("installed", {}))
                 check_ok(f"Lock file OK ({count} hub-installed skill(s))")
             except Exception:
@@ -3365,7 +3799,7 @@ def run_doctor(args):
                     if not wrapper.is_file():
                         continue
                     try:
-                        content = wrapper.read_text(encoding="utf-8")
+                        content = wrapper.read_text(encoding="utf-8-sig")
                         if "hermes -p" in content:
                             _m = _re.search(r"hermes -p (\S+)", content)
                             if _m and not profile_exists(_m.group(1)):

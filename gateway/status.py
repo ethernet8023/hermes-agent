@@ -364,7 +364,7 @@ def _get_process_start_time(pid: int) -> Optional[int]:
     stat_path = Path(f"/proc/{pid}/stat")
     try:
         # Field 22 in /proc/<pid>/stat is process start time (clock ticks).
-        return int(stat_path.read_text(encoding="utf-8-sig").split()[21])
+        return int(stat_path.read_text(encoding="utf-8").split()[21])
     except (FileNotFoundError, IndexError, PermissionError, ValueError, OSError):
         pass
 
@@ -905,7 +905,7 @@ def _pid_exists(pid: int) -> bool:
         # ``--replace`` would wait on a dead PID and abort with exit 1.
         try:
             stat_fields = (
-                Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8-sig").split()
+                Path(f"/proc/{int(pid)}/stat").read_text(encoding="utf-8").split()
             )
             if len(stat_fields) > 2 and stat_fields[2] == "Z":
                 return False
@@ -1597,7 +1597,7 @@ def acquire_scoped_lock(scope: str, identity: str, metadata: Optional[dict[str, 
                     try:
                         _proc_status = Path(f"/proc/{existing_pid}/status")
                         if _proc_status.exists():
-                            for _line in _proc_status.read_text(encoding="utf-8-sig").splitlines():
+                            for _line in _proc_status.read_text(encoding="utf-8").splitlines():
                                 if _line.startswith("State:"):
                                     _state = _line.split()[1]
                                     if _state in {"T", "t"}:  # stopped or tracing stop

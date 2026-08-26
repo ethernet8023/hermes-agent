@@ -296,7 +296,7 @@ def _config_default_interface_early() -> str:
         if os.path.exists(cfg_path):
             import yaml as _yaml_iface
 
-            with open(cfg_path, encoding="utf-8") as _f:
+            with open(cfg_path, encoding="utf-8-sig") as _f:
                 raw = _yaml_iface.load(
                     _f, Loader=getattr(_yaml_iface, "CSafeLoader", None) or _yaml_iface.SafeLoader
                 ) or {}
@@ -649,7 +649,7 @@ def _apply_profile_override() -> None:
 
             active_path = get_default_hermes_root() / "active_profile"
             if active_path.exists():
-                name = active_path.read_text(encoding="utf-8").strip()
+                name = active_path.read_text(encoding="utf-8-sig").strip()
                 if name and name != "default":
                     profile_name = name
                     consume = 0  # don't strip anything from argv
@@ -855,7 +855,7 @@ def _read_packed_ref(common_dir: Path, ref: str) -> str | None:
     peel lines and ``#``-prefixed comments / ``# pack-refs with:`` header.
     """
     try:
-        text = (common_dir / "packed-refs").read_text(encoding="utf-8", errors="replace")
+        text = (common_dir / "packed-refs").read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
     for line in text.splitlines():
@@ -872,7 +872,7 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
     git_dir = repo_root / ".git"
     try:
         if git_dir.is_file():
-            for line in git_dir.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in git_dir.read_text(encoding="utf-8-sig", errors="replace").splitlines():
                 key, _, value = line.partition(":")
                 if key.strip() == "gitdir" and value.strip():
                     git_dir = (repo_root / value.strip()).resolve()
@@ -884,13 +884,13 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
         commondir_file = git_dir / "commondir"
         if commondir_file.exists():
             try:
-                rel = commondir_file.read_text(encoding="utf-8", errors="replace").strip()
+                rel = commondir_file.read_text(encoding="utf-8-sig", errors="replace").strip()
                 if rel:
                     common_dir = (git_dir / rel).resolve()
             except OSError:
                 pass
         head_file = git_dir / "HEAD"
-        head = head_file.read_text(encoding="utf-8", errors="replace").strip()
+        head = head_file.read_text(encoding="utf-8-sig", errors="replace").strip()
         if head.startswith("ref:"):
             ref = head.split(":", 1)[1].strip()
             # Loose refs may live in the worktree gitdir OR the common dir
@@ -899,7 +899,7 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
             for candidate in (git_dir, common_dir):
                 ref_file = candidate / ref
                 if ref_file.exists():
-                    return f"git:{ref}:{ref_file.read_text(encoding='utf-8', errors='replace').strip()}"
+                    return f"git:{ref}:{ref_file.read_text(encoding='utf-8-sig', errors='replace').strip()}"
             packed_sha = _read_packed_ref(common_dir, ref)
             if packed_sha:
                 return f"git:{ref}:{packed_sha}"
@@ -936,7 +936,7 @@ def _termux_bundled_skills_sync_needed() -> bool:
         return True
     try:
         stamp = _termux_bundled_skills_stamp_path()
-        return stamp.read_text(encoding="utf-8").strip() != _termux_bundled_skills_fingerprint()
+        return stamp.read_text(encoding="utf-8-sig").strip() != _termux_bundled_skills_fingerprint()
     except OSError:
         return True
 
@@ -1038,7 +1038,7 @@ def _has_any_provider_configured() -> bool:
     env_file = get_env_path()
     if env_file.exists():
         try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
+            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
                 line = line.strip()
                 if line.startswith("#") or "=" not in line:
                     continue
@@ -1924,7 +1924,7 @@ def _read_tui_active_session_file(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         sid = str(data.get("session_id") or "").strip()
         return sid or None
     except Exception:
@@ -2242,8 +2242,8 @@ def _tui_need_npm_install(root: Path) -> bool:
     # can bump the root lockfile timestamp even when installed deps already
     # match. Fall back to mtime when either file is unparseable.
     try:
-        wanted = json.loads(lock.read_text(encoding="utf-8")).get("packages") or {}
-        installed = json.loads(marker.read_text(encoding="utf-8")).get("packages") or {}
+        wanted = json.loads(lock.read_text(encoding="utf-8-sig")).get("packages") or {}
+        installed = json.loads(marker.read_text(encoding="utf-8-sig")).get("packages") or {}
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return lock.stat().st_mtime > marker.stat().st_mtime
 
@@ -2379,14 +2379,11 @@ def _tui_need_rebuild(root: Path) -> bool:
 
 
 def _ensure_tui_node() -> None:
-    """Make sure `node` + `npm` are on PATH for the TUI.
+    """Make sure `node` + `npm` are resolvable for the TUI.
 
-    If either is missing and scripts/lib/node-bootstrap.sh is available, source
-    it and call `ensure_node` (fnm/nvm/proto/brew/bundled cascade). After
-    install, capture the resolved node binary path from the bash subprocess
-    and prepend its directory to os.environ["PATH"] so shutil.which finds the
-    new binaries in this Python process — regardless of which version manager
-    was used (nvm, fnm, proto, brew, or the bundled fallback).
+    If either is missing from PATH, install the pm-managed node/npm packages
+    and prepend the store's PATH contribution to ``os.environ["PATH"]`` so
+    shutil.which finds them in this Python process.
 
     Idempotent no-op when node+npm are already discoverable. Set
     ``HERMES_SKIP_NODE_BOOTSTRAP=1`` to disable auto-install.
@@ -2396,47 +2393,16 @@ def _ensure_tui_node() -> None:
     if os.environ.get("HERMES_SKIP_NODE_BOOTSTRAP"):
         return
 
-    helper = PROJECT_ROOT / "scripts" / "lib" / "node-bootstrap.sh"
-    if not helper.is_file():
-        return
-
-    from hermes_constants import get_hermes_home
-
-    hermes_home = str(get_hermes_home())
     try:
-        # Helper writes logs to stderr; we ask bash to print `command -v node`
-        # on stdout once ensure_node succeeds. Subshell PATH edits don't leak
-        # back into Python, so the stdout capture is the bridge.
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f'source "{helper}" >&2 && ensure_node >&2 && command -v node',
-            ],
-            env={**os.environ, "HERMES_HOME": hermes_home},
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
+        import pm
+
+        runner = pm.ensure("npm")
+    except Exception:
         return
 
-    parts = os.environ.get("PATH", "").split(os.pathsep)
-    extras: list[Path] = []
-
-    resolved = (result.stdout or "").strip()
-    if resolved:
-        extras.append(Path(resolved).resolve().parent)
-
-    extras.extend([Path(hermes_home) / "node" / "bin", Path.home() / ".local" / "bin"])
-
-    for extra in extras:
-        s = str(extra)
-        if extra.is_dir() and s not in parts:
-            parts.insert(0, s)
-    os.environ["PATH"] = os.pathsep.join(parts)
+    new_path = runner.env.get("PATH")
+    if new_path:
+        os.environ["PATH"] = new_path
 
 
 def _find_bundled_tui(hermes_cli_dir: Path | None = None) -> Path | None:
@@ -2776,7 +2742,7 @@ def _read_cgroup_memory_limit() -> Optional[int]:
     )
     for path in candidates:
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 raw = f.read().strip()
         except (OSError, ValueError):
             continue
@@ -3418,7 +3384,7 @@ def cmd_chat(args):
             if _qfile == "-":
                 args.query = sys.stdin.read()
             else:
-                with open(_qfile, "r", encoding="utf-8", errors="replace") as _fh:
+                with open(_qfile, "r", encoding="utf-8-sig", errors="replace") as _fh:
                     args.query = _fh.read()
         except OSError as _e:
             print(f"Error: cannot read --query-file {_qfile}: {_e}", file=sys.stderr)
@@ -5919,13 +5885,23 @@ def cmd_version(args):
 
 
 def cmd_uninstall(args):
-    """Uninstall Hermes Agent (or just the Chat GUI with --gui)."""
+    """Uninstall Hermes Agent (or just the Chat GUI / user data)."""
     # Machine-readable install snapshot for the desktop app's uninstall UI.
     # Must run before any TTY gate — it's called from a non-interactive child.
     if getattr(args, "gui_summary", False):
         from hermes_cli.gui_uninstall import gui_install_summary
 
         print(json.dumps(gui_install_summary()))
+        return
+
+    # Data-only removal. Valid on every install kind (source, bundled
+    # desktop app, Nix, Docker) — it never touches code.
+    if getattr(args, "data", False):
+        if not getattr(args, "yes", False):
+            _require_tty("uninstall --data")
+        from hermes_cli.uninstall import run_data_uninstall
+
+        run_data_uninstall(args)
         return
 
     # GUI-only uninstall. The desktop app shells out to this non-interactively
@@ -6033,7 +6009,7 @@ def _sweep_stale_bytecode_if_checkout_changed() -> None:
             return  # non-git install — the ZIP update path clears explicitly
         stamp_path = PROJECT_ROOT / _BYTECODE_FINGERPRINT_FILE
         try:
-            recorded = stamp_path.read_text(encoding="utf-8").strip()
+            recorded = stamp_path.read_text(encoding="utf-8-sig").strip()
         except OSError:
             recorded = ""
         if recorded == fingerprint:
@@ -6078,7 +6054,7 @@ def _web_ui_build_needed(web_dir: Path) -> bool:
     if not stamp_file.is_file():
         return True
     try:
-        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8"))
+        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return True
     if not isinstance(stamp_data, dict):
@@ -6118,7 +6094,7 @@ def _compute_web_ui_content_hash(project_root: Path, web_dir: Path) -> str:
     gitignore = project_root / ".gitignore"
     lines: list[str] = []
     if gitignore.is_file():
-        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        lines = gitignore.read_text(encoding="utf-8-sig").splitlines()
     spec = PathSpec.from_lines("gitignore", lines)
 
     # Root workspace config (single package-lock.json covers all workspaces).
@@ -6287,7 +6263,7 @@ def _nixos_build_env() -> dict[str, str] | None:
     import re
 
     try:
-        os_release = Path("/etc/os-release").read_text(encoding="utf-8")
+        os_release = Path("/etc/os-release").read_text(encoding="utf-8-sig")
     except OSError:
         return None
     if not re.search(r"^ID=nixos$", os_release, re.M):
@@ -6732,7 +6708,7 @@ def _compute_desktop_content_hash(project_root: Path) -> str:
     gitignore = project_root / ".gitignore"
     lines: list[str] = []
     if gitignore.is_file():
-        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        lines = gitignore.read_text(encoding="utf-8-sig").splitlines()
     spec = PathSpec.from_lines("gitignore", lines)
 
     # Root workspace config
@@ -6815,7 +6791,7 @@ def _renderer_bundle_torn(dist_dir: Path) -> bool:
     reported as torn — the missing-bundle guards own those cases.
     """
     try:
-        html = (dist_dir / "index.html").read_text(encoding="utf-8", errors="replace")
+        html = (dist_dir / "index.html").read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return False
 
@@ -6859,7 +6835,7 @@ def _desktop_build_needed(desktop_dir: Path, project_root: Path, *, source_mode:
         return True
 
     try:
-        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8"))
+        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, KeyError):
         return True
 
@@ -8066,7 +8042,7 @@ def _desktop_linux_needs_no_sandbox() -> bool:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return False
     try:
-        with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", encoding="utf-8") as f:
+        with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", encoding="utf-8-sig") as f:
             return f.read().strip() == "1"
     except OSError:
         return False
@@ -8241,10 +8217,72 @@ def _register_linux_desktop_entry() -> None:
         print(f"⚠ Could not install the desktop launcher entry: {exc}")
 
 
+def _launch_bundled_desktop(
+    args: argparse.Namespace, env: dict, electron_flags: list[str]
+) -> None:
+    """Start the desktop app this CLI ships inside, then exit.
+
+    A bundled install has no source tree to build: the app is a signed,
+    read-only artifact and this Python is a passenger in its resources.
+    So the whole build ladder below is skipped and the launcher is started
+    DETACHED — the user ran a CLI command, and the app must outlive the
+    terminal it was typed into. The app's own single-instance lock turns a
+    second run into "focus the running window".
+
+    Never returns.
+    """
+    from hermes_cli.bundled_app import NotBundledApp, launch_detached, resolve_bundle_layout
+
+    refused = [
+        flag
+        for flag, name in (
+            ("--source", "source"),
+            ("--build-only", "build_only"),
+            ("--force-build", "force_build"),
+        )
+        if getattr(args, name, False)
+    ]
+    if refused:
+        print(f"✗ {', '.join(refused)} cannot apply to a bundled Hermes install.")
+        print("  This app ships prebuilt and has no desktop source tree to build.")
+        sys.exit(2)
+
+    try:
+        layout = resolve_bundle_layout(PROJECT_ROOT)
+    except NotBundledApp as exc:
+        # The stamp says bundled, so a tree that is not one is a damaged or
+        # mispackaged install. Report it — degrading to the build ladder
+        # would run npm inside the app's own resources.
+        print(f"✗ This Hermes is stamped as a bundled desktop install, but {exc}.")
+        print("  The install is damaged — reinstall Hermes from the website.")
+        sys.exit(1)
+
+    if layout.launcher is None:
+        print(f"✗ Found no Hermes Desktop launcher in {layout.app_root}.")
+        print("  The install is damaged — reinstall Hermes from the website.")
+        sys.exit(1)
+
+    launch_command = [str(layout.launcher)]
+    if not _desktop_linux_sandbox_fixup(layout.launcher):
+        if _desktop_linux_needs_no_sandbox() and _desktop_linux_sandbox_helper_is_regular_file(layout.launcher):
+            print("⚠ Falling back to --no-sandbox because this Linux host restricts unprivileged user namespaces and the Electron sandbox helper could not be configured.")
+            launch_command.append("--no-sandbox")
+        else:
+            sys.exit(1)
+
+    launch_command.extend(electron_flags)
+    pid = launch_detached(launch_command, env=env, cwd=layout.app_root)
+    print(f"→ Launched Hermes Desktop: {' '.join(launch_command)} (pid {pid})")
+    sys.exit(0)
+
+
 def cmd_gui(args: argparse.Namespace):
     """Build and launch the native Electron desktop GUI."""
+    from hermes_cli.steward import is_bundled_payload
+
     desktop_dir = PROJECT_ROOT / "apps" / "desktop"
-    if not (desktop_dir / "package.json").exists():
+    bundled = is_bundled_payload(PROJECT_ROOT)
+    if not bundled and not (desktop_dir / "package.json").exists():
         print(f"Desktop GUI source not found at: {desktop_dir}")
         sys.exit(1)
 
@@ -8301,6 +8339,13 @@ def cmd_gui(args: argparse.Namespace):
     source_mode = getattr(args, "source", False)
     skip_build = getattr(args, "skip_build", False)
     force_build = getattr(args, "force_build", False)
+
+    # A bundled install IS the app: no source tree, no build, and the
+    # launcher is a sibling of this payload rather than something we
+    # produce. Every rung below assembles a checkout build, so the sealed
+    # shape leaves here with the env it just built.
+    if bundled:
+        _launch_bundled_desktop(args, env, config_electron_flags)
 
     # macOS-only one-shot: create a self-signed code-signing identity so TCC
     # grants survive rebuilds, then exit without building/launching.
@@ -8709,7 +8754,7 @@ def _get_systemd_service_for_pid(pid: int) -> str | None:
         cgroup_path = Path(f"/proc/{pid}/cgroup")
         if not cgroup_path.is_file():
             return None
-        text = cgroup_path.read_text(encoding="utf-8", errors="replace")
+        text = cgroup_path.read_text(encoding="utf-8-sig", errors="replace")
         for line in text.splitlines():
             line = line.strip()
             # Format: 0::/system.slice/hermes-serve.service
@@ -8750,7 +8795,7 @@ def _get_pid_cgroup_path(pid: int) -> str | None:
         cgroup_path = Path(f"/proc/{pid}/cgroup")
         if not cgroup_path.is_file():
             return None
-        text = cgroup_path.read_text(encoding="utf-8", errors="replace")
+        text = cgroup_path.read_text(encoding="utf-8-sig", errors="replace")
         for line in text.splitlines():
             line = line.strip()
             parts = line.split("::", 1)
@@ -10504,6 +10549,53 @@ def cmd_update(args):
         print_update_plan(collect_runtime_inventory())
         return
 
+    # --install-id / --set-channel work on any non-external install and
+    # never touch the tree — handle them before the admission gate so the
+    # desktop About page and channel switching work from a bundled CLI.
+    if getattr(args, "install_id", False):
+        from hermes_cli.update_channel import install_id
+
+        print(f"{install_id(PROJECT_ROOT)} ({PROJECT_ROOT})")
+        sys.exit(0)
+
+    if getattr(args, "set_channel", None):
+        from hermes_cli.config import detect_install_method
+        from hermes_cli.update_channel import (
+            CHANNEL_NIGHTLY,
+            CHANNEL_STABLE,
+            nightly_normalized_note,
+            set_install_channel,
+        )
+
+        try:
+            sha16 = set_install_channel(args.set_channel, PROJECT_ROOT)
+        except ValueError as exc:
+            print(f"✗ {exc}")
+            sys.exit(1)
+        print(f"✓ Channel '{args.set_channel}' recorded for install {sha16}.")
+        install_method = detect_install_method(PROJECT_ROOT)
+        if args.set_channel == CHANNEL_NIGHTLY:
+            if install_method == "git":
+                print(nightly_normalized_note())
+            else:
+                print("⚠ Nightly builds move fast: expect forward-incompatible")
+                print("  state — data written by newer code may not load in stable.")
+        elif args.set_channel == CHANNEL_STABLE:
+            # Honest wait: a nightly build outversions today's stable, and
+            # the updater never downgrades. Say when the switch takes
+            # effect, and where the impatient path is.
+            from hermes_cli.steward import read_install_stamp
+
+            version = read_install_stamp(Path(PROJECT_ROOT)).get("displayVersion") or ""
+            if "-nightly." in version:
+                base = version.split("-nightly.")[0]
+                print(f"→ You are on {version}. Stable updates resume once a")
+                print(f"  stable release reaches v{base} — until then this install")
+                print("  stays where it is. To switch now, reinstall stable:")
+                print("  https://hermes-agent.nousresearch.com/")
+                print("  (Nightly state may not load in older stable builds.)")
+        sys.exit(0)
+
     # Image-managed / package-managed admission gate (#91277 Phase 3): one
     # shared decision for every mutation surface. Consults the baked image
     # provenance marker first (authoritative, fail-closed on malformed),
@@ -11642,7 +11734,7 @@ def _read_ssh_session_token_file(path: str) -> str:
         if hasattr(os, "getuid") and (file_stat.st_mode & 0o777) & ~0o600:
             raise SystemExit("--ssh-session-token-file has unsafe permissions")
 
-        with os.fdopen(file_fd, "r", encoding="utf-8") as token_stream:
+        with os.fdopen(file_fd, "r", encoding="utf-8-sig") as token_stream:
             file_fd = -1
             token = token_stream.read(65)
 

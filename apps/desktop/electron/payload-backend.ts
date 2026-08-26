@@ -19,6 +19,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 
 export interface PayloadInfo {
   root: string
@@ -132,4 +133,198 @@ export function adoptPayloadVenv(
 
     return false
   }
+}
+
+// ─── update channel ─────────────────────────────────────────────────────────
+//
+// Pure mirrors of hermes_cli/update_channel.py: the CLI owns the channel
+// records; Electron only reads them for the version pill and the updater's
+// feed selection. Keep the three shapes byte-compatible:
+//   - install id: sha16 of the canonical install-root PATH,
+//   - nightly tag regex,
+//   - update.installs.<sha16>.channel in config.yaml.
+
+export type UpdateChannel = 'stable' | 'main' | 'nightly'
+
+/**
+ * The install id of the tree at `root`: sha16 of the canonical PATH,
+ * byte-identical to Python's install id (sha256 of the resolved root,
+ * first 16 hex chars — `boot_bootstrap._install_key` /
+ * `update_channel._install_key_sha16`). Path-derived so it survives
+ * artifact replacement at the same location; the same key names
+ * `installs/<sha16>/`.
+ */
+export function installIdForRoot(root: string, canonicalize: (p: string) => string = p => p): string {
+  return createHash('sha256').update(canonicalize(root), 'utf8').digest('hex').slice(0, 16)
+}
+
+/**
+ * A nightly release tag: `v<major>.<minor>.<patch>-nightly.<YYYYMMDDHHMMSS>`,
+ * or the legacy date-only shape. Mirrors `_NIGHTLY_TAG_RE` in
+ * hermes_cli/update_channel.py — both key off the same stamp tag.
+ */
+export function isNightlyTag(tag: string | null | undefined): boolean {
+  return typeof tag === 'string' && /^v(?:0|[1-9]\d{0,2})\.\d+\.\d+-nightly\.20\d{6}(?:\d{6})?$/.test(tag.trim())
+}
+
+/**
+ * The channel an install with no per-install record tracks.
+ *
+ * An electron-updater artifact follows the feed it was itself published
+ * to: a nightly tag means the nightly feed, anything else the stable
+ * feed. Defaulting a nightly artifact to stable would make it ask for
+ * its nightly feed file under the newest STABLE release — a 404 that
+ * leaves the install permanently unable to update. Everything else
+ * defaults to main, the source-checkout default.
+ */
+export function defaultUpdateChannel(
+  stampTag: string | null | undefined,
+  mechanism: string | null | undefined
+): UpdateChannel {
+  if (mechanism !== 'electron-updater') {
+    return 'main'
+  }
+
+  return isNightlyTag(stampTag) ? 'nightly' : 'stable'
+}
+
+/**
+ * The update channel of the install with id `installId`, read from
+ * config.yaml text (`update.installs.<sha16>.channel` — the per-install
+ * record `hermes update --set-channel` writes; there is no home-global
+ * channel key). With no explicit record for THIS install, the answer is
+ * the artifact's own default channel (`defaultUpdateChannel`) — callers
+ * pass the stamp facts so a nightly bundle tracks nightly; omitting them
+ * keeps the source-checkout `main`.
+ *
+ * The parser is deliberately narrow: find the top-level `update:` block,
+ * the `installs:` block inside it, then the `<installId>:` block, then its
+ * `channel:`. config.yaml is machine-written here, so this shape is stable.
+ */
+export function updateChannelFromConfig(
+  configText: string | null | undefined,
+  installId: string,
+  stampTag: string | null = null,
+  mechanism: string | null = null
+): UpdateChannel {
+  const fallback = defaultUpdateChannel(stampTag, mechanism)
+
+  if (!configText || !installId) {
+    return fallback
+  }
+
+  // Depth by indentation: update: (0) → installs: (>0) → <sha16>: (deeper) →
+  // channel: (deeper still). Track the indent at which each block opened so
+  // a sibling key at the same depth closes it.
+  let updateIndent: number | null = null
+  let installsIndent: number | null = null
+  let idIndent: number | null = null
+
+  for (const raw of configText.split('\n')) {
+    const line = raw.replace(/\s+$/, '')
+
+    if (!line || /^\s*#/.test(line)) {
+      continue
+    }
+
+    const indent = line.length - line.replace(/^\s+/, '').length
+    const key = line.replace(/^\s+/, '')
+
+    if (updateIndent === null) {
+      if (/^update:\s*$/.test(line)) {
+        updateIndent = indent
+      }
+
+      continue
+    }
+
+    if (indent <= updateIndent) {
+      break // the update block ended
+    }
+
+    if (installsIndent === null) {
+      if (/^installs:\s*$/.test(key)) {
+        installsIndent = indent
+      }
+
+      continue
+    }
+
+    if (indent <= installsIndent) {
+      installsIndent = null
+      idIndent = null
+
+      continue
+    }
+
+    if (idIndent === null) {
+      if (new RegExp(`^${installId}:\s*$`).test(key)) {
+        idIndent = indent
+      }
+
+      continue
+    }
+
+    if (indent <= idIndent) {
+      idIndent = null
+
+      continue
+    }
+
+    const match = key.match(/^channel:\s*["']?(stable|main|nightly)["']?\s*(#.*)?$/)
+
+    if (match) {
+      return match[1] as UpdateChannel
+    }
+  }
+
+  return fallback
+}
+
+/**
+ * Pick the newest final release tag (vX.Y.Z, no prerelease suffix) from
+ * `git ls-remote --tags` output. Numeric ordering, so v0.10.0 > v0.9.0.
+ * Returns null when the output has no final release tag.
+ *
+ * A peeled entry (`refs/tags/v1.2.3^{}`) resolves the commit that an
+ * annotated tag points at. It wins over the unpeeled line of the same tag.
+ */
+export function latestReleaseFromLsRemote(output: string): { tag: string; sha: string } | null {
+  const versions = new Map<string, { key: [number, number, number]; sha: string; peeled: boolean }>()
+
+  for (const line of output.split('\n')) {
+    // The major component is capped at three digits: the historical CalVer
+    // tags (v2026.7.20) would win every numeric sort. This mirrors
+    // _RELEASE_TAG_RE in hermes_cli/update_cmd.py and _SEMVER_TAG_RE in
+    // scripts/write_install_stamp.py.
+    const m = line.match(/^([0-9a-f]{40})\trefs\/tags\/(v(?:0|[1-9]\d{0,2})\.\d+\.\d+)(\^\{\})?$/)
+
+    if (!m) {
+      continue
+    }
+
+    const [, sha, tag, peel] = m
+    const existing = versions.get(tag)
+
+    if (!existing || (peel && !existing.peeled)) {
+      const [major, minor, patch] = tag.slice(1).split('.').map(Number)
+
+      versions.set(tag, { key: [major, minor, patch], sha, peeled: Boolean(peel) })
+    }
+  }
+
+  let best: { tag: string; sha: string; key: [number, number, number] } | null = null
+
+  for (const [tag, { key, sha }] of versions) {
+    const newer =
+      !best ||
+      key[0] > best.key[0] ||
+      (key[0] === best.key[0] && (key[1] > best.key[1] || (key[1] === best.key[1] && key[2] > best.key[2])))
+
+    if (newer) {
+      best = { tag, sha, key }
+    }
+  }
+
+  return best ? { tag: best.tag, sha: best.sha } : null
 }

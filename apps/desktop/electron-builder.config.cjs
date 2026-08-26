@@ -100,19 +100,15 @@ module.exports = {
     // electron-builder 26 treats mac.sign as a hook function. A nested
     // options object is resolved as customSign and then called.
     // Entitlements and hardenedRuntime live on mac.* (schema keys).
+    // signIgnore is tested against the full path. Skip data files so
+    // osx-sign does not codesign every botocore .json.gz and chromium
+    // .pak (measured: one codesign per file, Apple timestamp each).
     signIgnore: [
-      '\\.gif$',
-      '\\.png$',
-      '\\.jpg$',
-      '\\.webp$',
-      '\\.whl$',
-      '\\.zip$',
-      '\\.pyc$',
-      '\\.py$',
-      '\\.txt$',
-      '\\.md$',
-      '\\.json$',
-      '\\.dist-info/'
+      '\.(gif|png|jpe?g|webp|svg|ico|icns|woff2?|ttf|otf)$',
+      '\.(whl|zip|gz|bz2|xz|pak|dat|bin|wasm)$',
+      '\.(pyc|py|txt|md|rst|json|ya?ml|toml|ini|cfg|xml|html|css|js|map|csv)$',
+      '\.(plist|strings|nib|car)$',
+      '\.dist-info/'
     ]
   },
   dmg: {

@@ -137,7 +137,9 @@ test('discord opus and pvporcupine multi-arch siblings are exempt', () => {
     'resources/agent-payload/venv/lib/python3.11/site-packages/discord/bin/libopus-0.x86.dll',
     'resources/agent-payload/venv/lib/python3.11/site-packages/discord/bin/libopus-0.x64.dll',
     'resources/agent-payload/venv/lib/python3.11/site-packages/pvporcupine/lib/mac/arm64/libpv_porcupine.dylib',
-    'resources/agent-payload/venv/lib/python3.11/site-packages/pvporcupine/lib/raspberry-pi/arm11/libpv_porcupine.so'
+    'resources/agent-payload/venv/lib/python3.11/site-packages/pvporcupine/lib/raspberry-pi/arm11/libpv_porcupine.so',
+    'resources/agent-payload/venv/lib/python3.11/site-packages/debugpy/_vendored/pydevd/pydevd_attach_to_process/attach_linux_amd64.so',
+    'resources/agent-payload/venv/lib/python3.11/site-packages/debugpy/_vendored/pydevd/pydevd_attach_to_process/inject_dll_x86.exe'
   ]) {
     assert.equal(isExemptPath(relPath), true, relPath)
   }

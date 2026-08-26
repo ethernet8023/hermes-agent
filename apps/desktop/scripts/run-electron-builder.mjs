@@ -68,7 +68,15 @@ if (args.includes('--win') && process.env.AZURE_SIGN_ENDPOINT && process.env.AZU
   )
 }
 
-const result = spawnSync(process.execPath, [electronBuilderCli(), ...args], {
+// Cap concurrent fs.open calls in the electron-builder process.
+// @electron/osx-sign walks the whole .app with Promise.all and no
+// concurrency bound. The payload (lark_oapi alone is thousands of files)
+// exhausts the macOS table: EMFILE on a random .py. Raising ulimit only
+// moves the ceiling. --require, not an import: isbinaryfile captures
+// promisify(fs.open) at its own load.
+const preload = path.join(import.meta.dirname, 'fs-open-limit.cjs')
+
+const result = spawnSync(process.execPath, ['--require', preload, electronBuilderCli(), ...args], {
   stdio: 'inherit'
 })
 if (result.error) {

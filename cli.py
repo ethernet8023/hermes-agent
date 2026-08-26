@@ -17550,6 +17550,19 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if not self._claim_active_session("cli"):
             return
 
+        # Post-update boot bootstrap: catches installs whose code changed
+        # outside `hermes update` (git pull by hand, sealed-tree swap).
+        # Two file reads when nothing changed; never raises. Deliberately
+        # NOT in the fast startup path / before arg dispatch — `hermes
+        # --version` stays import-light.
+        try:
+            from hermes_cli.boot_bootstrap import maybe_run_boot_bootstrap
+            from hermes_cli.main import PROJECT_ROOT as _boot_root
+
+            maybe_run_boot_bootstrap(_boot_root)
+        except Exception:
+            logger.debug("boot bootstrap skipped", exc_info=True)
+
         # Detect light/dark terminal mode now (before pt grabs the tty).
         # Caches the result so subsequent _hex_to_ansi / style calls
         # don't risk re-querying mid-render.

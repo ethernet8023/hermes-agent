@@ -89,7 +89,7 @@ def read_image_provenance(
         return _invalid(path, "marker_not_regular_file")
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         # The file may disappear between lstat/read; it was nevertheless
         # observed present, so the decision remains fail-closed.

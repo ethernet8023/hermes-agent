@@ -1347,7 +1347,7 @@ def _print_deep_probes() -> None:
     pid_value: int | None = None
     if pid_exists:
         try:
-            data = json.loads(pid_path.read_text(encoding="utf-8"))
+            data = json.loads(pid_path.read_text(encoding="utf-8-sig"))
             pid_value = int(data.get("pid")) if data.get("pid") is not None else None
             print(f"  [1] {_mark(True):4s}  PID file present: {pid_path} (pid={pid_value})")
         except Exception as exc:
@@ -1395,7 +1395,7 @@ def _print_deep_probes() -> None:
     # [5] runtime status file
     if state_path.exists():
         try:
-            state_data = json.loads(state_path.read_text(encoding="utf-8"))
+            state_data = json.loads(state_path.read_text(encoding="utf-8-sig"))
             gateway_state = state_data.get("gateway_state")
             updated_at = state_data.get("updated_at")
             age_str = ""

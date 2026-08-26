@@ -360,7 +360,7 @@ def _sync_allowlist_remove(platform: str, user_id: str) -> None:
 def _load_json_file(path: Path) -> dict:
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
             return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
@@ -497,7 +497,7 @@ class PairingStore:
     def _load_json(self, path: Path) -> dict:
         if path.exists():
             try:
-                return json.loads(path.read_text(encoding="utf-8"))
+                return json.loads(path.read_text(encoding="utf-8-sig"))
             except PermissionError as e:
                 # Surface this loudly: a 0600 file owned by a different user
                 # (classic Docker symptom: `docker exec` runs as root and writes

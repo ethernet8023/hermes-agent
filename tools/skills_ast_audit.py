@@ -91,7 +91,7 @@ def ast_scan_path(path: Path) -> List[Finding]:
         if path.suffix.lower() != ".py":
             return []
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
+            content = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             return []
         return _scan_source(content, path.name)
@@ -104,7 +104,7 @@ def ast_scan_path(path: Path) -> List[Finding]:
         if set(py.parent.parts) & _IGNORED_DIRS:
             continue
         try:
-            content = py.read_text(encoding="utf-8", errors="replace")
+            content = py.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
         try:

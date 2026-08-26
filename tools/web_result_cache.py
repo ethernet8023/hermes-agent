@@ -217,7 +217,7 @@ def _load_index() -> dict:
     if path is None or not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001 — corrupt index == empty cache
         return {}
@@ -375,7 +375,7 @@ def extract_cache_get(
         # outside cache/web.
         if cache_root is None or cache_root.resolve() not in file_path.resolve().parents:
             return None
-        content = file_path.read_text(encoding="utf-8")
+        content = file_path.read_text(encoding="utf-8-sig")
     except Exception:  # noqa: BLE001 — evicted/pruned file == miss
         return None
     logger.info("web_extract cache hit: %s", url)

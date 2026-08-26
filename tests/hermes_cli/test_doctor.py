@@ -153,8 +153,10 @@ class TestDoctorEnvFileEncoding:
 
         def gbk_like_read_text(self, encoding=None, errors=None, **kwargs):
             # Simulate a GBK locale: refuse to decode this specific UTF-8
-            # .env unless the caller pins encoding="utf-8".
-            if self == env_path and encoding != "utf-8":
+            # .env unless the caller pins a UTF-8 codec. utf-8-sig is the
+            # sanctioned read encoding (Windows tools BOM-prefix files it
+            # touches); it decodes BOM-less UTF-8 identically.
+            if self == env_path and encoding not in ("utf-8", "utf-8-sig"):
                 raise UnicodeDecodeError(
                     "gbk", b"\x94", 0, 1, "illegal multibyte sequence"
                 )

@@ -158,7 +158,7 @@ def _write_runtime_record(port: int, token: str, pid: int) -> None:
 
 def _read_runtime_record() -> Optional[Dict[str, Any]]:
     try:
-        raw = json.loads(_runtime_record_path().read_text(encoding="utf-8"))
+        raw = json.loads(_runtime_record_path().read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     return raw if isinstance(raw, dict) else None
@@ -453,7 +453,7 @@ def check_requirements() -> bool:
         npm_error = ""
         try:
             if _npm_error_log().exists():
-                npm_error = _npm_error_log().read_text(encoding="utf-8").strip()[:_NPM_ERROR_LOG_MAX_CHARS]
+                npm_error = _npm_error_log().read_text(encoding="utf-8-sig").strip()[:_NPM_ERROR_LOG_MAX_CHARS]
         except OSError:
             pass
         if npm_error:

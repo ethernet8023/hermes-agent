@@ -1039,7 +1039,7 @@ def _latest_job_output_excerpt(job_id: str, max_chars: int = 2000) -> Optional[s
         files = sorted(out_dir.glob("*.md"))
         if not files:
             return None
-        text = files[-1].read_text(encoding="utf-8", errors="replace").strip()
+        text = files[-1].read_text(encoding="utf-8-sig", errors="replace").strip()
         if not text:
             return None
         if len(text) > max_chars:

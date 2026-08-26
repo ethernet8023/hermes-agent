@@ -191,7 +191,7 @@ def _load_caps_from_disk(token: str) -> Optional[Dict[str, Any]]:
 
     try:
         path = _capability_disk_cache_path()
-        with path.open("r", encoding="utf-8") as f:
+        with path.open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
         entry = data.get(_token_cache_key(token))
         if not isinstance(entry, dict):
@@ -213,7 +213,7 @@ def _save_caps_to_disk(token: str, caps: Dict[str, Any]) -> None:
         path = _capability_disk_cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with path.open("r", encoding="utf-8") as f:
+            with path.open("r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
                 data = {}

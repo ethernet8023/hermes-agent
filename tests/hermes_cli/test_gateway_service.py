@@ -998,14 +998,46 @@ class TestDetectVenvDir:
         assert result is None
 
 
+def _seed_pm_node_facts(hermes_root):
+    """Write a pm installed-state file recording node/npm store entries.
+
+    _append_node_dir_for_service() resolves the managed Node through the pm
+    store (facts.json) rather than a fixed ``node/`` tree, so tests seed the
+    state the way a real install records it.
+    """
+    store_root = hermes_root / "tools"
+    node_dir = store_root / "node-v22.0.0"
+    npm_dir = store_root / "npm-9.0.0" / "bin"
+    node_dir.mkdir(parents=True)
+    npm_dir.mkdir(parents=True)
+    facts = {
+        "schema": 1,
+        "packages": {
+            "node": {
+                "entry": "node-v22.0.0",
+                "version": "22.0.0",
+                "env": {"PATH": ["{{store}}/node-v22.0.0"]},
+            },
+            "npm": {
+                "entry": "npm-9.0.0",
+                "version": "9.0.0",
+                "env": {"PATH": ["{{store}}/npm-9.0.0/bin"]},
+            },
+        },
+    }
+    import json as _json
+
+    (store_root / "facts.json").write_text(_json.dumps(facts), encoding="utf-8")
+    return [str(npm_dir), str(node_dir)]
+
+
 class TestSystemUnitHermesHome:
     """HERMES_HOME in system units must reference the target user, not root."""
 
-    def test_empty_managed_node_dir_uses_only_ambient_fallback(
+    def test_no_pm_node_facts_uses_only_ambient_fallback(
         self, monkeypatch, tmp_path
     ):
-        managed_bin = tmp_path / ".hermes" / "node" / "bin"
-        managed_bin.mkdir(parents=True)
+        (tmp_path / ".hermes" / "tools").mkdir(parents=True)
         monkeypatch.setattr(
             gateway_cli.shutil, "which", lambda name: "/opt/external-node/bin/node"
         )
@@ -1015,20 +1047,21 @@ class TestSystemUnitHermesHome:
 
         assert entries == ["/opt/external-node/bin"]
 
-    def test_non_executable_managed_node_uses_only_ambient_fallback(
+    def test_stale_pm_facts_without_dirs_use_only_ambient_fallback(
         self, monkeypatch, tmp_path
     ):
-        managed_bin = tmp_path / ".hermes" / "node" / "bin"
-        managed_bin.mkdir(parents=True)
-        node = managed_bin / "node"
-        node.write_text("#!/bin/sh\n")
-        node.chmod(0o644)
+        """Recorded entries whose store dirs are gone contribute nothing."""
+        import shutil as _shutil
+
+        hermes_root = tmp_path / ".hermes"
+        for entry in _seed_pm_node_facts(hermes_root):
+            _shutil.rmtree(entry)
         monkeypatch.setattr(
             gateway_cli.shutil, "which", lambda name: "/opt/external-node/bin/node"
         )
         entries: list[str] = []
 
-        gateway_cli._append_node_dir_for_service(entries, tmp_path / ".hermes")
+        gateway_cli._append_node_dir_for_service(entries, hermes_root)
 
         assert entries == ["/opt/external-node/bin"]
 
@@ -1040,11 +1073,7 @@ class TestSystemUnitHermesHome:
         target_hermes = target_home / ".hermes"
         root_home = tmp_path / "root"
         root_hermes = root_home / ".hermes"
-        managed_bin = target_hermes / "node" / "bin"
-        managed_bin.mkdir(parents=True)
-        node = managed_bin / "node"
-        node.write_text("#!/bin/sh\n")
-        node.chmod(0o755)
+        managed_dirs = _seed_pm_node_facts(target_hermes)
         root_hermes.mkdir(parents=True)
 
         monkeypatch.setattr(Path, "home", staticmethod(lambda: root_home))
@@ -1064,20 +1093,14 @@ class TestSystemUnitHermesHome:
         user_unit = gateway_cli.generate_systemd_unit(system=True, run_as_user="alice")
 
         assert root_unit == user_unit
-        assert str(managed_bin) in root_unit
+        for managed_dir in managed_dirs:
+            assert managed_dir in root_unit
         assert "/root/bin" not in root_unit
 
     def test_node_path_lookup_remains_fallback_without_managed_node(
         self, monkeypatch, tmp_path
     ):
-        """External Node installs still work when the managed tree is absent."""
-        monkeypatch.setattr(
-            "hermes_constants.iter_hermes_node_dirs", lambda root=None: []
-        )
-        monkeypatch.setattr(
-            "hermes_constants.hermes_managed_node_tree_present",
-            lambda root=None: False,
-        )
+        """External Node installs still work when pm has no node installed."""
         monkeypatch.setattr(
             gateway_cli.shutil, "which", lambda name: "/opt/external-node/bin/node"
         )

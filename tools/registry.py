@@ -95,7 +95,7 @@ def _module_registers_tools(module_path: Path) -> bool:
     top-level ``registry.register()`` call to exist.
     """
     try:
-        source = module_path.read_text(encoding="utf-8")
+        source = module_path.read_text(encoding="utf-8-sig")
     except OSError:
         return False
     if "registry" not in source or "register" not in source:
@@ -180,7 +180,7 @@ def _load_discovery_cache() -> Dict[str, list]:
     if path is None:
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):

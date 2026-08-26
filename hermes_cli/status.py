@@ -650,7 +650,7 @@ def show_status(args):
         if sessions_file.exists():
             import json
             try:
-                with open(sessions_file, encoding="utf-8") as f:
+                with open(sessions_file, encoding="utf-8-sig") as f:
                     data = json.load(f)
                     _entries = {
                         k: v for k, v in data.items()

@@ -189,7 +189,7 @@ def _read_ledger(path: Path) -> Optional[list[dict]]:
     be silently treated as an empty roster.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return []
     except OSError:

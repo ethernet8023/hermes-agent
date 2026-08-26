@@ -55,7 +55,7 @@ def _untracked_diff(cwd: str, files: List[str]) -> str:
             # --no-index exits 1 when the files differ — that's the success
             # path here, so ignore the return code and keep the output.
             _, out = _run(
-                ["diff", "--no-index", "--", os.devnull, rel], cwd,
+                ["diff", "--no-ext-diff", "--no-index", "--", os.devnull, rel], cwd,
             )
             if out.strip():
                 chunks.append(out.rstrip("\n"))
@@ -91,12 +91,16 @@ def collect_working_diff(cwd: str, mode: str = "working",
     if code != 0:
         return {"success": False, "error": "Not a git repository."}
 
+    # --no-ext-diff: a user-configured external differ (diff.external in
+    # gitconfig, e.g. difftastic) replaces the unified-diff format that the
+    # CLI/gateway renderers and truncation logic parse. Force the internal
+    # diff engine so the collected output shape is stable for all users.
     if mode == "staged":
-        base_args = ["diff", "--cached"]
+        base_args = ["diff", "--no-ext-diff", "--cached"]
     elif mode == "all":
-        base_args = ["diff", "HEAD"]
+        base_args = ["diff", "--no-ext-diff", "HEAD"]
     else:  # working
-        base_args = ["diff"]
+        base_args = ["diff", "--no-ext-diff"]
 
     pathspec = ["--", *paths] if paths else []
 

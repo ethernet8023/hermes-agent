@@ -331,7 +331,7 @@ def _migrate_to_21(results: Dict[str, Any], quiet: bool) -> None:
                     if not manifest_file.exists():
                         continue
                     try:
-                        with open(manifest_file, encoding="utf-8") as _mf:
+                        with open(manifest_file, encoding="utf-8-sig") as _mf:
                             manifest = fast_safe_load(_mf) or {}
                     except Exception:
                         manifest = {}

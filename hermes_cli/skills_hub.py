@@ -1570,7 +1570,7 @@ def do_publish(skill_path: str, target: str = "github", repo: str = "",
 
     # Validate the skill
     import yaml
-    skill_md = (path / "SKILL.md").read_text(encoding="utf-8")
+    skill_md = (path / "SKILL.md").read_text(encoding="utf-8-sig")
     skill_md = skill_md.lstrip("\ufeff")  # tolerate UTF-8 BOM (Windows editors)
     fm = {}
     if skill_md.startswith("---"):
@@ -1771,7 +1771,7 @@ def do_snapshot_import(input_path: str, force: bool = False,
         return
 
     try:
-        snapshot = json.loads(inp.read_text(encoding="utf-8"))
+        snapshot = json.loads(inp.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError:
         c.print(f"[bold red]Error:[/] Invalid JSON in {inp}\n")
         return

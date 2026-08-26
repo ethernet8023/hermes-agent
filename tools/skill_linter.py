@@ -304,7 +304,7 @@ def _check_platforms_gating(
         if not script.is_file() or script.suffix not in (".py", ".sh", ".bash"):
             continue
         try:
-            text = script.read_text(encoding="utf-8", errors="ignore")
+            text = script.read_text(encoding="utf-8-sig", errors="ignore")
         except OSError:
             continue
         hit = [p for p in _POSIX_PRIMITIVES if p in text]
@@ -399,7 +399,7 @@ def lint_content(
 def lint_skill(skill_md_path: Path) -> List[LintFinding]:
     """Lint a SKILL.md file on disk, with all on-disk checks enabled."""
     skill_md_path = Path(skill_md_path)
-    content = skill_md_path.read_text(encoding="utf-8", errors="ignore")
+    content = skill_md_path.read_text(encoding="utf-8-sig", errors="ignore")
     return lint_content(content, skill_dir=skill_md_path.parent)
 
 

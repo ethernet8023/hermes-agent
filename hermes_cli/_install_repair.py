@@ -654,7 +654,7 @@ def bump_marker_attempts(marker_path: Path) -> int:
     """
     attempts = 0
     try:
-        raw = marker_path.read_text(encoding="utf-8", errors="replace").strip()
+        raw = marker_path.read_text(encoding="utf-8-sig", errors="replace").strip()
         if raw:
             try:
                 attempts = int(json.loads(raw).get("attempts", 0))

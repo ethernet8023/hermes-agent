@@ -65,7 +65,7 @@ def _read_pet_json(directory: Path) -> dict:
     if not pet_json.is_file():
         return {}
     try:
-        return json.loads(pet_json.read_text(encoding="utf-8"))
+        return json.loads(pet_json.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         logger.debug("unreadable pet.json in %s: %s", directory, exc)
         return {}
@@ -438,7 +438,7 @@ def rename_pet(slug: str, display_name: str) -> str | None:
     if not pet_json.is_file():
         return None
     try:
-        meta = json.loads(pet_json.read_text(encoding="utf-8"))
+        meta = json.loads(pet_json.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         meta = {}
     if not isinstance(meta, dict):

@@ -1002,7 +1002,7 @@ def _read_nous_recommended_disk(base: str) -> dict[str, Any] | None:
     ``{"<base>": {"data": {...}, "ts": <epoch_seconds>}}``.
     """
     try:
-        with open(_nous_recommended_disk_path(), encoding="utf-8") as fh:
+        with open(_nous_recommended_disk_path(), encoding="utf-8-sig") as fh:
             blob = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
@@ -1026,7 +1026,7 @@ def _write_nous_recommended_disk(base: str, data: dict[str, Any]) -> None:
     path = _nous_recommended_disk_path()
     try:
         try:
-            with open(path, encoding="utf-8") as fh:
+            with open(path, encoding="utf-8-sig") as fh:
                 blob = json.load(fh)
             if not isinstance(blob, dict):
                 blob = {}
@@ -4379,7 +4379,7 @@ def _load_provider_models_cache() -> dict:
         path = _provider_models_cache_path()
         if not path.exists():
             return {}
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:
@@ -6215,7 +6215,7 @@ def _load_ollama_cloud_cache(*, ignore_ttl: bool = False) -> Optional[dict]:
         cache_path = _ollama_cloud_cache_path()
         if not cache_path.exists():
             return None
-        with open(cache_path, encoding="utf-8") as f:
+        with open(cache_path, encoding="utf-8-sig") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return None

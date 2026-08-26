@@ -147,12 +147,12 @@ def _worker_memory_max_bytes() -> int:
 
     candidates: List[int] = []
     try:
-        for line in Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines():
+        for line in Path("/proc/self/cgroup").read_text(encoding="utf-8-sig").splitlines():
             if line.startswith("0::"):
                 relative = line.partition("::")[2].lstrip("/")
                 raw_limit = (
                     Path("/sys/fs/cgroup") / relative / "memory.max"
-                ).read_text(encoding="utf-8").strip()
+                ).read_text(encoding="utf-8-sig").strip()
                 if raw_limit.isdigit():
                     cgroup_limit = int(raw_limit)
                     if cgroup_limit >= _MIN_WORKER_MEMORY_MAX_BYTES:
@@ -2837,7 +2837,7 @@ class ProcessRegistry:
             return 0
 
         try:
-            entries = json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8"))
+            entries = json.loads(CHECKPOINT_PATH.read_text(encoding="utf-8-sig"))
         except Exception:
             return 0
 

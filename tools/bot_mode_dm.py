@@ -567,7 +567,7 @@ def _run_delivery(argv: list[str], dm_file: str, *, stdin_file: bool) -> int:
             if stdin_file:
                 # Keep the file open until the transport exits; cleanup occurs
                 # after subprocess.run returns, not merely after stdin reaches EOF.
-                with open(dm_file, "r", encoding="utf-8") as stream:
+                with open(dm_file, "r", encoding="utf-8-sig") as stream:
                     return subprocess.run(argv, stdin=stream, check=False).returncode
             proc = subprocess.run(
                 [*argv, "--query-file", dm_file],

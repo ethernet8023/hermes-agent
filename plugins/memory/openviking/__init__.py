@@ -868,7 +868,7 @@ def _load_ovcli_config(path: Optional[Path] = None) -> dict:
     config_path = path or _resolve_ovcli_config_path()
     if not config_path.exists():
         return {}
-    with config_path.open(encoding="utf-8") as f:
+    with config_path.open(encoding="utf-8-sig") as f:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError(f"OpenViking CLI config must be a JSON object: {config_path}")
@@ -3451,7 +3451,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
             sid = ""
             owner_run_id = ""
             try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
+                raw = json.loads(path.read_text(encoding="utf-8-sig"))
                 if isinstance(raw, dict):
                     sid = str(raw.get("session_id") or "").strip()
                     owner_run_id = str(raw.get("owner_run_id") or "").strip()

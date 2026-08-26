@@ -78,7 +78,7 @@ class ForeignSession:
 def _read_json_lines(path: Path):
     """Yield parsed JSON objects, silently skipping unparseable lines."""
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:

@@ -76,7 +76,7 @@ def _read_text_if_exists(path: str) -> str | None:
         return None
     if not p.is_file():
         raise OSError(f"Cannot edit non-file path: {path}")
-    return p.read_text(encoding="utf-8", errors="replace")
+    return p.read_text(encoding="utf-8-sig", errors="replace")
 
 
 def _proposal_for_write_file(arguments: dict[str, Any]) -> EditProposal:

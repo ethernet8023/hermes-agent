@@ -3987,7 +3987,7 @@ def _get_media_send_timeout() -> int:
 def _read_windows_pyvenv_cfg(venv_dir: Path) -> dict[str, str]:
     cfg_path = venv_dir / "pyvenv.cfg"
     try:
-        lines = cfg_path.read_text(encoding="utf-8").splitlines()
+        lines = cfg_path.read_text(encoding="utf-8-sig").splitlines()
     except OSError:
         return {}
 
@@ -4554,7 +4554,7 @@ def _build_job_prompt(
                 )
                 if not output_files:
                     continue  # silent skip — no output yet
-                latest_output = output_files[0].read_text(encoding="utf-8").strip()
+                latest_output = output_files[0].read_text(encoding="utf-8-sig").strip()
                 # Truncate to 8K characters to avoid prompt bloat
                 _MAX_CONTEXT_CHARS = 8000
                 if len(latest_output) > _MAX_CONTEXT_CHARS:
@@ -5966,7 +5966,7 @@ def run_job(
                 pfpath = _get_hermes_home() / pfpath
             if pfpath.exists():
                 try:
-                    with open(pfpath, "r", encoding="utf-8") as _pf:
+                    with open(pfpath, "r", encoding="utf-8-sig") as _pf:
                         prefill_messages = json.load(_pf)
                     if not isinstance(prefill_messages, list):
                         prefill_messages = None

@@ -1,4 +1,4 @@
-"""Recover from npm ``EBADENGINE`` failures by upgrading a managed npm.
+"""Recover from npm ``EBADENGINE`` failures with the pm-pinned npm.
 
 The repo's ``.npmrc`` sets ``engine-strict=true`` and the root ``package.json``
 pins an ``engines.npm`` range, so an npm outside that range aborts every
@@ -13,39 +13,25 @@ an ``npm --version`` probe before work that usually succeeds), we react to it:
 npm states the required range in the error, so the recovery reads the
 constraint straight out of the output it just produced.
 
-Scope of the repair is deliberately narrow. Hermes only upgrades an npm that
-lives inside its **own** managed Node tree (``$HERMES_HOME/node``), installing
-in place with ``--prefix`` so ``bin/npm`` keeps resolving to the upgraded
-``lib/node_modules/npm``. A system / nvm / brew / Nix npm belongs to the user
-and their other projects; Hermes never modifies those. When the failing npm is
-one of those foreign installs, Hermes instead provisions its own managed Node
-tree (the same tree a fresh install creates), upgrades *that* npm into range,
-and hands the caller the managed npm to retry with — leaving the user's
-toolchain untouched.
+Scope of the repair is deliberately narrow. A system / nvm / brew / Nix npm
+belongs to the user and their other projects; Hermes never modifies those.
+When the failing npm is a foreign install, Hermes ensures its own pm-pinned
+node/npm packages are installed and hands the caller pm's npm to retry with —
+leaving the user's toolchain untouched. When the failing npm already *is*
+pm's npm, the lockfile pin itself is out of range and no runtime action can
+fix that; the caller gets the manual guidance instead.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
-
-from hermes_constants import (
-    bootstrap_hermes_managed_node,
-    get_hermes_home,
-    managed_node_tree_in_use,
-    with_hermes_node_path,
-)
 
 __all__ = [
     "is_ebadengine",
     "required_npm_range",
-    "managed_npm_prefix",
-    "upgrade_managed_npm",
     "maybe_repair_npm_engine",
 ]
 
@@ -53,10 +39,6 @@ __all__ = [
 # `npm ERR! notsup Required: {...}` on older releases.
 _REQUIRED_RE = re.compile(r"Required:\s*(\{.*?\})")
 _ACTUAL_RE = re.compile(r"Actual:\s*(\{.*?\})")
-
-# Wall-clock cap for the self-upgrade. The measured in-place upgrade of a
-# managed tree takes ~1s; this only has to cover a slow registry.
-_UPGRADE_TIMEOUT = 300
 
 
 def is_ebadengine(output: str) -> bool:
@@ -123,7 +105,7 @@ def _repo_npm_range() -> str | None:
     """Return ``engines.npm`` from the checkout's root ``package.json``."""
     package_json = Path(__file__).resolve().parent.parent / "package.json"
     try:
-        data = json.loads(package_json.read_text(encoding="utf-8"))
+        data = json.loads(package_json.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     engines = data.get("engines")
@@ -133,130 +115,26 @@ def _repo_npm_range() -> str | None:
     return str(value).strip() if value else None
 
 
-def managed_npm_prefix(npm: str | os.PathLike[str] | None) -> Path | None:
-    """Return the Hermes-managed Node root *npm* lives in, else ``None``.
-
-    Symlinks are resolved first: an install links ``~/.local/bin/npm`` at
-    ``$HERMES_HOME/node/bin/npm``, which itself links into
-    ``lib/node_modules/npm/bin/npm-cli.js``. Every one of those spellings is
-    the managed npm and must be recognised as such, or the repair silently
-    declines to fix the very install it owns.
-    """
-    if not npm:
-        return None
-    prefix = get_hermes_home() / "node"
-    try:
-        resolved = Path(npm).resolve()
-        prefix_resolved = prefix.resolve()
-    except OSError:
-        return None
-    if resolved == prefix_resolved or prefix_resolved in resolved.parents:
-        return prefix
-    return None
-
-
-def _upgrade_env() -> dict[str, str]:
-    env = with_hermes_node_path()
-    # The checkout's .npmrc sets `min-release-age`, which would gate the npm
-    # release we are trying to install. The upgrade runs from a temp cwd so
-    # that file is out of scope; this neutralises a user-level ~/.npmrc too.
-    env["npm_config_min_release_age"] = "0"
-    # `unicode-animations`-style postinstall animations no-op under CI=1.
-    env["CI"] = "1"
-    return env
-
-
-def upgrade_managed_npm(
-    npm: str,
-    npm_range: str,
-    *,
-    prefix: Path,
-    quiet: bool = False,
-) -> bool:
-    """Upgrade the managed npm at *npm* in place to satisfy *npm_range*.
-
-    ``--prefix`` targets the managed tree explicitly: a managed install writes
-    ``prefix=~/.local`` into ``$HERMES_HOME/node/etc/npmrc`` so that global
-    installs land on PATH, and without the override the "upgrade" would install
-    a second npm somewhere else while the managed one stayed stale.
-    """
+def _pm_npm(*, quiet: bool = False) -> str | None:
+    """Install the pm-pinned node/npm packages and return pm's npm path."""
     if not quiet:
         print(
-            f"→ Upgrading Hermes-managed npm to satisfy {npm_range}…",
+            "→ Provisioning the Hermes-pinned Node.js runtime "
+            "(the resolved npm belongs to your system and is left alone)…",
             flush=True,
         )
-    # The managed npm lives inside the very tree the desktop app's Node
-    # processes execute from; an in-place upgrade while it is in use fails
-    # with PermissionError: [WinError 5] on npm.cmd (#80926). Defer instead
-    # of forcing the write — the upgrade re-triggers on the next resolution
-    # (e.g. the next update once the app is closed).
-    if managed_node_tree_in_use():
-        if not quiet:
-            print(
-                "  ⚠ deferred: the Hermes-managed Node.js tree is in use by a "
-                "running app; the npm upgrade will apply on a later update "
-                "once the app is closed.",
-                file=sys.stderr,
-            )
-        return False
     try:
-        # A temp cwd keeps the checkout's .npmrc (engine-strict, min-release-age)
-        # from applying to the upgrade itself.
-        with tempfile.TemporaryDirectory(prefix="hermes-npm-upgrade-") as tmp:
-            result = subprocess.run(
-                [
-                    npm,
-                    "install",
-                    "--global",
-                    "--prefix",
-                    str(prefix),
-                    f"npm@{npm_range}",
-                    "--no-fund",
-                    "--no-audit",
-                    "--progress=false",
-                ],
-                cwd=tmp,
-                env=_upgrade_env(),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=_UPGRADE_TIMEOUT,
-                check=False,
-            )
-    except (OSError, subprocess.SubprocessError):
-        if not quiet:
-            print("  ✗ npm upgrade could not be started", file=sys.stderr)
-        return False
+        import pm
 
-    if result.returncode != 0:
-        if not quiet:
-            detail = (result.stderr or result.stdout or "").strip().splitlines()
-            print("  ✗ npm upgrade failed", file=sys.stderr)
-            for line in detail[-10:]:
-                print(f"    {line}", file=sys.stderr)
-        return False
+        pm.ensure("npm")
+        from hermes_constants import _pm_node_executable
 
-    if not quiet:
-        print(f"  ✓ npm upgraded to {_probe_version(npm) or npm_range}", flush=True)
-    return True
-
-
-def _probe_version(npm: str) -> str | None:
-    try:
-        result = subprocess.run(
-            [npm, "--version"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            env=with_hermes_node_path(),
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return (result.stdout or "").strip() or None
+        managed = _pm_node_executable("npm")
+    except Exception:
+        managed = None
+    if not managed and not quiet:
+        print("  ✗ Managed Node.js provisioning failed", file=sys.stderr)
+    return managed
 
 
 def _print_manual_fix(npm: str, npm_range: str, actual: str | None) -> None:
@@ -271,41 +149,6 @@ def _print_manual_fix(npm: str, npm_range: str, actual: str | None) -> None:
     )
 
 
-def _provision_managed_npm(npm_range: str | None, *, quiet: bool = False) -> str | None:
-    """Provision a Hermes-managed Node tree and return a satisfying npm.
-
-    Installs the managed tree under ``$HERMES_HOME/node`` (reusing a healthy
-    one when present), then upgrades its bundled npm to *npm_range* — a fresh
-    Node LTS bundles an npm that may itself be outside the repo's range, so
-    without the upgrade the caller's single retry would fail the same way.
-    Falls back to the checkout's own ``engines.npm`` when npm did not state a
-    range (a Node-only mismatch), so the managed npm ends up in range either
-    way. Returns the managed npm path, or ``None`` when provisioning failed.
-    """
-    if not quiet:
-        print(
-            "→ Provisioning a Hermes-managed Node.js runtime "
-            "(the resolved npm belongs to your system and is left alone)…",
-            flush=True,
-        )
-    managed_npm = bootstrap_hermes_managed_node()
-    if not managed_npm:
-        if not quiet:
-            print("  ✗ Managed Node.js provisioning failed", file=sys.stderr)
-        return None
-
-    prefix = managed_npm_prefix(managed_npm)
-    if prefix is None:  # pragma: no cover - bootstrap returned a foreign path
-        return None
-
-    target_range = npm_range or _repo_npm_range()
-    if target_range and not upgrade_managed_npm(
-        managed_npm, target_range, prefix=prefix, quiet=quiet
-    ):
-        return None
-    return managed_npm
-
-
 def maybe_repair_npm_engine(
     npm: str | None,
     output: str,
@@ -315,13 +158,13 @@ def maybe_repair_npm_engine(
     """Repair an ``EBADENGINE`` failure, never touching a foreign toolchain.
 
     *output* is the combined stdout/stderr of the npm command that just failed.
-    Returns the npm executable the caller should retry its command with —
-    the same *npm* after an in-place upgrade of a Hermes-managed install, or
-    a freshly provisioned managed npm when the failing npm belongs to the
-    user (system / nvm / brew / Nix installs are never modified). Returns
-    ``None`` when no repair happened — not an engine failure, a Node mismatch
-    a managed npm upgrade cannot fix, or a failed upgrade/bootstrap — leaving
-    the original failure to stand.
+    Returns the npm executable the caller should retry its command with — the
+    pm-pinned npm, freshly ensured, when the failing npm was a foreign install
+    (system / nvm / brew / Nix installs are never modified). Returns ``None``
+    when no repair happened — not an engine failure, the failing npm already
+    was pm's own (the lockfile pin is out of range; a runtime install cannot
+    fix that), or the pm install failed — leaving the original failure to
+    stand.
 
     The returned value is truthy exactly when the caller should retry once,
     so ``if maybe_repair_npm_engine(...)`` call sites keep working; they just
@@ -330,25 +173,16 @@ def maybe_repair_npm_engine(
     if not npm or not is_ebadengine(output):
         return None
 
-    npm_range = required_npm_range(output)
-    prefix = managed_npm_prefix(npm)
-
-    if prefix is not None:
-        # Hermes owns this npm — upgrade it in place. Only an npm-range
-        # failure is fixable this way; a Node mismatch needs a Node upgrade.
-        if not npm_range:
-            return None
-        if upgrade_managed_npm(npm, npm_range, prefix=prefix, quiet=quiet):
-            return npm
-        return None
-
-    # Foreign npm (system / nvm / brew / Nix): provision our own runtime
-    # instead. This also covers Node-version mismatches — the managed tree
-    # ships a Node the repo supports.
-    managed = _provision_managed_npm(npm_range, quiet=quiet)
+    managed = _pm_npm(quiet=quiet)
     if managed:
-        return managed
+        try:
+            already_managed = Path(managed).resolve() == Path(npm).resolve()
+        except OSError:
+            already_managed = False
+        if not already_managed:
+            return managed
 
+    npm_range = required_npm_range(output)
     if not quiet and npm_range:
         _print_manual_fix(npm, npm_range, actual_npm_version(output))
     return None

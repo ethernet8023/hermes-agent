@@ -11,8 +11,8 @@ code has two failure modes:
   how a generated systemd unit or launchd plist can bake a system Node in and
   keep resolving it across reboots.
 
-The fix per call site is one of ``find_node_executable()``,
-``iter_hermes_node_dirs()``, ``pm.run()``, ``pm.ensure()``, or (transitional)
+The fix per call site is one of ``find_node_executable()``, ``pm.env_for()``,
+``pm.run()``, ``pm.ensure()``, or (transitional)
 ``pm.uv()``. This test is
 the ratchet that stops a new bare lookup from being added back.
 
@@ -74,8 +74,8 @@ _ALLOWED: dict[tuple[str, str], str] = {
         "guidance."
     ),
     ("hermes_cli/gateway.py", "node"): (
-        "Fallback rung of _append_node_dir_for_service(), after the managed "
-        "dirs from iter_hermes_node_dirs() are already appended."
+        "Fallback rung of _append_node_dir_for_service(), after the pm "
+        "store's managed dirs are already appended."
     ),
     ("hermes_cli/main.py", "node"): (
         "_ensure_tui_node()'s idempotence gate: the question really is 'is "
@@ -181,7 +181,7 @@ def test_no_unreviewed_bare_managed_runtime_lookups():
         "Use instead:\n"
         "  uv       -> pm.uv(realize=False) (lookup) or pm.uv() (may realize)\n"
         "  node/npm -> hermes_constants.find_node_executable()\n"
-        "  PATH env -> hermes_constants.iter_hermes_node_dirs()\n"
+        "  PATH env -> hermes_constants.with_hermes_node_path()\n"
         "If PATH really is the right question, add the site to _ALLOWED with a "
         "reason."
     )
@@ -203,8 +203,6 @@ def test_allowlist_has_no_stale_entries():
     "helper",
     [
         "find_node_executable",
-        "find_hermes_node_executable",
-        "iter_hermes_node_dirs",
         "with_hermes_node_path",
     ],
 )

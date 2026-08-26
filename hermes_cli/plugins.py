@@ -961,7 +961,7 @@ def _read_source_from_origin(origin: Optional[str], limit: int = 8192) -> str:
     if not origin.endswith(".py"):
         return ""
     try:
-        return Path(origin).read_text(encoding="utf-8", errors="replace")[:limit]
+        return Path(origin).read_text(encoding="utf-8-sig", errors="replace")[:limit]
     except Exception:
         return ""
 
@@ -1358,7 +1358,7 @@ class PluginState:
 
     def _read_unlocked(self) -> dict[str, Any]:
         try:
-            with open(self.path, encoding="utf-8") as handle:
+            with open(self.path, encoding="utf-8-sig") as handle:
                 data = json.load(handle)
         except FileNotFoundError:
             return {}
@@ -4492,7 +4492,7 @@ class PluginManager:
             if yaml is None:
                 logger.warning("PyYAML not installed – cannot load %s", manifest_file)
                 return None
-            data = fast_safe_load(manifest_file.read_text(encoding="utf-8")) or {}
+            data = fast_safe_load(manifest_file.read_text(encoding="utf-8-sig")) or {}
 
             name = data.get("name", plugin_dir.name)
             key = f"{prefix}/{plugin_dir.name}" if prefix else name
@@ -5973,7 +5973,7 @@ def _read_plugin_keys_cache() -> Optional[dict]:
     try:
         import json as _json
         blob = _json.loads(
-            _plugin_toolset_keys_cache_path().read_text(encoding="utf-8")
+            _plugin_toolset_keys_cache_path().read_text(encoding="utf-8-sig")
         )
         if isinstance(blob, dict):
             return blob

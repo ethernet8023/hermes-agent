@@ -289,7 +289,7 @@ def _expected_sha256(checksum_file: Path, asset_name: str) -> str:
     Format is the standard ``sha256sum`` output: ``<hex>  <filename>``,
     one per line.
     """
-    text = checksum_file.read_text(encoding="utf-8", errors="replace")
+    text = checksum_file.read_text(encoding="utf-8-sig", errors="replace")
     for line in text.splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and parts[-1] == asset_name:
@@ -466,7 +466,7 @@ def _read_encrypted_disk_cache(
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(payload, dict):
             return None
         serialized_key = _cache_key_str(cache_key)

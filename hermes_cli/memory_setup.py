@@ -116,7 +116,7 @@ def _install_dependencies(provider_name: str, *, force: bool = False) -> None:
 
     try:
         import yaml
-        with open(yaml_path, encoding="utf-8") as f:
+        with open(yaml_path, encoding="utf-8-sig") as f:
             meta = yaml.safe_load(f) or {}
     except Exception:
         return
@@ -400,7 +400,7 @@ def _write_env_vars(env_path: Path, env_writes: dict) -> None:
 
     existing_lines = []
     if env_path.exists():
-        existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+        existing_lines = env_path.read_text(encoding="utf-8-sig").splitlines()
 
     updated_keys = set()
     new_lines = []

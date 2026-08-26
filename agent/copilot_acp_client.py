@@ -111,7 +111,11 @@ def _acp_supported(command: str, args: list[str]) -> bool | None:
     try:
         probe = subprocess.run(
             [command, "--help"],
-            capture_output=True, text=True, timeout=5,
+            # Explicit codec because text=True alone decodes with the
+            # locale default and crashes on non-ASCII help text under
+            # GBK/CP932 locales.
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
@@ -622,7 +626,7 @@ class CopilotACPClient:
                 if block_error:
                     raise PermissionError(block_error)
                 try:
-                    content = path.read_text(encoding="utf-8")
+                    content = path.read_text(encoding="utf-8-sig")
                 except FileNotFoundError:
                     content = ""
                 line = params.get("line")

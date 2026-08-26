@@ -856,7 +856,7 @@ def _read_command_stt_output(output_path: Path, stdout: str, fmt: str) -> str:
     """
     if output_path.exists():
         try:
-            content = output_path.read_text(encoding="utf-8").strip()
+            content = output_path.read_text(encoding="utf-8-sig").strip()
         except UnicodeDecodeError:
             content = output_path.read_bytes().decode("utf-8", errors="replace").strip()
         if content:
@@ -2149,7 +2149,7 @@ def _transcribe_local_command(
                     "error": "Local STT command completed but did not produce a .txt transcript",
                 }
 
-            transcript_text = txt_files[0].read_text(encoding="utf-8").strip()
+            transcript_text = txt_files[0].read_text(encoding="utf-8-sig").strip()
             logger.info(
                 "Transcribed %s via local STT command (%s, %d chars)",
                 Path(file_path).name,

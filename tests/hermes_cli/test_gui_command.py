@@ -140,18 +140,43 @@ def test_gui_install_env_prepends_managed_node_on_bare_path(tmp_path, monkeypatc
     the parent PATH is stripped, so the install env MUST carry the Hermes-managed
     Node ahead of that bare PATH or the install dies with ``node: not found``.
     """
+    import json
     import os
-
-    from hermes_constants import iter_hermes_node_dirs
 
     root = _make_desktop_tree(tmp_path)
     monkeypatch.setattr(cli_main, "PROJECT_ROOT", root)
     _make_packaged_executable(root, monkeypatch)
 
-    # A managed Node tree on disk so with_hermes_node_path() actually prepends it.
+    # A pm-installed Node/npm on disk so with_hermes_node_path() actually
+    # prepends the store dirs.
     home = tmp_path / "hermes-home"
-    (home / "node" / "bin").mkdir(parents=True)
+    store_root = home / "tools"
+    node_entry = store_root / "node-v22.0.0"
+    npm_entry = store_root / "npm-9.0.0" / "bin"
+    node_entry.mkdir(parents=True)
+    npm_entry.mkdir(parents=True)
+    (store_root / "facts.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "packages": {
+                    "node": {
+                        "entry": "node-v22.0.0",
+                        "version": "22.0.0",
+                        "env": {"PATH": ["{{store}}/node-v22.0.0"]},
+                    },
+                    "npm": {
+                        "entry": "npm-9.0.0",
+                        "version": "9.0.0",
+                        "env": {"PATH": ["{{store}}/npm-9.0.0/bin"]},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_RUNTIME_DIR", str(store_root))
     # Simulate the stripped PATH the desktop updater chain hands us.
     monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
 
@@ -174,12 +199,15 @@ def test_gui_install_env_prepends_managed_node_on_bare_path(tmp_path, monkeypatc
          pytest.raises(SystemExit):
         cli_main.cmd_gui(_ns(skip_build=False))
 
-    managed_dirs = [str(p) for p in iter_hermes_node_dirs() if p.is_dir()]
-    assert managed_dirs, "managed node tree not discovered"
+    managed_dirs = [str(npm_entry), str(node_entry)]
     install_env = mock_install.call_args.kwargs["env"]
-    path_parts = install_env["PATH"].split(os.pathsep)
-    assert path_parts[: len(managed_dirs)] == managed_dirs
-    assert "/usr/bin" in path_parts  # the bare updater PATH is preserved, just after managed Node
+    path_parts = [
+        os.path.normpath(p) for p in install_env["PATH"].split(os.pathsep)
+    ]
+    assert path_parts[: len(managed_dirs)] == [
+        os.path.normpath(d) for d in managed_dirs
+    ]
+    assert os.path.normpath("/usr/bin") in path_parts  # the bare updater PATH is preserved, just after managed Node
 
 
 

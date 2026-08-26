@@ -74,7 +74,7 @@ def read_active_org_id(skills_dir: Path) -> Optional[str]:
         marker = skills_dir / ORG_MIRROR_DIR_NAME / ORG_ACTIVE_MARKER
         if not marker.exists():
             return None
-        val = marker.read_text(encoding="utf-8").strip()
+        val = marker.read_text(encoding="utf-8-sig").strip()
         return val or None
     except OSError:
         return None
@@ -421,7 +421,7 @@ def _load_raw_config() -> Dict[str, Any]:
             return cached
 
     try:
-        parsed = yaml_load(config_path.read_text(encoding="utf-8"))
+        parsed = yaml_load(config_path.read_text(encoding="utf-8-sig"))
     except Exception as e:
         logger.debug("Could not read skill config %s: %s", config_path, e)
         return {}
@@ -1101,7 +1101,7 @@ def discover_all_skill_config_vars() -> List[Dict[str, Any]]:
             continue
         for skill_file in iter_skill_index_files(skills_dir, "SKILL.md"):
             try:
-                raw = skill_file.read_text(encoding="utf-8")
+                raw = skill_file.read_text(encoding="utf-8-sig")
                 frontmatter, _ = parse_frontmatter(raw)
             except Exception:
                 continue

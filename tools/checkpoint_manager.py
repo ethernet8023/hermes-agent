@@ -252,7 +252,7 @@ def _load_ledger(store: Path, dir_hash: str) -> Dict[str, Dict]:
     this" apart from "the user hand-edited this afterwards".
     """
     try:
-        raw = _ledger_path(store, dir_hash).read_text(encoding="utf-8")
+        raw = _ledger_path(store, dir_hash).read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
@@ -586,7 +586,7 @@ def _register_project(store: Path, working_dir: str) -> None:
         meta.update(evidence)
     if meta_path.exists():
         try:
-            existing = json.loads(meta_path.read_text(encoding="utf-8"))
+            existing = json.loads(meta_path.read_text(encoding="utf-8-sig"))
             if isinstance(existing, dict):
                 meta["created_at"] = existing.get("created_at", now)
                 if not evidence:
@@ -614,7 +614,7 @@ def _touch_project(store: Path, working_dir: str) -> None:
         _register_project(store, working_dir)
         return
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         meta = {}
     if not isinstance(meta, dict):
@@ -644,7 +644,7 @@ def _list_projects(store: Path) -> List[Dict]:
     for meta_path in projects_dir.glob("*.json"):
         dir_hash = meta_path.stem
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             continue
         if not isinstance(meta, dict):
@@ -677,7 +677,7 @@ def _pre_v2_shadow_repos(base: Path) -> List[Dict]:
         wd_marker = child / "HERMES_WORKDIR"
         if wd_marker.exists():
             try:
-                workdir = wd_marker.read_text(encoding="utf-8").strip()
+                workdir = wd_marker.read_text(encoding="utf-8-sig").strip()
             except (OSError, UnicodeDecodeError):
                 # The marker is there, we just could not read it. That is
                 # not evidence the project is gone — never delete on it.
@@ -2077,7 +2077,7 @@ def maybe_auto_prune_checkpoints(
         now = time.time()
         if marker.exists():
             try:
-                last_ts = float(marker.read_text(encoding="utf-8").strip())
+                last_ts = float(marker.read_text(encoding="utf-8-sig").strip())
                 if now - last_ts < min_interval_hours * 3600:
                     out["skipped"] = True
                     return out

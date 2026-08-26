@@ -1433,7 +1433,7 @@ def _clear_stale_cua_install_lock() -> None:
         holder_pid = None
         info = lock_dir / "info"
         try:
-            for line in info.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in info.read_text(encoding="utf-8-sig", errors="replace").splitlines():
                 if line.startswith("pid="):
                     holder_pid = int(line.split("=", 1)[1].strip())
                     break

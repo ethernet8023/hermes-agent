@@ -686,7 +686,7 @@ def stable_device_id() -> str:
     path = _skills_dir() / ".sync_device_id"
     try:
         if path.exists():
-            val = path.read_text(encoding="utf-8").strip()
+            val = path.read_text(encoding="utf-8-sig").strip()
             if val:
                 return val
     except OSError:
@@ -966,7 +966,7 @@ def read_sync_state() -> Dict[str, Any]:
         legacy = _legacy_sync_state_path()
         if legacy.exists():
             try:
-                data = json.loads(legacy.read_text(encoding="utf-8"))
+                data = json.loads(legacy.read_text(encoding="utf-8-sig"))
                 if isinstance(data, dict):
                     data.setdefault("head", None)
                     data.setdefault("skills", {})
@@ -980,7 +980,7 @@ def read_sync_state() -> Dict[str, Any]:
                 logger.debug("skills_sync_client: legacy sync state migrate failed: %s", e)
         return {"head": None, "skills": {}}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         if isinstance(data, dict):
             data.setdefault("head", None)
             data.setdefault("skills", {})
@@ -1941,7 +1941,7 @@ def _org_baseline_path(org_id: str) -> Path:
 
 def _read_org_baseline(org_id: str) -> Dict[str, Any]:
     try:
-        return json.loads(_org_baseline_path(org_id).read_text(encoding="utf-8"))
+        return json.loads(_org_baseline_path(org_id).read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
 

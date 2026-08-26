@@ -86,7 +86,7 @@ def _inside(path: Path, root: Path) -> bool:
 
 def _read_json_object(path: Path, *, label: str) -> dict:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise AgentPluginError(f"{label} is not valid readable JSON: {exc}") from exc
     if not isinstance(value, dict):
@@ -219,7 +219,7 @@ def _discover_skills(
             )
             continue
         try:
-            content = skill_md.read_text(encoding="utf-8")
+            content = skill_md.read_text(encoding="utf-8-sig")
             content = content.lstrip("\ufeff")
             if not content.startswith("---"):
                 raise ValueError("missing YAML frontmatter")

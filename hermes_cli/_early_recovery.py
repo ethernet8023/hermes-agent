@@ -201,7 +201,7 @@ def _pid_is_running(pid: int) -> bool:
 def _marker_owner_is_live(marker: Path) -> bool:
     """True when a legacy update marker names a process still running."""
     try:
-        body = marker.read_text(encoding="utf-8", errors="replace")
+        body = marker.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return False
     for line in body.splitlines():
@@ -605,7 +605,7 @@ def _complete_pending_core_install(root: Path, core_marker: Path) -> bool:
         # increment the counter reflects THIS attempt.
         attempts = 0
         try:
-            raw = core_marker.read_text(encoding="utf-8", errors="replace").strip()
+            raw = core_marker.read_text(encoding="utf-8-sig", errors="replace").strip()
             if raw:
                 import json as _json
 

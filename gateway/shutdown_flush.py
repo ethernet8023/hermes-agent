@@ -211,7 +211,7 @@ def drain_transcript_spool(session_id: str, replay) -> tuple[int, int]:
     entries = []
     for path in candidates:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception:
             continue
         if payload.get("reason") != TRANSCRIPT_CAP_DROP_REASON:
@@ -327,7 +327,7 @@ def recover_pending_to_db(
     recovered = 0
     for path in flush_files:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
             # Agent-history snapshots use a different schema (reason +
             # messages list) and are meant for manual operator recovery,
             # not automatic DB insertion. Skip them silently.

@@ -1200,7 +1200,7 @@ def _managed_runtime_path_entries() -> list[str]:
     itself, so on a machine where Hermes provisioned its own toolchain a
     command the agent runs resolves a system copy instead — or nothing at all:
 
-    - ``$HERMES_HOME/node`` (+ ``/bin``) — installed to satisfy the desktop and
+    - the pm store's node/npm entries — installed to satisfy the desktop and
       browser toolchain. ``tools/browser_tool.py`` already does this for its own
       subprocesses; the agent's shell deserves the same.
     - ``$HERMES_HOME/bin`` — the managed ``uv``. ``install.sh`` writes it there
@@ -1208,13 +1208,16 @@ def _managed_runtime_path_entries() -> list[str]:
       uv is the managed one looks uv-less to both the agent and the model.
 
     Resolved per call rather than cached in a module constant because
-    ``get_hermes_home()`` is profile-scoped and a managed tree can appear
-    mid-process (``heal_hermes_managed_node``, a first browser install).
+    ``get_hermes_home()`` is profile-scoped and a managed runtime can appear
+    mid-process (a lazy pm install, a first browser install).
     """
     try:
-        from hermes_constants import get_hermes_home, iter_hermes_node_dirs
+        import pm
+        from hermes_constants import get_hermes_home
 
-        candidates = [*iter_hermes_node_dirs(), get_hermes_home() / "bin"]
+        env = pm.env_for("npm", base_env={"PATH": ""})
+        managed = [Path(d) for d in env.get("PATH", "").split(os.pathsep) if d]
+        candidates = [*managed, get_hermes_home() / "bin"]
         return [str(d) for d in candidates if d.is_dir()]
     except Exception:
         return []

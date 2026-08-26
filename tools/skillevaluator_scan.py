@@ -205,7 +205,7 @@ def run_tier1_scan(skill_dir: Path, timeout: int = SCAN_TIMEOUT_SECONDS) -> Tier
         if not reports:
             return Tier1Report(available=False, error="scanner produced no JSON report")
         try:
-            parsed = json.loads(reports[-1].read_text(encoding="utf-8"))
+            parsed = json.loads(reports[-1].read_text(encoding="utf-8-sig"))
         except (json.JSONDecodeError, OSError) as exc:
             return Tier1Report(available=False, error=f"unparseable report: {exc}")
         if not isinstance(parsed, dict):

@@ -188,7 +188,7 @@ def _kill_stale_bridge_by_pidfile(session_path: Path) -> None:
     try:
         # Format: line 1 = pid, optional line 2 = kernel start time. Legacy
         # files written before the guard existed have only the pid.
-        lines = pid_file.read_text(encoding="utf-8").split("\n")
+        lines = pid_file.read_text(encoding="utf-8-sig").split("\n")
         pid = int(lines[0].strip())
         if len(lines) > 1 and lines[1].strip():
             recorded_start = int(lines[1].strip())
@@ -577,7 +577,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             if (bridge_dir / "node_modules").exists():
                 try:
                     _deps_fresh = (
-                        _dep_stamp.read_text(encoding="utf-8").strip() == _pkg_hash
+                        _dep_stamp.read_text(encoding="utf-8-sig").strip() == _pkg_hash
                     ) and bool(_pkg_hash)
                 except OSError:
                     _deps_fresh = False
@@ -1594,7 +1594,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                             if file_size > MAX_TEXT_INJECT_BYTES:
                                 print(f"[{self.name}] Skipping text injection for {doc_path} ({file_size} bytes > {MAX_TEXT_INJECT_BYTES})", flush=True)
                                 continue
-                            content = Path(doc_path).read_text(encoding="utf-8", errors="replace")
+                            content = Path(doc_path).read_text(encoding="utf-8-sig", errors="replace")
                             fname = Path(doc_path).name
                             # Remove the doc_<hex>_ prefix for display
                             display_name = fname

@@ -405,7 +405,7 @@ def get_managed_system() -> Optional[str]:
         # names the system that manages the install.
         if managed_marker.exists():
             try:
-                marker = managed_marker.read_text(encoding="utf-8", errors="replace").strip().lower()
+                marker = managed_marker.read_text(encoding="utf-8-sig", errors="replace").strip().lower()
             except OSError:
                 marker = ""
 
@@ -519,7 +519,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
 
     # 1. Code-scoped stamp — authoritative, immune to shared $HERMES_HOME.
     try:
-        method = (root / ".install_method").read_text(encoding="utf-8").strip().lower()
+        method = (root / ".install_method").read_text(encoding="utf-8-sig").strip().lower()
         if method in supported_methods:
             return method
     except OSError:
@@ -532,7 +532,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     try:
         method = (
             (get_hermes_home() / ".install_method")
-            .read_text(encoding="utf-8")
+            .read_text(encoding="utf-8-sig")
             .strip()
             .lower()
         )
@@ -564,7 +564,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     # detect git repo installs from worktrees
     if git_path.is_file():
         try:
-            content = git_path.read_text(encoding="utf-8").strip()
+            content = git_path.read_text(encoding="utf-8-sig").strip()
             if content.startswith("gitdir:"):
                 return "git"
         except OSError:
@@ -729,7 +729,7 @@ def get_container_exec_info() -> Optional[dict]:
 
     try:
         info = {}
-        with open(container_mode_file, "r", encoding="utf-8") as f:
+        with open(container_mode_file, "r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if "=" in line and not line.startswith("#"):
@@ -879,7 +879,7 @@ def _is_container() -> bool:
         return True
     # LXC / cgroup-based detection
     try:
-        with open("/proc/1/cgroup", "r", encoding="utf-8") as f:
+        with open("/proc/1/cgroup", "r", encoding="utf-8-sig") as f:
             cgroup_content = f.read()
         if "docker" in cgroup_content or "lxc" in cgroup_content or "kubepods" in cgroup_content:
             return True
@@ -917,7 +917,7 @@ def _ensure_default_soul_md(home: Path) -> None:
     soul_path = home / "SOUL.md"
     if soul_path.exists():
         try:
-            existing = soul_path.read_text(encoding="utf-8")
+            existing = soul_path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
             return
         if not is_legacy_template_soul(existing):
@@ -1975,7 +1975,7 @@ def _raw_config_has_explicit_version() -> bool:
     if not config_path.exists():
         return False
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8-sig") as f:
             raw = fast_safe_load(f) or {}
     except Exception:
         return False
@@ -2000,7 +2000,7 @@ def check_config_version() -> Tuple[int, int]:
         return latest, latest
 
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8-sig") as f:
             config = fast_safe_load(f) or {}
     except Exception as e:
         # Invalid YAML needs a parse warning, not an automatic schema rewrite
@@ -3301,7 +3301,7 @@ def read_raw_config() -> Dict[str, Any]:
             return copy.deepcopy(cached[2])
 
         try:
-            with open(config_path, encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8-sig") as f:
                 data = fast_safe_load(f) or {}
         except Exception as e:
             _warn_config_parse_failure(config_path, e)
@@ -3355,7 +3355,7 @@ def read_user_config_raw(config_path: Optional[Path] = None) -> Dict[str, Any]:
     if config_path is None:
         config_path = get_config_path()
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8-sig") as f:
             data = fast_safe_load(f) or {}
     except FileNotFoundError:
         return {}
@@ -3391,7 +3391,7 @@ def read_raw_config_readonly() -> Dict[str, Any]:
             return cached[2]
 
         try:
-            with open(config_path, encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8-sig") as f:
                 data = fast_safe_load(f) or {}
         except Exception as e:
             _warn_config_parse_failure(config_path, e)
@@ -3723,7 +3723,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
 
         if user_sig is not None:
             try:
-                with open(config_path, encoding="utf-8") as f:
+                with open(config_path, encoding="utf-8-sig") as f:
                     user_config = fast_safe_load(f) or {}
 
                 if "max_turns" in user_config:
@@ -5521,7 +5521,7 @@ def set_config_value(key: str, value: str, force: bool = False):
     user_config = {}
     if config_path.exists():
         try:
-            with open(config_path, encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8-sig") as f:
                 user_config = fast_safe_load(f) or {}
         except Exception as exc:
             print(
@@ -5779,7 +5779,7 @@ def unset_config_value(key: str):
     user_config = {}
     if config_path.exists():
         try:
-            with open(config_path, encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8-sig") as f:
                 user_config = fast_safe_load(f) or {}
         except Exception as exc:
             print(
@@ -6072,7 +6072,7 @@ def _inject_platform_plugin_env_vars() -> None:
             if not manifest_path.exists():
                 continue
             try:
-                with open(manifest_path, "r", encoding="utf-8") as f:
+                with open(manifest_path, "r", encoding="utf-8-sig") as f:
                     manifest = fast_safe_load(f) or {}
             except Exception:
                 continue

@@ -632,7 +632,7 @@ def _verify_checksums_signature(tmp: Path, checksum_path: Path) -> bool:
 def _expected_sha256(checksum_file: Path, asset_name: str) -> str:
     """Parse the standard ``sha256sum`` output: ``<hex>  <filename>``."""
 
-    text = checksum_file.read_text(encoding="utf-8", errors="replace")
+    text = checksum_file.read_text(encoding="utf-8-sig", errors="replace")
     for line in text.splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and parts[-1] == asset_name:
@@ -854,7 +854,7 @@ def ensure_management_token(*, force: bool = False) -> str:
     p = _management_token_path()
     if not force and p.exists():
         try:
-            existing = p.read_text(encoding="utf-8").strip()
+            existing = p.read_text(encoding="utf-8-sig").strip()
             if existing:
                 return existing
         except OSError:
@@ -879,7 +879,7 @@ def ensure_management_token(*, force: bool = False) -> str:
 def _read_management_token() -> Optional[str]:
     p = _proxy_state_dir_ro() / "management.token"
     try:
-        token = p.read_text(encoding="utf-8").strip()
+        token = p.read_text(encoding="utf-8-sig").strip()
     except OSError:
         return None
     return token or None
@@ -898,7 +898,7 @@ def _read_management_listen_from_config(
     except ImportError:
         return None
     try:
-        data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8-sig"))
     except (OSError, yaml.YAMLError):
         return None
     listen = ((data or {}).get("management") or {}).get("listen") or ""
@@ -1427,7 +1427,7 @@ def load_mappings() -> List[TokenMapping]:
     if not f.exists():
         return []
     try:
-        payload = json.loads(f.read_text(encoding="utf-8"))
+        payload = json.loads(f.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to read iron-proxy mappings.json: %s", exc)
         return []
@@ -1579,7 +1579,7 @@ def _read_pid() -> Optional[int]:
     if not pf.exists():
         return None
     try:
-        pid = int(pf.read_text(encoding="utf-8").strip())
+        pid = int(pf.read_text(encoding="utf-8-sig").strip())
     except (OSError, ValueError):
         return None
     return pid if pid > 0 else None
@@ -1601,7 +1601,7 @@ def _pid_proc_starttime(pid: int) -> Optional[str]:
     the cmdline + nonce check.
     """
     try:
-        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8-sig")
     except OSError:
         return None
     # /proc/<pid>/stat: pid (comm-with-parens) state ppid ... fields[21]=starttime
@@ -2403,7 +2403,7 @@ def _read_http_listen_from_config() -> Optional[Tuple[str, int]]:
     except ImportError:
         return None
     try:
-        data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8-sig"))
     except (OSError, yaml.YAMLError):
         return None
     proxy_block = (data or {}).get("proxy") or {}

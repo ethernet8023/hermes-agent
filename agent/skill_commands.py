@@ -467,7 +467,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                 if any(part in {'.git', '.github', '.hub', '.archive'} for part in skill_md.parts):
                     continue
                 try:
-                    content = skill_md.read_text(encoding='utf-8')
+                    content = skill_md.read_text(encoding='utf-8-sig')
                     frontmatter, body = _parse_frontmatter(content)
                     # Skip skills incompatible with the current OS platform
                     if not skill_matches_platform(frontmatter):

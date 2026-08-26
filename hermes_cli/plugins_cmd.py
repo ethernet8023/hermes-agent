@@ -353,7 +353,7 @@ def _read_manifest(plugin_dir: Path) -> dict:
     try:
         import yaml
 
-        with open(manifest_file, encoding="utf-8") as f:
+        with open(manifest_file, encoding="utf-8-sig") as f:
             return yaml.safe_load(f) or {}
     except Exception as e:
         logger.warning("Failed to read plugin.yaml in %s: %s", plugin_dir, e)
@@ -510,7 +510,7 @@ def _display_after_install(plugin_dir: Path, identifier: str) -> None:
     after_install = plugin_dir / "after-install.md"
 
     if after_install.exists():
-        content = after_install.read_text(encoding="utf-8")
+        content = after_install.read_text(encoding="utf-8-sig")
         md = Markdown(content)
         console.print()
         console.print(Panel(md, border_style="green", expand=False))
@@ -570,7 +570,7 @@ def _read_install_metadata() -> dict[str, dict[str, object]]:
     if not path.exists():
         return {}
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PluginOperationError(f"Could not read plugin install metadata: {exc}") from exc
     if not isinstance(value, dict):
@@ -1779,7 +1779,7 @@ def _read_manifest_info(d: Path, prefix: str):
     description = ""
     if yaml:
         try:
-            with open(manifest_file, encoding="utf-8") as f:
+            with open(manifest_file, encoding="utf-8-sig") as f:
                 manifest = yaml.safe_load(f) or {}
             name = manifest.get("name", d.name)
             version = manifest.get("version", "")
@@ -1823,7 +1823,7 @@ def _bundled_default_on(dir_path) -> bool:
     try:
         import yaml
 
-        with open(manifest_file, encoding="utf-8") as f:
+        with open(manifest_file, encoding="utf-8-sig") as f:
             manifest = yaml.safe_load(f) or {}
         kind = str(manifest.get("kind", "standalone")).strip().lower()
         return kind in _BUNDLED_DEFAULT_ON_KINDS

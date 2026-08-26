@@ -151,7 +151,7 @@ def _s6_running() -> bool:
     init, or an unrelated process named ``s6-svscan``).
     """
     try:
-        comm = Path("/proc/1/comm").read_text(encoding="utf-8").strip()
+        comm = Path("/proc/1/comm").read_text(encoding="utf-8-sig").strip()
     except OSError:
         return False
     if comm != "s6-svscan":
@@ -376,7 +376,7 @@ def _write_gateway_desired_state(name: str, desired_state: str) -> None:
         if not profile_dir.exists():
             return
         try:
-            data = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+            data = json.loads(state_file.read_text(encoding="utf-8-sig")) if state_file.exists() else {}
             if not isinstance(data, dict):
                 data = {}
         except (OSError, json.JSONDecodeError):

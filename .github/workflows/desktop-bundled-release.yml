@@ -8,7 +8,9 @@ name: Desktop Bundled Release
 #
 # Payload staging is `hermes pm bundle` on the native runner. There is
 # no cross-target staging. Signing and notarization are a later commit;
-# this file produces unsigned artifacts on forks.
+# this file produces unsigned artifacts on forks. When the
+# release-signing environment has the Apple and Azure identifiers,
+# the same job signs and notarizes.
 #
 # scripts/build-bundled-desktop.mjs is the one driver. Local and CI run
 # the same command. This workflow adds caching and upload only.
@@ -31,6 +33,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: desktop-bundled-release-${{ inputs.tag }}
@@ -74,6 +77,7 @@ jobs:
     name: bundled ${{ matrix.target.label }}
     needs: validate
     runs-on: ${{ matrix.target.runner }}
+    environment: release-signing
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -205,12 +209,59 @@ jobs:
             tests-js/node_modules
           key: node-modules-${{ matrix.target.label }}-node26-npm12-${{ hashFiles('package-lock.json') }}
 
+      - name: Azure login (OIDC)
+        if: startsWith(matrix.target.label, 'win32-') && vars.AZURE_CLIENT_ID != ''
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Mint federated token for the signing dlib
+        if: startsWith(matrix.target.label, 'win32-') && vars.AZURE_CLIENT_ID != ''
+        shell: bash
+        run: |
+          file="$RUNNER_TEMP/azure-federated-token"
+          mint() {
+            curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+              | jq -r .value > "$file.tmp" && mv -f "$file.tmp" "$file"
+          }
+          mint
+          ( while sleep 240; do mint || true; done ) &
+          echo "AZURE_FEDERATED_TOKEN_FILE=$file" >> "$GITHUB_ENV"
+
+      - name: Write App Store Connect key for notarytool
+        if: startsWith(matrix.target.label, 'darwin-')
+        shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [ -n "$APPLE_API_KEY_P8" ]; then
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple-api-key.p8"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/apple-api-key.p8" >> "$GITHUB_ENV"
+          else
+            echo "APPLE_API_KEY_P8 secret not set — notarization will be skipped"
+          fi
+
       - name: Build and package
         shell: bash
         timeout-minutes: 85
         env:
           PYTHONUTF8: '1'
           CC_aarch64_pc_windows_msvc: ${{ matrix.target.label == 'win32-arm64' && 'clang' || '' }}
+          DEBUG: 'electron-osx-sign*,electron-notarize*'
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
+          AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
+          AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
+          AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_TOKEN_CREDENTIALS: prod
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
             ulimit -n 16384 2>/dev/null || true
@@ -275,3 +326,69 @@ jobs:
             exit 1
           fi
           gh release upload "$TAG" "${files[@]}" --clobber
+
+  first-boot:
+    name: first-boot linux-x64
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          sparse-checkout: |
+            scripts/smoke-payload.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Download linux-x64 unpacked tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: hermes-bundled-linux-x64-${{ inputs.tag }}
+          path: packed
+
+      - name: Adopt the payload venv and smoke it
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf packed/unpacked-bundled-linux-x64.tar.gz
+          payload=""
+          for cand in linux-unpacked/resources/agent-payload \
+                      linux-x64-unpacked/resources/agent-payload; do
+            if [ -f "$cand/manifest.json" ]; then
+              payload=$cand
+              break
+            fi
+          done
+          if [ -z "$payload" ]; then
+            echo "::error::no agent-payload under the unpacked linux app"
+            find . -name manifest.json | head
+            exit 1
+          fi
+          python3 - "$payload" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          manifest = json.loads((root / "manifest.json").read_text())
+          if manifest.get("external") is True:
+              raise SystemExit("payload is the external stub — bundled build did not stage")
+          for key in ("repo", "store", "venv"):
+              if not isinstance(manifest.get(key), str):
+                  raise SystemExit(f"manifest missing {key}")
+          facts = json.loads((root / manifest["store"] / "facts.json").read_text())
+          entry = facts["packages"]["python"]["entry"]
+          home = root / manifest["store"] / entry / "bin"
+          cfg = root / manifest["venv"] / "pyvenv.cfg"
+          lines = cfg.read_text().splitlines()
+          out = []
+          for line in lines:
+              if line.lower().startswith("home ="):
+                  out.append(f"home = {home}")
+              else:
+                  out.append(line)
+          cfg.write_text("\n".join(out) + "\n")
+          again = cfg.read_text()
+          if f"home = {home}" not in again:
+              raise SystemExit("adopt did not write home")
+          print(f"adopted home = {home}")
+          PY
+          bash scripts/smoke-payload.sh "$payload"
+

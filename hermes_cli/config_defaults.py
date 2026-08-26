@@ -3701,9 +3701,11 @@ DEFAULT_CONFIG = {
         # Master switch for the managed runtime. Off = detection-only
         # (Hermes still finds an external llama-server you run yourself).
         "enabled": False,
-        # Pinned llama.cpp release tag (rolling bNNNN). Bumped by Hermes
-        # releases after the validation suite re-runs, not tracked live.
-        "tag": "b10362",
+        # NOTE: the llama.cpp BUILD is not configurable here — the engine
+        # is a pinned tool like node or uv, so its exact URL and sha256
+        # live in installation/runtime-pins.json and bump with a Hermes
+        # release. That is what makes the engine running a user's model
+        # verifiable rather than resolved at runtime.
         # Inference backend: auto = CUDA on NVIDIA, Metal on macOS, Vulkan on
         # other GPUs, else CPU. Explicit values: cuda|metal|vulkan|hip|cpu.
         "backend": "auto",

@@ -159,6 +159,30 @@
           "type": "string",
           "description": "Lowercase hex-encoded SHA-256 digest of the downloaded artifact, exactly 64 characters.",
           "pattern": "^[a-f0-9]{64}$"
+        },
+        "also": {
+          "type": "array",
+          "description": "Further archives unpacked into the SAME store entry, after the one above. For an upstream that splits one runtime across several downloads which must end up in one directory: llama.cpp ships its CUDA engine and the cudart DLLs it links against as separate zips, and Windows resolves a DLL from the executable's own directory, so two entries plus a PATH edge cannot substitute. Each is pinned and digest-verified exactly like the primary artifact. Use 'extends' instead whenever the pieces are separable tools.",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/extraArtifact" }
+        }
+      }
+    },
+    "extraArtifact": {
+      "type": "object",
+      "required": ["url", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "URL of an additional archive unpacked into the same entry.",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Lowercase hex-encoded SHA-256 digest, exactly 64 characters.",
+          "pattern": "^[a-f0-9]{64}$"
         }
       }
     }

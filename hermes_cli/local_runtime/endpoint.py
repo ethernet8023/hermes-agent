@@ -113,11 +113,11 @@ def _boot_in_flight(config: dict | None) -> bool:
     """True when the managed runtime is enabled and installed — the state
     a lifespan boot thread is (or is about to be) bringing up.
 
-    Installed-ness is a verified-manifest scan under runtimes_root(), NOT a
-    server_binary() call — that helper requires an install_dir argument, and
-    calling it bare made this gate throw-and-return-False forever, silently
-    disabling the boot wait (the regression
-    test had monkeypatched this function instead of exercising it).
+    Installed-ness comes from the provisioner's facts, the same authority
+    every other managed tool is looked up through. (It was a manifest
+    scan; before that a bare ``server_binary()`` call, which needs an
+    install_dir and so made this gate throw-and-return-False forever,
+    silently disabling the boot wait.)
     """
     try:
         if config is None:
@@ -126,16 +126,9 @@ def _boot_in_flight(config: dict | None) -> bool:
             config = load_config()
         if not ((config or {}).get("local_runtime") or {}).get("enabled"):
             return False
-        import json as _json
 
-        from hermes_cli.local_runtime.binaries import runtimes_root
+        from hermes_cli.local_runtime.binaries import installed_backends
 
-        for manifest in runtimes_root().glob("*/*/manifest.json"):
-            try:
-                if _json.loads(manifest.read_text(encoding="utf-8")).get("verified_version"):
-                    return True
-            except (ValueError, OSError):
-                continue
-        return False
+        return bool(installed_backends())
     except Exception:  # noqa: BLE001
         return False

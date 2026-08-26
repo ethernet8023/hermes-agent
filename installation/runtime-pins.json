@@ -1,6 +1,6 @@
 {
   "$schema": "./runtime-pins.schema.json",
-  "$comment": "ONE source of truth, read by the Python provisioner (installation/provisioner.py) and by the desktop payload staging, which shells out to it. Every entry pins an EXACT version plus, per target, the exact download URL and its sha256. No ranges, no 'resolve latest and hope': a build is reproducible, needs no GitHub API (unauthenticated callers get 60 requests/hour), and a tool cannot silently change under users. Bump deliberately: change the version, refresh every url+sha256 for that tool, verify, commit. Tool ORDER is derived from this file too \u2014 see 'extends'.",
+  "$comment": "ONE source of truth, read by the Python provisioner (installation/provisioner.py) and by the desktop payload staging, which shells out to it. Every entry pins an EXACT version plus, per target, the exact download URL and its sha256. No ranges, no 'resolve latest and hope': a build is reproducible, needs no GitHub API (unauthenticated callers get 60 requests/hour), and a tool cannot silently change under users. Bump deliberately: change the version, refresh every url+sha256 for that tool, verify, commit. Tool ORDER is derived from this file too — see 'extends'.",
   "schemaVersion": 2,
   "tools": {
     "node": {
@@ -270,6 +270,39 @@
         },
         "win32-arm64": {
           "missing": "no upstream build (neither CfT nor the classic playwright CDN ship windows-arm64); the target keeps the system-browser rung"
+        }
+      }
+    },
+    "llamacpp-cuda": {
+      "version": "10362",
+      "$comment": "llama.cpp's CUDA build — the engine behind the managed local runtime (llama-server). Upstream numbers builds (rolling bNNNN tags) rather than releasing semver, so the version is the bare build number and the 'b' lives in the URL, the same shape as playwright's chromium revision. Optional: nobody downloads a 270MB inference engine until they ask for a local model. The cudart DLLs ride along in 'also' rather than as a tool of their own: Windows resolves a DLL from the loading executable's OWN directory, so they have to land beside llama-server.exe — a second entry plus a PATH edge would not be found. Bumping the build means refreshing both digests here, which is the point: the engine that runs a user's model is pinned like every other tool instead of resolved at runtime.",
+      "optional": true,
+      "onPath": false,
+      "files": {
+        "win32-arm64": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10362/llama-b10362-bin-win-cuda-13.4-arm64.zip",
+          "sha256": "e96c44911a48f8813760b9076c7c7799db4374debb28d26a5464919bc0f27e8f",
+          "also": [
+            {
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10362/cudart-llama-bin-win-cuda-13.4-arm64.zip",
+              "sha256": "5a40dc7c5fa3d0a80ceeba4f16f9e8d25d87bcf1399c9233588953c43436c33c"
+            }
+          ]
+        },
+        "win32-x64": {
+          "missing": "only win32-arm64 is pinned so far. Upstream ships builds for the other targets (and macOS is a single unified tarball with Metal built in); add them by refreshing url+sha256 from the release, one target at a time."
+        },
+        "darwin-arm64": {
+          "missing": "only win32-arm64 is pinned so far. Upstream ships builds for the other targets (and macOS is a single unified tarball with Metal built in); add them by refreshing url+sha256 from the release, one target at a time."
+        },
+        "darwin-x64": {
+          "missing": "only win32-arm64 is pinned so far. Upstream ships builds for the other targets (and macOS is a single unified tarball with Metal built in); add them by refreshing url+sha256 from the release, one target at a time."
+        },
+        "linux-arm64": {
+          "missing": "only win32-arm64 is pinned so far. Upstream ships builds for the other targets (and macOS is a single unified tarball with Metal built in); add them by refreshing url+sha256 from the release, one target at a time."
+        },
+        "linux-x64": {
+          "missing": "only win32-arm64 is pinned so far. Upstream ships builds for the other targets (and macOS is a single unified tarball with Metal built in); add them by refreshing url+sha256 from the release, one target at a time."
         }
       }
     }

@@ -347,14 +347,18 @@ def _probe_version(
     out = ""
     if plan.exec_args is not None:
         try:
-            out = subprocess.run(
+            proc = subprocess.run(
                 [str(binary)] + plan.exec_args,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 check=False,
                 env=env,
-            ).stdout
+            )
+            # stderr counts: printing the version banner there is a common
+            # convention (llama-server does), and this probe only asks
+            # "did it run and say something version-shaped".
+            out = f"{proc.stdout}\n{proc.stderr}"
         except (OSError, subprocess.SubprocessError):
             # TimeoutExpired IS a SubprocessError. Returning here would
             # skip the file-resource rung for the exact shape that needs
@@ -365,6 +369,13 @@ def _probe_version(
     m = _re.search(r"\d+(?:\.\d+)+", out or "")
     if m:
         return m.group(0)
+    # Upstreams that NUMBER builds rather than release semver print a bare
+    # integer (llama.cpp's `version: 10362`, the same shape their pin
+    # carries). Only consulted when no dotted version appeared, so a
+    # normal tool's version still wins.
+    m = _re.search(r"\bversion:?\s+(\d+)\b", out or "", _re.IGNORECASE)
+    if m:
+        return m.group(1)
     if plan.read_file_version:
         return _windows_file_version(binary)
     return None
@@ -576,6 +587,10 @@ def _binary_rel(tool: str, target: str) -> str:
         # (bin/agent-browser.js) is deliberately NOT the fact: it would
         # drag a node dependency into a tool that has none.
         "agent-browser": f"bin/agent-browser-{target}{ext}",
+        # The llama.cpp zips unpack flat: llama-server.exe sits at the
+        # entry root with its DLLs (and the cudart ones from `also`)
+        # beside it, which is what the Windows loader requires.
+        "llamacpp-cuda": f"llama-server{ext}",
         # The `-binary` release variants unpack flat, so the driver sits at
         # the store entry's root beside its SDK library and (on Windows)
         # the cua-driver-uia.exe UIAccess worker it spawns.
@@ -660,10 +675,39 @@ def _stage_archive(
     its Windows zip does not — a hardcoded list got that wrong).
     ``_flatten_single_dir`` no-ops unless there is exactly one top-level
     directory, so applying it unconditionally is safe.
+
+    ``pin.also`` archives are merged into the SAME directory afterwards,
+    each verified against its own digest first. They cannot go through
+    ``_extract`` directly — it EMPTIES its destination by contract, which
+    would delete the primary archive's files — so each unpacks into its
+    own scratch directory and is then merged in. No flattening either: an
+    extra exists to place files beside the primary artifact's, so
+    re-rooting the tree between the two would defeat the reason they
+    share an entry.
+
+    A name collision means two archives disagree about one file's
+    contents, which no reader could resolve — fail loudly instead of
+    letting extraction order decide.
     """
     archive = _fetch_verified(pin, tmp, archive_dir=archive_dir)
     _extract(archive, dest)
     _flatten_single_dir(dest)
+    for index, extra in enumerate(pin.also):
+        extra_archive = _fetch_verified(extra, tmp, archive_dir=archive_dir)
+        scratch = tmp / f"also-{index}"
+        _extract(extra_archive, scratch)
+        for src in sorted(scratch.rglob("*")):
+            if src.is_dir():
+                continue
+            target = dest / src.relative_to(scratch)
+            if target.exists():
+                raise RuntimeError(
+                    f"{extra.filename} would overwrite {target.name} from "
+                    f"{pin.filename}: the two pinned archives disagree about "
+                    f"one file, which extraction order must not decide"
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(target))
 
 
 def _stage_portable_git(
@@ -962,13 +1006,20 @@ ENTRY_MARKER_NAME = ".hermes-store-entry.json"
 
 
 def _entry_marker(pin: PinnedFile, tool: str, target: str) -> dict:
-    return {
+    marker = {
         "tool": tool,
         "version": pin.version,
         "target": target,
         "sha256": pin.sha256,
         "publishedAt": datetime.now(timezone.utc).isoformat(),
     }
+    if pin.also:
+        # An entry assembled from several archives is only the entry the
+        # pin describes if EVERY archive is accounted for; recording just
+        # the primary digest would let a half-assembled tree pass as
+        # published.
+        marker["alsoSha256"] = [extra.sha256 for extra in pin.also]
+    return marker
 
 
 def _is_published_entry(entry: Path, tool: str, version: str, target: str) -> bool:

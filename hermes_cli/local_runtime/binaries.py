@@ -1,115 +1,79 @@
-"""Binary acquisition for the managed llama.cpp runtime.
+"""The managed llama.cpp engine: where it lives, and which backend to use.
 
-llama.cpp publishes per-tag assets (rolling ``bNNNN`` tags, no semver).
-Backends are dlopen'd plugins, so a runtime = CPU/base zip + backend zip
-extracted into one directory, plus the cudart runtime zip on Windows CUDA
-(end users have no CUDA toolkit). We pin the tag in config, sha256-verify
-every download, and keep the previous tag for rollback (N-1).
+The engine is a PINNED TOOL like every other managed binary — the pin
+table (``installation/runtime-pins.json``) carries its exact URL and
+sha256 per target, and the provisioner downloads, verifies, extracts and
+version-probes it into the machine-wide tool store. There is no
+download, no digest check and no extraction here; that machinery exists
+once, in ``installation/``, and this module only names the tool and
+locates what was installed.
 
-Layout: ``$HERMES_HOME/runtimes/llamacpp/<tag>/<backend>/<binaries>``
-with a ``manifest.json`` recording zips, sha256s, and the verified
-llama-server version string.
+Backend selection stays here because it is a RUNTIME question — it reads
+the GPU present on this machine, which a build-time pin cannot know. The
+pin table names one tool per backend (``llamacpp-cuda``, and its
+siblings as they are pinned); this module decides which of those names
+to ask for.
+
+``$HERMES_HOME/runtimes/llamacpp`` remains the engine's STATE directory
+(presets, server.json, the api key) — machine-scoped, deliberately not
+profile-scoped, because those describe this machine's hardware and its
+one managed server.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import platform
-import shutil
 import subprocess
-import urllib.request
-import zipfile
-from dataclasses import dataclass, field
 from pathlib import Path
-
-from hermes_constants import get_hermes_home
 
 logger = logging.getLogger(__name__)
 
-RELEASE_URL = "https://github.com/ggml-org/llama.cpp/releases/download/{tag}/{asset}"
-
-# Windows CUDA zips ship per CUDA major; the runtime zip must be paired with
-# its cudart zip so end users need no toolkit. 13.3 verified on 13.1 and
-# 13.2 drivers.
-_WIN_CUDA_VERSION = "13.3"
-# arm64 Windows CUDA prebuilts landed upstream (~b1036x) on CUDA 13.4 —
-# verified against the live b10362 asset list. Tags at or before b10290
-# don't have them; resolution succeeds and the download 404s honestly on
-# such tags, which only arises if a user pins backward.
-_WIN_CUDA_VERSION_ARM64 = "13.4"
-
-
-# Fallback when the config section is missing entirely (deep-merge normally
-# guarantees the key). Single source: DEFAULT_CONFIG owns the shipped tag.
-def default_tag() -> str:
-    from hermes_cli.config_defaults import DEFAULT_CONFIG
-
-    return DEFAULT_CONFIG["local_runtime"]["tag"]
+# Pin-table tool name per backend. A backend absent from this map has no
+# pinned engine yet: resolution refuses rather than guessing a URL.
+_TOOL_BY_BACKEND = {
+    "cuda": "llamacpp-cuda",
+}
 
 
 class BinaryResolutionError(RuntimeError):
-    """No usable asset combination for this platform/backend."""
-
-
-@dataclass
-class AssetPlan:
-    """The exact zips one runtime install needs, in extraction order."""
-
-    tag: str
-    backend: str            # cuda | metal | vulkan | hip | cpu
-    assets: list[str] = field(default_factory=list)
-
-    @property
-    def install_dir(self) -> Path:
-        return runtimes_root() / self.tag / self.backend
+    """No usable engine for this platform/backend."""
 
 
 def runtimes_root() -> Path:
-    """Machine-scoped, deliberately NOT profile-scoped. Engine binaries,
-    presets, and server state describe this machine's hardware and its one
-    managed server (stable port) — a second profile re-downloading the
-    engine or fighting over the port would be the bug. Profile-scoped
-    things (which model is the default, enabled) live in each profile's
-    config.yaml as ever."""
+    """The engine's STATE directory (presets, server state, api key).
+
+    Machine-scoped, deliberately NOT profile-scoped: presets and server
+    state describe this machine's hardware and its one managed server
+    (stable port), so a second profile fighting over the port would be
+    the bug. Profile-scoped things (which model is the default, enabled)
+    live in each profile's config.yaml as ever.
+
+    The engine BINARIES are not here — they are a pinned tool in the
+    machine-wide tool store, resolved through ``engine_dir()``.
+    """
     from hermes_constants import get_default_hermes_root
 
     return get_default_hermes_root() / "runtimes" / "llamacpp"
 
 
-def installed_tags() -> list[str]:
-    """Tags with a verified install (manifest carries verified_version),
-    newest first by release number. The boot ladder and the update check
-    both read installed-ness from here — one resolver, every caller."""
-    root = runtimes_root()
-    if not root.exists():
-        return []
-    found: list[str] = []
-    for entry in root.iterdir():
-        if not entry.is_dir() or entry.name == "downloads":
-            continue
-        for manifest in entry.glob("*/manifest.json"):
-            try:
-                if json.loads(manifest.read_text(encoding="utf-8")).get("verified_version"):
-                    found.append(entry.name)
-                    break
-            except (json.JSONDecodeError, OSError):
-                continue
-
-    def _release_number(tag: str) -> int:
-        digits = "".join(ch for ch in tag if ch.isdigit())
-        return int(digits) if digits else 0
-
-    return sorted(set(found), key=_release_number, reverse=True)
+def backend_tool(backend: str) -> str:
+    """The pin-table tool name serving *backend*."""
+    tool = _TOOL_BY_BACKEND.get(backend)
+    if tool is None:
+        raise BinaryResolutionError(
+            f"no pinned llama.cpp engine for backend {backend!r} "
+            f"(pinned: {', '.join(sorted(_TOOL_BY_BACKEND)) or 'none'})"
+        )
+    return tool
 
 
 def _host_os_arch() -> tuple[str, str]:
-    """(os, arch) normalized to release-asset vocabulary.
+    """(os, arch) for backend selection.
 
-    PITFALL: PROCESSOR_ARCHITECTURE lies under x64 emulation on
-    ARM64 Windows. platform.machine() reads the same env on some Pythons, so
-    on Windows prefer PROCESSOR_IDENTIFIER's text when present.
+    PITFALL: PROCESSOR_ARCHITECTURE lies under x64 emulation on ARM64
+    Windows. platform.machine() reads the same env on some Pythons, so on
+    Windows prefer PROCESSOR_IDENTIFIER's text when present.
     """
     system = platform.system().lower()
     os_name = {"windows": "win", "darwin": "macos", "linux": "ubuntu"}.get(system, system)
@@ -117,6 +81,7 @@ def _host_os_arch() -> tuple[str, str]:
     arch = "arm64" if machine in ("arm64", "aarch64") else "x64"
     if os_name == "win":
         import os as _os
+
         ident = _os.environ.get("PROCESSOR_IDENTIFIER", "")
         if "armv8" in ident.lower() or "arm " in ident.lower():
             arch = "arm64"
@@ -139,168 +104,121 @@ def select_backend(gpu_vendor: str | None, os_name: str | None = None) -> str:
     return "cpu"
 
 
-def resolve_assets(tag: str, backend: str, os_name: str | None = None,
-                   arch: str | None = None) -> AssetPlan:
-    """Compose the asset list for (tag, backend, platform).
+def engine_dir(backend: str) -> Path | None:
+    """The installed engine's directory for *backend*, or None.
 
-    Raises BinaryResolutionError for combinations the release does not ship
-    (a platform/backend pair upstream publishes no artifact for). Callers
-    fall back down the backend ladder: cuda -> vulkan -> cpu.
+    None means "not provisioned here" — the boot ladder serves what is
+    installed and never downloads, so a missing engine is a state to
+    report, not an error to raise.
     """
-    host_os, host_arch = _host_os_arch()
-    os_name = os_name or host_os
-    arch = arch or host_arch
-    plan = AssetPlan(tag=tag, backend=backend)
+    from installation.registry import tool_path
 
-    if os_name == "macos":
-        # macOS tarballs are unified (Metal built in).
-        plan.assets = [f"llama-{tag}-bin-macos-{arch}.tar.gz"]
-        return plan
-
-    if os_name == "ubuntu":
-        if backend == "cuda":
-            # No prebuilt Linux CUDA zips at current tags — Linux CUDA users
-            # build from source or use vulkan; resolver is honest about it.
-            raise BinaryResolutionError(
-                f"no prebuilt linux CUDA asset at {tag}; use vulkan/cpu or a source build")
-        suffix = {"vulkan": f"vulkan-{arch}", "hip": f"rocm-7.2-{arch}",
-                  "cpu": arch}.get(backend)
-        if suffix is None:
-            raise BinaryResolutionError(f"unsupported linux backend {backend}")
-        plan.assets = [f"llama-{tag}-bin-ubuntu-{suffix}.tar.gz"]
-        return plan
-
-    if os_name == "win":
-        if backend == "cuda":
-            cuda_ver = _WIN_CUDA_VERSION_ARM64 if arch == "arm64" else _WIN_CUDA_VERSION
-            plan.assets = [
-                f"llama-{tag}-bin-win-cuda-{cuda_ver}-{arch}.zip",
-                f"cudart-llama-bin-win-cuda-{cuda_ver}-{arch}.zip",
-            ]
-        elif backend == "vulkan":
-            if arch == "arm64":
-                raise BinaryResolutionError(f"no win-vulkan-arm64 asset at {tag}")
-            plan.assets = [f"llama-{tag}-bin-win-vulkan-x64.zip"]
-        elif backend == "hip":
-            plan.assets = [f"llama-{tag}-bin-win-hip-radeon-x64.zip"]
-        elif backend == "cpu":
-            plan.assets = [f"llama-{tag}-bin-win-cpu-{arch}.zip"]
-        else:
-            raise BinaryResolutionError(f"unsupported windows backend {backend}")
-        return plan
-
-    raise BinaryResolutionError(f"unsupported platform {os_name}-{arch}")
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 22), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _download(url: str, dest: Path) -> None:
-    logger.info("downloading %s", url)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f, length=1 << 22)
-    tmp.replace(dest)
-
-
-def _extract(archive: Path, dest: Path) -> None:
-    if archive.name.endswith(".zip"):
-        with zipfile.ZipFile(archive) as z:
-            z.extractall(dest)
-    else:
-        import tarfile
-        with tarfile.open(archive) as t:
-            t.extractall(dest, filter="data")
+    exe = tool_path(backend_tool(backend))
+    return exe.parent if exe is not None else None
 
 
 def server_binary(install_dir: Path) -> Path:
-    """Locate llama-server within an extracted runtime (zips differ in
-    whether they nest a build/bin directory)."""
-    names = ("llama-server.exe", "llama-server")
-    for name in names:
-        direct = install_dir / name
-        if direct.exists():
-            return direct
-    for name in names:
-        hits = sorted(install_dir.rglob(name))
-        if hits:
-            return hits[0]
+    """Locate llama-server within an engine directory."""
+    for name in ("llama-server.exe", "llama-server"):
+        candidate = install_dir / name
+        if candidate.is_file():
+            return candidate
     raise BinaryResolutionError(f"llama-server not found under {install_dir}")
 
 
-def verify_install(install_dir: Path, tag: str) -> str:
-    """Run --version; require the tag's build number in the output.
-    (The binary prints the tag WITHOUT the 'b' prefix.)"""
-    exe = server_binary(install_dir)
-    out = subprocess.run([str(exe), "--version"], capture_output=True,
-                         text=True, encoding="utf-8", errors="replace",
-                         timeout=60, cwd=str(exe.parent))
-    text = (out.stdout + out.stderr).strip()
-    if tag.lstrip("b") not in text:
-        raise BinaryResolutionError(
-            f"version check failed for {exe}: expected {tag}, got: {text[:120]}")
-    return text.splitlines()[0] if text else ""
+def installed_backends() -> list[str]:
+    """Backends with a provisioned engine on this machine.
 
-
-def prune_old_tags(keep: list[str]) -> None:
-    """Retain only the tags in ``keep`` (current + previous — N-1 rollback).
-    The shared ``downloads/`` archive cache is not a tag and always survives."""
-    root = runtimes_root()
-    if not root.exists():
-        return
-    for entry in root.iterdir():
-        if entry.is_dir() and entry.name != "downloads" and entry.name not in keep:
-            shutil.rmtree(entry, ignore_errors=True)
-            logger.info("pruned old runtime %s", entry.name)
-
-
-def ensure_runtime_installed(tag: str, backend: str,
-                             expected_sha256: dict[str, str] | None = None) -> Path:
-    """Idempotent: resolve, download, verify, extract, version-check.
-
-    ``expected_sha256`` maps asset name -> hash when the catalog pins them;
-    without pins the computed hash is recorded in the manifest (trust on
-    first download, verified on every reinstall).
-    Returns the install directory containing llama-server.
+    Reads the provisioner's facts — the same authority every other
+    managed tool is looked up through — so "installed" means the same
+    thing here as it does for node or uv.
     """
-    plan = resolve_assets(tag, backend)
-    install_dir = plan.install_dir
-    manifest_path = install_dir / "manifest.json"
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest.get("verified_version"):
-                return install_dir
-        except (json.JSONDecodeError, OSError):
-            pass  # damaged manifest -> reinstall
+    from installation.registry import tool_path
 
-    install_dir.mkdir(parents=True, exist_ok=True)
-    downloads = runtimes_root() / "downloads"
-    downloads.mkdir(parents=True, exist_ok=True)
+    found = []
+    for backend, tool in _TOOL_BY_BACKEND.items():
+        if tool_path(tool) is not None:
+            found.append(backend)
+    return found
 
-    recorded: dict[str, str] = {}
-    for asset in plan.assets:
-        archive = downloads / asset
-        if not archive.exists():
-            _download(RELEASE_URL.format(tag=tag, asset=asset), archive)
-        digest = _sha256(archive)
-        expected = (expected_sha256 or {}).get(asset)
-        if expected and digest != expected:
-            archive.unlink(missing_ok=True)
-            raise BinaryResolutionError(
-                f"sha256 mismatch for {asset}: expected {expected}, got {digest}")
-        recorded[asset] = digest
-        _extract(archive, install_dir)
 
-    version = verify_install(install_dir, tag)
-    manifest_path.write_text(json.dumps({
-        "tag": tag, "backend": plan.backend, "assets": recorded,
-        "verified_version": version,
-    }, indent=2), encoding="utf-8")
-    logger.info("installed llama.cpp %s (%s): %s", tag, backend, version)
-    return install_dir
+def installed_version(backend: str) -> str | None:
+    """The provisioned engine's build number for *backend*, or None."""
+    from installation.registry import load_facts
+
+    fact = load_facts().get(backend_tool(backend))
+    return fact.version if fact is not None else None
+
+
+def pinned_version(backend: str) -> str | None:
+    """The build number the pin table names for *backend*, or None when
+    this target has no pinned engine (a declared gap in the table)."""
+    from installation.registry import UnavailableOnTarget, pinned_file
+
+    try:
+        return pinned_file(backend_tool(backend)).version
+    except (KeyError, UnavailableOnTarget, BinaryResolutionError):
+        return None
+
+
+def unavailable_reason(backend: str) -> str | None:
+    """Why this target has no pinned engine for *backend*, if it hasn't.
+
+    The pin table's declared gaps carry a sentence a user can act on;
+    surfacing it beats "unavailable" with no explanation.
+    """
+    from installation.registry import UnavailableOnTarget, pinned_file
+
+    try:
+        pinned_file(backend_tool(backend))
+    except UnavailableOnTarget as exc:
+        return exc.reason
+    except BinaryResolutionError as exc:
+        return str(exc)
+    except KeyError as exc:
+        return str(exc)
+    return None
+
+
+def ensure_runtime_installed(backend: str) -> Path:
+    """Provision the pinned engine for *backend* and return its directory.
+
+    Idempotent: the provisioner keeps an entry already at its pin, so a
+    second call costs a facts read. This is the DELIBERATE download path
+    (the Local Models pane's button) — the boot ladder never calls it.
+    """
+    from installation.provisioner import provision_tool
+
+    tool = backend_tool(backend)
+    result = provision_tool(tool)
+    if not result.ok:
+        raise BinaryResolutionError(
+            f"could not provision {tool}: {result.detail or result.action}"
+        )
+    directory = engine_dir(backend)
+    if directory is None:
+        raise BinaryResolutionError(
+            f"{tool} reported {result.action} but no binary is recorded"
+        )
+    logger.info("llama.cpp engine %s ready (%s): %s", result.version, backend, directory)
+    return directory
+
+
+def verify_install(install_dir: Path) -> str:
+    """The engine's own version banner, for display.
+
+    The provisioner already proved the binary RUNS before recording it,
+    so this is presentation, not verification.
+    """
+    exe = server_binary(install_dir)
+    out = subprocess.run(
+        [str(exe), "--version"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+        cwd=str(exe.parent),
+    )
+    text = (out.stdout + out.stderr).strip()
+    return text.splitlines()[0] if text else ""

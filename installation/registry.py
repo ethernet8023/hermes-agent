@@ -119,11 +119,18 @@ def current_target() -> str:
 
 @dataclass(frozen=True)
 class PinnedFile:
-    """One tool's download for one target: exactly where and exactly what."""
+    """One tool's download for one target: exactly where and exactly what.
+
+    ``also`` carries further archives unpacked into the SAME store entry
+    after this one — for an upstream that splits a single runtime across
+    downloads that must land in one directory. Empty for every tool whose
+    artifact stands alone, which is nearly all of them.
+    """
 
     version: str
     url: str
     sha256: str
+    also: tuple["PinnedFile", ...] = ()
 
     @property
     def filename(self) -> str:
@@ -297,6 +304,29 @@ def load_pins(install_root: Path | None = None) -> dict[str, dict]:
                 raise ValueError(
                     f"{path}: {name}/{target} sha256 must be 64 hex chars"
                 )
+            # Extras unpack into the same entry, so they are the same trust
+            # decision as the primary artifact and get the same eager check.
+            # An unvalidated 'also' url would be a hole in exactly the wall
+            # this loader exists to be.
+            also = spec.get("also", [])
+            if not isinstance(also, list):
+                raise ValueError(f"{path}: {name}/{target} 'also' must be a list")
+            for index, extra in enumerate(also):
+                if not isinstance(extra, dict):
+                    raise ValueError(
+                        f"{path}: {name}/{target} also[{index}] is not an object"
+                    )
+                extra_url = extra.get("url")
+                extra_sha = extra.get("sha256")
+                if not isinstance(extra_url, str) or not _is_allowed_url(extra_url):
+                    raise ValueError(
+                        f"{path}: {name}/{target} also[{index}] needs an https url"
+                    )
+                if not isinstance(extra_sha, str) or len(extra_sha) != 64:
+                    raise ValueError(
+                        f"{path}: {name}/{target} also[{index}] sha256 must be "
+                        f"64 hex chars"
+                    )
 
     # Cycles are rejected at load, not discovered halfway through a user's
     # first launch: install_order() must always terminate.
@@ -503,7 +533,15 @@ def pinned_file(
     if "missing" in spec:
         raise UnavailableOnTarget(tool, key, spec["missing"])
 
-    return PinnedFile(version=entry["version"], url=spec["url"], sha256=spec["sha256"])
+    return PinnedFile(
+        version=entry["version"],
+        url=spec["url"],
+        sha256=spec["sha256"],
+        also=tuple(
+            PinnedFile(version=entry["version"], url=extra["url"], sha256=extra["sha256"])
+            for extra in spec.get("also", ())
+        ),
+    )
 
 
 # ─── facts (install-owned, provisioner-written) ─────────────────────────────

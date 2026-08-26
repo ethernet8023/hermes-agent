@@ -198,7 +198,8 @@ def ensure_local_runtime(config: dict, force: bool = False) -> "object | None":
 
     try:
         from hermes_cli.local_runtime.binaries import (
-            ensure_runtime_installed,
+            engine_dir,
+            installed_backends,
             select_backend,
         )
         from hermes_cli.local_runtime.hardware import probe_budget
@@ -209,25 +210,24 @@ def ensure_local_runtime(config: dict, force: bool = False) -> "object | None":
         if backend == "auto":
             backend = select_backend(_detect_gpu_vendor())
         # Boot ladder: serve what is INSTALLED, never download here. The
-        # configured tag (config root-of-trust; deep-merge supplies the
-        # Hermes-release default when unpinned) is preferred; when it isn't
-        # installed yet, the newest installed tag serves and the status
-        # endpoint reports the pending update — the download is a deliberate
-        # button click in the pane, not a boot-path surprise (a multi-minute
-        # inline download here is exactly how the onboarding bounce returns).
-        from hermes_cli.local_runtime.binaries import default_tag, installed_tags
-
-        tag = section.get("tag") or default_tag()
-        have = installed_tags()
-        if tag not in have:
+        # engine is a pinned tool, so "installed" is the provisioner's
+        # facts — the same authority every other managed binary is looked
+        # up through. When the selected backend has no engine, any other
+        # provisioned backend serves and the status endpoint reports it;
+        # the download is a deliberate button click in the pane, not a
+        # boot-path surprise (a multi-minute inline download here is
+        # exactly how the onboarding bounce returns).
+        install_dir = engine_dir(backend)
+        if install_dir is None:
+            have = installed_backends()
             if not have:
-                logger.info("local runtime enabled but no build installed; "
+                logger.info("local runtime enabled but no engine installed; "
                             "install happens in the Local Models pane")
                 return None
-            logger.info("configured tag %s not installed; serving %s "
-                        "(update is a click in Local Models)", tag, have[0])
-            tag = have[0]
-        install_dir = ensure_runtime_installed(tag, backend)
+            logger.info("no %s engine installed; serving %s "
+                        "(install is a click in Local Models)", backend, have[0])
+            backend = have[0]
+            install_dir = engine_dir(backend)
 
         mdir = models_dir()
         mdir.mkdir(parents=True, exist_ok=True)
@@ -269,8 +269,8 @@ def ensure_local_runtime(config: dict, force: bool = False) -> "object | None":
         )
         sup.start()
         _SUPERVISOR = sup
-        logger.info("managed llama-server up at %s (backend=%s tag=%s)",
-                    sup.base_url, backend, tag)
+        logger.info("managed llama-server up at %s (backend=%s)",
+                    sup.base_url, backend)
         _start_idle_sweeper(sup)
         return sup
     except Exception as exc:  # noqa: BLE001 — never break session start

@@ -93,3 +93,22 @@ test('stripFetchCache removes only fetch- dirs under tools/', () => {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('materializePayloadLinks does not flatten a framework file-symlink', () => {
+  if (process.platform === 'win32') return
+  const root = tempRoot()
+  try {
+    const versioned = path.join(root, 'tools', 'chromium-1208', 'F.framework', 'Versions', 'A')
+    fs.mkdirSync(versioned, { recursive: true })
+    const real = path.join(versioned, 'F')
+    fs.writeFileSync(real, 'machO')
+    const link = path.join(root, 'tools', 'chromium-1208', 'F.framework', 'F')
+    fs.symlinkSync(path.join('Versions', 'A', 'F'), link)
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true)
+
+    assert.equal(materializePayloadLinks(root), 0)
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

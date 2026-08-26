@@ -3,7 +3,9 @@
 // uv venv --relocatable on POSIX makes venv/bin/python* a symlink (or a
 // hardlink) onto the store interpreter. codesign signs one path, the other
 // inode changes, and the next pass reports "file modified" and retries.
-// A regular-file copy of each link lets codesign sign each path once.
+// Only venv/bin is rewritten. Do not walk the rest of the payload: a
+// file-symlink at Foo.framework/Foo is the framework binary, and
+// flattening it makes codesign report "bundle format is ambiguous".
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -40,49 +42,44 @@ export function stripFetchCache(root) {
 
 export function materializePayloadLinks(root) {
   if (!root || !fs.existsSync(root)) return 0
+  const bin = path.join(root, 'venv', 'bin')
+  if (!fs.existsSync(bin)) return 0
   let count = 0
-  const walk = dir => {
-    let entries
+  let entries
+  try {
+    entries = fs.readdirSync(bin, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const ent of entries) {
+    const p = path.join(bin, ent.name)
+    let st
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true })
+      st = fs.lstatSync(p)
     } catch {
-      return
+      continue
     }
-    for (const ent of entries) {
-      const p = path.join(dir, ent.name)
-      if (ent.isDirectory() && !ent.isSymbolicLink()) {
-        walk(p)
-        continue
-      }
-      let st
+    if (st.isSymbolicLink()) {
+      let target
       try {
-        st = fs.lstatSync(p)
+        target = fs.statSync(p)
       } catch {
         continue
       }
-      if (st.isSymbolicLink()) {
-        let target
-        try {
-          target = fs.statSync(p)
-        } catch {
-          continue
-        }
-        if (!target.isFile()) continue
-        const tmp = `${p}.__materialize__`
-        fs.copyFileSync(p, tmp)
-        fs.unlinkSync(p)
-        fs.renameSync(tmp, p)
-        count += 1
-        continue
-      }
-      if (st.isFile() && st.nlink > 1) {
-        const tmp = `${p}.__unlink__`
-        fs.copyFileSync(p, tmp)
-        fs.renameSync(tmp, p)
-        count += 1
-      }
+      if (!target.isFile()) continue
+      const tmp = `${p}.__materialize__`
+      fs.copyFileSync(p, tmp)
+      fs.unlinkSync(p)
+      fs.renameSync(tmp, p)
+      count += 1
+      continue
+    }
+    if (st.isFile() && st.nlink > 1) {
+      const tmp = `${p}.__unlink__`
+      fs.copyFileSync(p, tmp)
+      fs.renameSync(tmp, p)
+      count += 1
     }
   }
-  walk(root)
   return count
 }

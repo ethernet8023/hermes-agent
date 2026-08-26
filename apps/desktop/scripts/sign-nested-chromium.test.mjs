@@ -9,6 +9,7 @@ import {
   isMachO,
   listSignableMachO,
   parseDeveloperId,
+  resolveSigningIdentity,
   signNestedChromium
 } from './sign-nested-chromium.mjs'
 
@@ -123,4 +124,21 @@ test('signNestedChromium codesigns each regular Mach-O and skips the symlink', (
   } finally {
     fs.rmSync(payload, { recursive: true, force: true })
   }
+})
+
+test('resolveSigningIdentity reads the packager keychain', async () => {
+  const seen = []
+  const packager = {
+    codeSigningInfo: {
+      value: Promise.resolve({ keychainFile: '/tmp/builder.keychain' })
+    }
+  }
+  const listing = '  1) DEF "Developer ID Application: Nous Research Inc (763K57MW7Z)"\n'
+  const r = await resolveSigningIdentity(packager, (_cmd, args) => {
+    seen.push(args)
+    return listing
+  })
+  assert.equal(r.identity, 'Developer ID Application: Nous Research Inc (763K57MW7Z)')
+  assert.equal(r.keychain, '/tmp/builder.keychain')
+  assert.ok(seen[0].includes('/tmp/builder.keychain'))
 })

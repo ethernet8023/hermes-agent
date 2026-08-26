@@ -22,7 +22,7 @@
 import path from 'node:path'
 
 import { findPackedPayload, materializePayloadLinks, stripFetchCache } from './materialize-payload-links.mjs'
-import { signNestedChromium } from './sign-nested-chromium.mjs'
+import { resolveSigningIdentity, signNestedChromium } from './sign-nested-chromium.mjs'
 import { stampExeIdentity } from './set-exe-identity.mjs'
 
 export default async function afterPack(context) {
@@ -33,9 +33,11 @@ export default async function afterPack(context) {
       const dropped = stripFetchCache(payload)
       const n = materializePayloadLinks(payload)
       const entitlements = path.join(import.meta.dirname, '..', 'electron', 'entitlements.mac.inherit.plist')
-      const nested = signNestedChromium(payload, { entitlements })
+      const { identity, keychain } = await resolveSigningIdentity(context.packager)
+      const nested = signNestedChromium(payload, { entitlements, identity, keychain })
       console.log(
-        `[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links; signed ${nested.signed} nested chromium Mach-O`
+        `[after-pack] dropped ${dropped} fetch- cache dirs; materialized ${n} payload links; signed ${nested.signed} nested chromium Mach-O` +
+          (identity ? ` as ${identity}` : ' (no Developer ID in the builder keychain)')
       )
     }
     return

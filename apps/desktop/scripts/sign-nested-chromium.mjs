@@ -69,45 +69,58 @@ export function parseDeveloperId(identityList) {
   return quoted ? quoted[1] : null
 }
 
-export function findDeveloperId(exec = execFileSync) {
+export function findDeveloperId(exec = execFileSync, keychain = null) {
   if (process.env.CSC_NAME) return process.env.CSC_NAME
+  const args = ['find-identity', '-v', '-p', 'codesigning']
+  if (keychain) args.push(keychain)
   let out
   try {
-    out = exec('security', ['find-identity', '-v', '-p', 'codesigning'], {
-      encoding: 'utf8'
-    })
+    out = exec('security', args, { encoding: 'utf8' })
   } catch {
     return null
   }
   return parseDeveloperId(out)
 }
 
+export async function resolveSigningIdentity(packager, exec = execFileSync) {
+  if (!packager?.codeSigningInfo?.value) {
+    return { identity: findDeveloperId(exec), keychain: null }
+  }
+  let info
+  try {
+    info = await packager.codeSigningInfo.value
+  } catch {
+    return { identity: findDeveloperId(exec), keychain: null }
+  }
+  const keychain = info?.keychainFile || process.env.CSC_KEYCHAIN || null
+  return { identity: findDeveloperId(exec, keychain), keychain }
+}
+
 export function signNestedChromium(payload, opts = {}) {
-  const identity = opts.identity ?? findDeveloperId(opts.exec)
+  const identity = opts.identity
   if (!identity) return { signed: 0, identity: null }
   const entitlements = opts.entitlements
   if (!entitlements || !fs.existsSync(entitlements)) {
     throw new Error(`sign-nested-chromium: entitlements missing at ${entitlements}`)
   }
   const exec = opts.exec ?? execFileSync
+  const keychain = opts.keychain || null
   let signed = 0
   for (const root of chromiumRoots(payload)) {
     for (const file of listSignableMachO(root)) {
-      exec(
-        'codesign',
-        [
-          '--force',
-          '--sign',
-          identity,
-          '--timestamp',
-          '--options',
-          'runtime',
-          '--entitlements',
-          entitlements,
-          file
-        ],
-        { stdio: 'pipe' }
-      )
+      const args = [
+        '--force',
+        '--sign',
+        identity,
+        '--timestamp',
+        '--options',
+        'runtime',
+        '--entitlements',
+        entitlements
+      ]
+      if (keychain) args.push('--keychain', keychain)
+      args.push(file)
+      exec('codesign', args, { stdio: 'pipe' })
       signed += 1
     }
   }

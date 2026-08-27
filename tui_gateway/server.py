@@ -338,10 +338,10 @@ _LONG_HANDLERS = frozenset(
         "voice.record",
         "voice.tts",
         # wake.start calls check_wake_word_requirements() → _stt_ready() →
-        # _get_provider() → _try_lazy_install_stt() → ensure("voice")
+        # _get_provider() → _try_lazy_install_stt() → ensure("stt-whisper")
         # (same synchronous subprocess install chain as the voice RPCs above).
         # It also calls start_listening() → _build_engine() whose constructors
-        # call pm.ensure_import("wake" / …).
+        # call pm.ensure_import("wake-*" / …).
         # wake.status calls check_wake_word_requirements() too and is polled
         # by the desktop on every gateway-ready, so it can re-trigger the
         # same block on a fresh launch. Same bug class as #21123 / #50005.

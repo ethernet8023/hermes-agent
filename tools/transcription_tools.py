@@ -347,7 +347,7 @@ def _try_lazy_install_stt() -> bool:
         # Under the interactive CLI prompt_toolkit owns stdin, so a bare
         # input() deadlocks the terminal (#40490). The install is already
         # gated by security.allow_lazy_installs, so reaching here is opt-in.
-        ensure("voice")
+        ensure("stt-whisper")
         # Re-check dynamically after install
         import importlib.util as _iu
         if _iu.find_spec("faster_whisper"):

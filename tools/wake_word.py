@@ -535,7 +535,7 @@ class _OpenWakeWordEngine(_Engine):
     def __init__(self, cfg: Dict[str, Any]):
         import pm
 
-        pm.ensure_import("wake")
+        pm.ensure_import("wake-openwakeword")
 
         import openwakeword
         from openwakeword.model import Model
@@ -672,7 +672,7 @@ class _SherpaKwsEngine(_Engine):
     def __init__(self, cfg: Dict[str, Any]):
         import pm
 
-        pm.ensure_import("wake")
+        pm.ensure_import("wake-sherpa")
 
         import sherpa_onnx
         from sherpa_onnx import text2token
@@ -783,7 +783,7 @@ class _PorcupineEngine(_Engine):
     def __init__(self, cfg: Dict[str, Any]):
         import pm
 
-        pm.ensure_import("wake")
+        pm.ensure_import("wake-porcupine")
 
         import pvporcupine
 
@@ -906,11 +906,11 @@ def check_wake_word_requirements(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
     from pm.ensure import lazy_installs_allowed
 
     if provider == "porcupine":
-        feature = "wake"
+        feature = "wake-porcupine"
     elif provider in ("sherpa", "sherpa-onnx", "kws", "open"):
-        feature = "wake"
+        feature = "wake-sherpa"
     else:
-        feature = "wake"
+        feature = "wake-openwakeword"
     deps_ok = pm.available(feature)
     lazy_ok = lazy_installs_allowed()
     # The audio probe imports sounddevice + numpy — two of the very packages

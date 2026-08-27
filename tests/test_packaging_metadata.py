@@ -52,8 +52,8 @@ def test_faster_whisper_is_not_a_base_dependency():
 
     assert not any(dep.startswith("faster-whisper") for dep in deps)
 
-    voice_extra = data["project"]["optional-dependencies"]["voice"]
-    assert any(dep.startswith("faster-whisper") for dep in voice_extra)
+    stt_extra = data["project"]["optional-dependencies"]["stt-whisper"]
+    assert any(dep.startswith("faster-whisper") for dep in stt_extra)
 
 
 # Minimum non-vulnerable Starlette: CVE-2026-48710 ("BadHost") was fixed in

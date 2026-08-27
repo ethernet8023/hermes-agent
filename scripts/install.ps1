@@ -22,6 +22,150 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoUrl = if ($env:HERMES_REPO_URL) { $env:HERMES_REPO_URL } else { "https://github.com/NousResearch/hermes-agent.git" }
 
+# --- BEGIN GENERATED: bootstrap pins (scripts/gen-bootstrap-pins.py) ---
+# Derived from pm/lock.json. DO NOT EDIT BY HAND:
+# run scripts/gen-bootstrap-pins.py after a pin bump.
+$script:UvPinVersion = "0.12.3"
+$script:UvPinFiles = @{
+    "win32-x64" = @{
+        Url    = "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-pc-windows-msvc.zip"
+        Sha256 = "b23350c79e8ad0192b8124af13a0f17e8d4e4549524785e1aef389ae5a06990e"
+    }
+    "win32-arm64" = @{
+        Url    = "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-pc-windows-msvc.zip"
+        Sha256 = "4343217d668727b8a8eb5cad92389a1d2eeead93c89940d1b955ba1bb15462eb"
+    }
+}
+
+$script:GitPinVersion = "2.53.0+3"
+$script:GitPinFiles = @{
+    "win32-x64" = @{
+        Url    = "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.3/Git-2.53.0.3-64-bit.tar.bz2"
+        Sha256 = "1661f02e85a7901ad7920e2a358ee3772ed9066b00d8590bf2d9046ef10aa8b2"
+    }
+    "win32-arm64" = @{
+        Url    = "https://github.com/git-for-windows/git/releases/download/v2.53.0.windows.3/Git-2.53.0.3-arm64.tar.bz2"
+        Sha256 = "4015f05a68bd2bcf3cc6c426e8d44b65d670fbb879225bb7b7c347cfc3a2758a"
+    }
+}
+# --- END GENERATED: bootstrap pins ---
+
+# Resolve the pm store root (same resolution as pm's store_root()):
+# $env:HERMES_RUNTIME_DIR wins, else <HermesHome>\tools.
+function Get-PmStoreRoot {
+    if ($env:HERMES_RUNTIME_DIR) { return $env:HERMES_RUNTIME_DIR }
+    return (Join-Path $HermesHome "tools")
+}
+
+# The MACHINE's architecture (registry PROCESSOR_ARCHITECTURE), not the
+# interpreter's — an x64 powershell on Windows-on-ARM must stage arm64.
+function Get-WindowsArch {
+    $machineArch = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE
+    if ($machineArch -eq 'ARM64') { return 'arm64' }
+    return 'x64'
+}
+
+# Provision uv for this host from the pinned pm/lock.json artifact. Stages
+# the EXACT artifact pm itself uses into the same store slot
+# (<store>\uv-<version>-<target>\), sha256-verified, so pm adopts the same
+# bytes — no astral-latest, no irm|iex. Returns the uv.exe path.
+function Get-Uv {
+    $existing = Get-Command uv -ErrorAction SilentlyContinue
+    if ($existing) { return $existing.Source }  # dev shortcut; fetches nothing
+    $target = "win32-$(Get-WindowsArch)"
+    $pin = $script:UvPinFiles[$target]
+    if (-not $pin) {
+        Fail "no pinned uv artifact for $target; install uv manually: https://docs.astral.sh/uv/"
+    }
+    $entry = Join-Path (Get-PmStoreRoot) "uv-$($script:UvPinVersion)-$target"
+    $uvExe = Join-Path $entry "uv.exe"
+    if (Test-Path $uvExe) { return $uvExe }
+    Log "staging pinned uv $($script:UvPinVersion) ($target) into the pm store"
+    $tmpDir = Join-Path ([IO.Path]::GetTempPath()) "hermes-uv-bootstrap-$PID"
+    try {
+        New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+        $zipPath = Join-Path $tmpDir "uv.zip"
+        Invoke-WebRequest -Uri $pin.Url -OutFile $zipPath -UseBasicParsing
+        # Digest check BEFORE extraction — a mismatched archive is deleted,
+        # never unpacked.
+        $digest = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($digest -ne $pin.Sha256.ToLowerInvariant()) {
+            Fail "uv digest mismatch (expected $($pin.Sha256), got $digest)"
+        }
+        $extractDir = Join-Path $tmpDir "unpacked"
+        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+        # The zip carries uv.exe (+ uvx.exe) at the root or under one
+        # versioned wrapper dir — take whichever layout arrived.
+        $found = Get-ChildItem -Path $extractDir -Filter "uv.exe" -Recurse | Select-Object -First 1
+        if (-not $found) { Fail "uv.exe not found in the downloaded archive" }
+        New-Item -ItemType Directory -Force -Path $entry | Out-Null
+        Move-Item -Path $found.FullName -Destination $uvExe -Force
+        $uvx = Get-ChildItem -Path $extractDir -Filter "uvx.exe" -Recurse | Select-Object -First 1
+        if ($uvx) { Move-Item -Path $uvx.FullName -Destination (Join-Path $entry "uvx.exe") -Force }
+    } finally {
+        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (& $uvExe --version 2>$null)) { Fail "pinned uv staged but does not run on this host" }
+    return $uvExe
+}
+
+# Provision git for this host from the pinned pm/lock.json artifact, into
+# the same store slot (<store>\git-<version>-<target>\) pm uses. Returns the
+# git.exe path, or $null when no pinned artifact exists for this target.
+function Get-PinnedGit {
+    $existing = Get-Command git -ErrorAction SilentlyContinue
+    if ($existing) { return $existing.Source }  # dev shortcut; fetches nothing
+    $target = "win32-$(Get-WindowsArch)"
+    $pin = $script:GitPinFiles[$target]
+    if (-not $pin) { return $null }
+    $entry = Join-Path (Get-PmStoreRoot) "git-$($script:GitPinVersion)-$target"
+    $gitExe = Join-Path $entry "cmd\git.exe"
+    if (Test-Path $gitExe) { return $gitExe }
+    Log "staging pinned git $($script:GitPinVersion) ($target) into the pm store"
+    $tmpDir = Join-Path ([IO.Path]::GetTempPath()) "hermes-git-bootstrap-$PID"
+    try {
+        New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+        $tarPath = Join-Path $tmpDir "git.tar.bz2"
+        Invoke-WebRequest -Uri $pin.Url -OutFile $tarPath -UseBasicParsing
+        # Digest check BEFORE extraction — the archive IS code.
+        $digest = (Get-FileHash -Path $tarPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($digest -ne $pin.Sha256.ToLowerInvariant()) {
+            Fail "git digest mismatch (expected $($pin.Sha256), got $digest)"
+        }
+        $extractDir = Join-Path $tmpDir "unpacked"
+        New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+        # The pinned artifact is a git-for-windows tar.bz2 (the same one pm
+        # itself extracts). Windows 10+ ships bsdtar with bzip2 support.
+        & tar.exe -xf $tarPath -C $extractDir
+        if ($LASTEXITCODE) { Fail "failed to extract pinned git archive" }
+        # Layout: Git-<ver>/cmd\git.exe — flatten the single wrapper dir.
+        $inner = @(Get-ChildItem $extractDir)
+        $src = $extractDir
+        if ($inner.Count -eq 1 -and $inner[0].PSIsContainer) { $src = $inner[0].FullName }
+        if (-not (Test-Path (Join-Path $src "cmd\git.exe"))) { Fail "git.exe not found in the downloaded archive" }
+        if (Test-Path $entry) { Remove-Item -Recurse -Force $entry }
+        Move-Item $src $entry
+    } finally {
+        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return $gitExe
+}
+
+# Ensure a usable git for the rest of the ladder: pinned pm store slot
+# first, then PATH. Returns $true on success.
+function Ensure-Git {
+    $g = Get-PinnedGit
+    if (-not $g) { return $false }
+    if ($g -ne "git") {
+        # Store-staged git: expose cmd + usr\bin on this process's PATH so
+        # bare `git` works for the rest of the ladder (the same dirs pm's
+        # git package env() composes).
+        $gitEntry = Split-Path (Split-Path $g -Parent) -Parent
+        $env:Path = "$gitEntry\cmd;$gitEntry\usr\bin;$env:Path"
+    }
+    return $true
+}
+
 function Log([string]$msg) { Write-Host "[hermes] $msg" -ForegroundColor Blue }
 function Fail([string]$msg) { Write-Host "[hermes] $msg" -ForegroundColor Red; exit 1 }
 
@@ -48,7 +192,7 @@ if ($IncludeDesktop) {
 $Stages += @{ name = "complete"; title = "Finish install"; category = "runtime"; needs_user_input = $false }
 
 function Stage-Prerequisites {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    if (-not (Ensure-Git)) {
         Fail "git is required. Install Git for Windows: https://git-scm.com/download/win"
     }
     Log "prerequisites ok (git)"
@@ -69,17 +213,6 @@ function Stage-Repository {
     if ($Commit) {
         git -C $InstallDir checkout $Commit; if ($LASTEXITCODE) { Fail "could not pin commit $Commit" }
     }
-}
-
-function Get-Uv {
-    $uv = Get-Command uv -ErrorAction SilentlyContinue
-    if ($uv) { return $uv.Source }
-    Log "installing uv (astral.sh)"
-    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
-    $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
-    $uv = Get-Command uv -ErrorAction SilentlyContinue
-    if (-not $uv) { Fail "uv install failed" }
-    return $uv.Source
 }
 
 function Stage-Venv {

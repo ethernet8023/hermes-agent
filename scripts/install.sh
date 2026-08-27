@@ -42,6 +42,121 @@ done
 log() { printf "\033[1;34m[hermes]\033[0m %s\n" "$1"; }
 fail() { printf "\033[1;31m[hermes]\033[0m %s\n" "$1" >&2; exit 1; }
 
+# --- BEGIN GENERATED: bootstrap pins (scripts/gen-bootstrap-pins.py) ---
+# Derived from pm/lock.json. DO NOT EDIT BY HAND:
+# run scripts/gen-bootstrap-pins.py after a pin bump.
+UV_PIN_VERSION="0.12.3"
+
+# Sets UV_PIN_URL + UV_PIN_SHA256 for a <os>-<arch> target key.
+uv_bootstrap_pin() {
+    case "$1" in
+        linux-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101"
+            ;;
+        linux-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2"
+            ;;
+        darwin-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="4c9f52262a14da336e4a42ed24992d12d0c956acde87619e4611d321dffa602b"
+            ;;
+        darwin-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="546f7f8a6c70ff13a3a9d2bc958db3427298cebf3e0cb756f9177133b7068843"
+            ;;
+        *)
+            UV_PIN_URL=""
+            UV_PIN_SHA256=""
+            return 1
+            ;;
+    esac
+}
+# --- END GENERATED: bootstrap pins ---
+
+uv_bootstrap_target() {
+    # Map this host to a pm/lock.json target key (<os>-<arch>).
+    local _arch
+    case "$(uname -m)" in
+        arm64|aarch64) _arch="arm64" ;;
+        x86_64|amd64)  _arch="x64" ;;
+        *) return 1 ;;
+    esac
+    case "$(uname -s)" in
+        Linux)  echo "linux-$_arch" ;;
+        Darwin) echo "darwin-$_arch" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Provision uv for this host from the pinned pm/lock.json artifact. Stages
+# the EXACT artifact pm itself uses into the same store slot
+# (~/.hermes/tools/uv-<version>-<target>/), sha256-verified, so the byte
+# authority is pm/lock.json - no astral-latest, no curl|sh.
+UV_CMD=""
+ensure_uv() {
+    [ -n "$UV_CMD" ] && return 0
+    if command -v uv >/dev/null 2>&1; then
+        # Developer shortcut: an existing uv on PATH is fine to use; this
+        # branch fetches nothing.
+        UV_CMD="uv"
+        return 0
+    fi
+    local _target
+    if ! _target="$(uv_bootstrap_target)"; then
+        fail "no pinned uv build for this platform ($(uname -s) $(uname -m)); install uv manually: https://docs.astral.sh/uv/"
+    fi
+    if ! uv_bootstrap_pin "$_target"; then
+        fail "no pinned uv artifact for $_target; install uv manually: https://docs.astral.sh/uv/"
+    fi
+    local _store="${HERMES_RUNTIME_DIR:-$HOME/.hermes/tools}"
+    local _entry="$_store/uv-$UV_PIN_VERSION-$_target"
+    UV_CMD="$_entry/uv"
+    if [ ! -x "$UV_CMD" ]; then
+        log "staging pinned uv $UV_PIN_VERSION ($_target) into the pm store"
+        local _tmp
+        _tmp="$(mktemp -d 2>/dev/null || echo "/tmp/hermes-uv-bootstrap.$$")"
+        mkdir -p "$_tmp"
+        if ! curl -LsSf "$UV_PIN_URL" -o "$_tmp/uv.tar.gz"; then
+            rm -rf "$_tmp"
+            fail "failed to download pinned uv from $UV_PIN_URL"
+        fi
+        local _digest
+        if command -v sha256sum >/dev/null 2>&1; then
+            _digest="$(sha256sum "$_tmp/uv.tar.gz" | cut -d' ' -f1)"
+        else
+            _digest="$(shasum -a 256 "$_tmp/uv.tar.gz" | cut -d' ' -f1)"
+        fi
+        if [ "$_digest" != "$UV_PIN_SHA256" ]; then
+            rm -rf "$_tmp"
+            fail "uv download digest mismatch (expected $UV_PIN_SHA256, got $_digest)"
+        fi
+        if ! tar -xzf "$_tmp/uv.tar.gz" -C "$_tmp"; then
+            rm -rf "$_tmp"
+            fail "failed to extract pinned uv archive"
+        fi
+        local _unpacked
+        _unpacked="$(find "$_tmp" -mindepth 1 -maxdepth 2 -name uv -type f | head -n1)"
+        if [ -z "$_unpacked" ]; then
+            rm -rf "$_tmp"
+            fail "uv binary not found in the downloaded archive"
+        fi
+        mkdir -p "$_entry"
+        mv "$_unpacked" "$UV_CMD"
+        [ -f "$(dirname "$_unpacked")/uvx" ] && mv "$(dirname "$_unpacked")/uvx" "$_entry/uvx"
+        chmod +x "$UV_CMD"
+        chmod +x "$_entry/uvx" 2>/dev/null || true
+        rm -rf "$_tmp"
+    fi
+    # Make the staged (or found) uv available to bare `uv` invocations.
+    export PATH="$(dirname "$UV_CMD"):$PATH"
+    if ! "$UV_CMD" --version >/dev/null 2>&1; then
+        fail "pinned uv staged but does not run on this host"
+    fi
+    log "uv ready ($("$UV_CMD" --version 2>/dev/null))"
+}
+
 check_platform() {
     case "$(uname -s 2>/dev/null)" in
         Linux*) : ;;
@@ -101,18 +216,15 @@ stage_repository() {
 }
 
 stage_venv() {
-    command -v uv >/dev/null 2>&1 || {
-        log "installing uv (astral.sh)"
-        curl -LsSf https://astral.sh/uv/install.sh | sh || fail "uv install failed"
-        export PATH="$HOME/.local/bin:$PATH"
-    }
+    ensure_uv
     log "creating venv"
-    (cd "$INSTALL_DIR" && uv venv --allow-existing venv) || fail "uv venv failed"
+    (cd "$INSTALL_DIR" && "$UV_CMD" venv --allow-existing venv) || fail "uv venv failed"
 }
 
 stage_python_deps() {
+    ensure_uv
     log "syncing python dependencies (uv sync --frozen)"
-    (cd "$INSTALL_DIR" && VIRTUAL_ENV="$INSTALL_DIR/venv" uv sync --frozen --extra all --active) || fail "uv sync failed"
+    (cd "$INSTALL_DIR" && VIRTUAL_ENV="$INSTALL_DIR/venv" "$UV_CMD" sync --frozen --extra all --active) || fail "uv sync failed"
 }
 
 stage_node_deps() {

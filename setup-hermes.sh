@@ -52,62 +52,141 @@ echo ""
 
 echo -e "${CYAN}→${NC} Checking for uv..."
 
+# --- BEGIN GENERATED: bootstrap pins (scripts/gen-bootstrap-pins.py) ---
+# Derived from pm/lock.json. DO NOT EDIT BY HAND:
+# run scripts/gen-bootstrap-pins.py after a pin bump.
+UV_PIN_VERSION="0.12.3"
+
+# Sets UV_PIN_URL + UV_PIN_SHA256 for a <os>-<arch> target key.
+uv_bootstrap_pin() {
+    case "$1" in
+        linux-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101"
+            ;;
+        linux-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2"
+            ;;
+        darwin-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="4c9f52262a14da336e4a42ed24992d12d0c956acde87619e4611d321dffa602b"
+            ;;
+        darwin-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="546f7f8a6c70ff13a3a9d2bc958db3427298cebf3e0cb756f9177133b7068843"
+            ;;
+        *)
+            UV_PIN_URL=""
+            UV_PIN_SHA256=""
+            return 1
+            ;;
+    esac
+}
+# --- END GENERATED: bootstrap pins ---
+
+uv_bootstrap_target() {
+    # Map this host to a pm/lock.json target key (<os>-<arch>).
+    local _arch
+    case "$(uname -m)" in
+        arm64|aarch64) _arch="arm64" ;;
+        x86_64|amd64)  _arch="x64" ;;
+        *) return 1 ;;
+    esac
+    case "$(uname -s)" in
+        Linux)  echo "linux-$_arch" ;;
+        Darwin) echo "darwin-$_arch" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Stage the pinned uv from pm/lock.json into the pm store slot
+# (~/.hermes/tools/uv-<version>-<target>/), sha256-verified, so pm adopts
+# the same bytes. No astral-latest, no curl|sh. Sets _PINNED_UV on success.
+_PINNED_UV=""
+ensure_pinned_uv() {
+    local _target
+    if ! _target="$(uv_bootstrap_target)"; then
+        echo -e "${RED}✗${NC} No pinned uv build for this platform ($(uname -s) $(uname -m))."
+        echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
+        return 1
+    fi
+    if ! uv_bootstrap_pin "$_target"; then
+        echo -e "${RED}✗${NC} No pinned uv artifact for $_target."
+        echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
+        return 1
+    fi
+    local _store="${HERMES_RUNTIME_DIR:-$HOME/.hermes/tools}"
+    local _entry="$_store/uv-$UV_PIN_VERSION-$_target"
+    _PINNED_UV="$_entry/uv"
+    [ -x "$_PINNED_UV" ] && return 0
+
+    echo -e "${CYAN}→${NC} Staging pinned uv $UV_PIN_VERSION ($_target) into the pm store..."
+    local _tmp
+    _tmp="$(mktemp -d 2>/dev/null || echo "/tmp/hermes-uv-bootstrap.$$")"
+    mkdir -p "$_tmp"
+    if ! curl -LsSf "$UV_PIN_URL" -o "$_tmp/uv.tar.gz" 2>"$_tmp/log"; then
+        echo -e "${RED}✗${NC} Failed to download pinned uv from $UV_PIN_URL."
+        sed 's/^/    /' "$_tmp/log" >&2 2>/dev/null || true
+        echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
+        rm -rf "$_tmp"
+        return 1
+    fi
+    local _digest
+    if command -v sha256sum >/dev/null 2>&1; then
+        _digest="$(sha256sum "$_tmp/uv.tar.gz" | cut -d' ' -f1)"
+    else
+        _digest="$(shasum -a 256 "$_tmp/uv.tar.gz" | cut -d' ' -f1)"
+    fi
+    if [ "$_digest" != "$UV_PIN_SHA256" ]; then
+        echo -e "${RED}✗${NC} uv download digest mismatch (expected $UV_PIN_SHA256, got $_digest)."
+        echo -e "${CYAN}→${NC} The download may be corrupted or tampered with. Re-run setup."
+        rm -rf "$_tmp"
+        return 1
+    fi
+    if ! tar -xzf "$_tmp/uv.tar.gz" -C "$_tmp"; then
+        echo -e "${RED}✗${NC} Failed to extract pinned uv archive."
+        rm -rf "$_tmp"
+        return 1
+    fi
+    local _unpacked
+    _unpacked="$(find "$_tmp" -mindepth 1 -maxdepth 2 -name uv -type f | head -n1)"
+    if [ -z "$_unpacked" ]; then
+        echo -e "${RED}✗${NC} uv binary not found in the downloaded archive."
+        rm -rf "$_tmp"
+        return 1
+    fi
+    mkdir -p "$_entry"
+    mv "$_unpacked" "$_PINNED_UV"
+    [ -f "$(dirname "$_unpacked")/uvx" ] && mv "$(dirname "$_unpacked")/uvx" "$_entry/uvx"
+    chmod +x "$_PINNED_UV"
+    chmod +x "$_entry/uvx" 2>/dev/null || true
+    rm -rf "$_tmp"
+    return 0
+}
+
 UV_CMD=""
 if command -v uv &> /dev/null; then
-        UV_CMD="uv"
-    elif [ -x "$HOME/.local/bin/uv" ]; then
-        UV_CMD="$HOME/.local/bin/uv"
-    elif [ -x "$HOME/.cargo/bin/uv" ]; then
-        UV_CMD="$HOME/.cargo/bin/uv"
-    fi
+    UV_CMD="uv"
+elif [ -x "$HOME/.local/bin/uv" ]; then
+    UV_CMD="$HOME/.local/bin/uv"
+elif [ -x "$HOME/.cargo/bin/uv" ]; then
+    UV_CMD="$HOME/.cargo/bin/uv"
+fi
 
-    if [ -n "$UV_CMD" ]; then
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        echo -e "${GREEN}✓${NC} uv found ($UV_VERSION)"
+if [ -n "$UV_CMD" ]; then
+    UV_VERSION=$($UV_CMD --version 2>/dev/null)
+    echo -e "${GREEN}✓${NC} uv found ($UV_VERSION)"
+else
+    echo -e "${CYAN}→${NC} Installing uv (pinned from pm/lock.json)..."
+    if ensure_pinned_uv; then
+        UV_CMD="$_PINNED_UV"
+        UV_VERSION=$("$UV_CMD" --version 2>/dev/null)
+        echo -e "${GREEN}✓${NC} uv installed ($UV_VERSION)"
     else
-        echo -e "${CYAN}→${NC} Installing uv..."
-        # Capture installer output so a failure shows the user WHY
-        # (network, glibc mismatch on old distros, missing curl, disk
-        # full, etc.) instead of "✗ Failed to install uv" with zero
-        # diagnostic.  Two-stage to avoid `curl | sh` masking curl
-        # failures (sh exits 0 on empty stdin under no pipefail).
-        _uv_log="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-install.$$.log")"
-        _uv_installer="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-installer.$$.sh")"
-        if ! curl -LsSf https://astral.sh/uv/install.sh -o "$_uv_installer" 2>"$_uv_log"; then
-            echo -e "${RED}✗${NC} Failed to download uv installer."
-            sed 's/^/    /' "$_uv_log" >&2
-            echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
-            rm -f "$_uv_log" "$_uv_installer"
-            exit 1
-        fi
-        if sh "$_uv_installer" >>"$_uv_log" 2>&1; then
-            rm -f "$_uv_installer"
-            if [ -x "$HOME/.local/bin/uv" ]; then
-                UV_CMD="$HOME/.local/bin/uv"
-            elif [ -x "$HOME/.cargo/bin/uv" ]; then
-                UV_CMD="$HOME/.cargo/bin/uv"
-            fi
-
-            if [ -n "$UV_CMD" ]; then
-                rm -f "$_uv_log"
-                UV_VERSION=$($UV_CMD --version 2>/dev/null)
-                echo -e "${GREEN}✓${NC} uv installed ($UV_VERSION)"
-            else
-                echo -e "${RED}✗${NC} uv installer reported success but binary not found. Add ~/.local/bin to PATH and retry."
-                echo -e "${CYAN}→${NC} Installer output:"
-                sed 's/^/    /' "$_uv_log" >&2
-                rm -f "$_uv_log"
-                exit 1
-            fi
-        else
-            echo -e "${RED}✗${NC} Failed to install uv."
-            echo -e "${CYAN}→${NC} Installer output:"
-            sed 's/^/    /' "$_uv_log" >&2
-            echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
-            rm -f "$_uv_log" "$_uv_installer"
-            exit 1
-        fi
+        exit 1
     fi
+fi
 
 # ============================================================================
 # Python check (uv can provision it automatically)

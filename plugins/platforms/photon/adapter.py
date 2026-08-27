@@ -418,16 +418,34 @@ def _is_timeout_error(exc: BaseException) -> bool:
     return "timeout" in type(exc).__name__.lower()
 
 
+def _node_command(command: str) -> Optional[str]:
+    """Resolve a Node toolchain binary (node/npm), pm store first.
+
+    Photon's sidecar is Node/TypeScript, so the gateway runs node/npm on
+    the host. Resolution goes through ``hermes_constants.find_node_executable``
+    — the pm store's pinned node/npm wins whenever it is installed, with
+    PATH (Windows shim ordering) as the fallback — never a bare PATH
+    probe, which would miss the managed install (or resolve a system copy
+    Hermes does not own). Returns None when the binary is nowhere.
+    """
+    try:
+        from hermes_constants import find_node_executable
+
+        resolved = find_node_executable(command)
+        if resolved:
+            return resolved
+    except Exception:  # pragma: no cover — hermes_constants is always present
+        pass
+    return shutil.which(command)
+
+
 def check_requirements() -> bool:
     """Return True when both Python deps and the Node sidecar are available."""
     if not HTTPX_AVAILABLE:
         logger.warning("photon: httpx not installed — pip install httpx")
         return False
-    if not shutil.which(os.getenv("PHOTON_NODE_BIN") or "node"):
-        logger.warning(
-            "photon: node binary '%s' not found on PATH",
-            os.getenv("PHOTON_NODE_BIN") or "node",
-        )
+    if not _node_command("node"):
+        logger.warning("photon: node binary not found on PATH or in the pm store")
         return False
     if not sidecar_deps_installed():
         # spectrum-ts not installed yet, or node_modules/ was partially created
@@ -444,7 +462,7 @@ def check_requirements() -> bool:
         # user has no CLI to run `hermes photon setup`, so the connect path
         # must self-heal). Otherwise keep returning False so
         # `hermes setup` / status surface the missing-deps state.
-        if bool(shutil.which("npm")) and _dir_writable(_sidecar_dir()):
+        if bool(_node_command("npm")) and _dir_writable(_sidecar_dir()):
             return True
         # DEBUG (not WARNING): this is the normal pre-setup state.
         # check_fn() is called from multiple hot paths in the core
@@ -499,9 +517,9 @@ def _reinstall_sidecar_deps() -> None:
     Best-effort — a failure here just leaves the (stale) deps in place and the
     normal ``_start_sidecar`` readiness check reports the real error.
     """
-    npm = shutil.which("npm")
+    npm = _node_command("npm")
     if not npm:
-        logger.warning("[photon] cannot reinstall stale sidecar deps: npm not on PATH")
+        logger.warning("[photon] cannot reinstall stale sidecar deps: npm not available (pm store or PATH)")
         return
     # Windows: suppress the console flash these short-lived npm runs would
     # otherwise pop (0 elsewhere). Same helper as the sidecar spawn below.
@@ -753,7 +771,7 @@ class PhotonAdapter(BasePlatformAdapter):
         self._autostart_sidecar = str(
             os.getenv("PHOTON_SIDECAR_AUTOSTART", "true")
         ).lower() not in ("0", "false", "no")
-        self._node_bin = os.getenv("PHOTON_NODE_BIN") or shutil.which("node") or "node"
+        self._node_bin = _node_command("node") or "node"
 
         # Presence watchdog. spectrum-ts only reconnects when its inbound
         # iterator throws or ends; a half-open ("zombie") gRPC socket makes the
@@ -1690,11 +1708,11 @@ class PhotonAdapter(BasePlatformAdapter):
                 creationflags=windows_hide_flags(),
             )
         except FileNotFoundError as exc:
-            # Deterministic: node isn't on PATH / PHOTON_NODE_BIN points at
-            # nothing. Retrying can never fix a missing binary (OOF-153).
+            # Deterministic: node isn't resolvable (pm store or PATH).
+            # Retrying can never fix a missing binary (OOF-153).
             raise PhotonSidecarStartupError(
                 f"node binary not found ({self._node_bin!r}) — install Node.js "
-                f"or set PHOTON_NODE_BIN: {exc}",
+                f"18+ or run `hermes pm install`: {exc}",
                 code="SIDECAR_NODE_MISSING",
                 retryable=False,
             ) from exc

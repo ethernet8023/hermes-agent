@@ -48,6 +48,7 @@ reclaim object storage.  A size-cap pass drops the oldest checkpoints per
 project until total store size is under ``max_total_size_mb``.
 """
 
+import functools
 import hashlib
 import json
 import logging
@@ -290,6 +291,33 @@ def _project_meta_path(store: Path, dir_hash: str) -> Path:
 # Git env
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=1)
+def _managed_git() -> Optional[Tuple[List[str], List[str]]]:
+    """(git invocation, extra PATH dirs) from pm's pinned Git for Windows.
+
+    pm's git package is the canonical Windows git (Git for Windows,
+    pinned in pm/lock.json); its PATH dirs make the MSYS helpers
+    (sh.exe, git-remote-*) resolvable to the child. Returns None when pm
+    cannot provide git — the deliberate POSIX gap (system git by choice),
+    not installed, or lazy installs disabled — and the caller falls back
+    to bare ``git`` on PATH. Cached: checkpoints fire several git calls
+    per turn, so the store lookup should not repeat.
+    """
+    try:
+        import pm
+
+        runner = pm.ensure("git")
+        for candidate in ("git.exe", "git"):
+            resolved = shutil.which(candidate, path=runner.env.get("PATH"))
+            if resolved:
+                git_dir = str(Path(resolved).resolve().parent)
+                usr_bin = str(Path(resolved).resolve().parent.parent / "usr" / "bin")
+                return [resolved], [git_dir, usr_bin]
+    except Exception:
+        pass
+    return None
+
+
 def _git_env(
     store: Path,
     working_dir: str,
@@ -377,7 +405,15 @@ def _run_git(
         return False, "", msg
 
     env = _git_env(store, str(normalized_working_dir), index_file=index_file)
-    cmd = ["git"] + list(args)
+    managed = _managed_git()
+    if managed:
+        cmd, path_dirs = managed
+        # The store's MSYS dirs must be reachable so git.exe can resolve
+        # its helpers; prepend them to the isolated child env.
+        env["PATH"] = os.pathsep.join(path_dirs) + os.pathsep + env.get("PATH", "")
+    else:
+        cmd = ["git"]
+    cmd = cmd + list(args)
     allowed_returncodes = allowed_returncodes or set()
 
     try:
@@ -509,8 +545,14 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
               "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         init_env.pop(k, None)
     try:
+        managed = _managed_git()
+        git_cmd, path_dirs = managed if managed else (["git"], None)
+        if path_dirs:
+            init_env["PATH"] = (
+                os.pathsep.join(path_dirs) + os.pathsep + init_env.get("PATH", "")
+            )
         result = subprocess.run(
-            ["git", "init", "--bare", str(store)],
+            git_cmd + ["init", "--bare", str(store)],
             capture_output=True, text=True, encoding='utf-8', errors='replace',
             env=init_env, timeout=_GIT_TIMEOUT,
             stdin=subprocess.DEVNULL,

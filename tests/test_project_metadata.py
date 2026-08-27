@@ -62,9 +62,13 @@ def test_lazy_installable_extras_excluded_from_all():
         "exa", "firecrawl", "parallel-web",
         "fal",
         "edge-tts", "tts-premium",
-        "voice",  # faster-whisper / sounddevice / numpy
+        "voice",  # faster-whisper / sounddevice / numpy (composes stt-whisper + audio-io)
+        "stt-whisper",
         "modal", "daytona", "vercel",
         "messaging", "slack", "matrix", "dingtalk", "feishu",
+        "telegram", "discord",
+        "wake", "wake-openwakeword", "wake-sherpa", "wake-porcupine", "wake-tflite",
+        "google-chat",
         "honcho", "hindsight",
         "supermemory", "mem0",
         "mistral",  # mistralai — Voxtral STT/TTS, lazy-installed (stt.mistral / tts.mistral)

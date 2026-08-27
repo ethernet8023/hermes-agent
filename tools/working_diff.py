@@ -19,10 +19,11 @@ brand-new files show up as additions instead of being silently invisible
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 _GIT_TIMEOUT = 15
 _MAX_UNTRACKED_FILES = 50  # sanity cap so a node_modules explosion can't hang us
@@ -30,10 +31,37 @@ _MAX_UNTRACKED_FILES = 50  # sanity cap so a node_modules explosion can't hang u
 VALID_MODES = ("working", "staged", "all")
 
 
+@functools.lru_cache(maxsize=1)
+def _git_command() -> Optional[List[str]]:
+    """Resolve the git invocation: pm's pinned Git first, then system git.
+
+    pm's git package is the canonical Windows git (Git for Windows,
+    pinned in pm/lock.json) — it wins over PATH so a stale or broken
+    system git never breaks diff collection. On POSIX pm deliberately
+    gaps git (system git by choice), and when pm can't provide it for any
+    other reason we fall back to bare ``git`` on PATH. None when git is
+    nowhere — the caller reports it unavailable.
+    """
+    try:
+        import pm
+
+        runner = pm.ensure("git")
+        for candidate in ("git.exe", "git"):
+            resolved = shutil.which(candidate, path=runner.env.get("PATH"))
+            if resolved:
+                return [resolved]
+    except Exception:
+        pass
+    return ["git"] if shutil.which("git") else None
+
+
 def _run(args: List[str], cwd: str, timeout: int = _GIT_TIMEOUT):
     """Run git, returning (returncode, stdout). Never raises on git failure."""
+    command = _git_command()
+    if command is None:
+        return 127, ""
     proc = subprocess.run(
-        ["git", "-c", "core.quotePath=false", *args],
+        [*command, "-c", "core.quotePath=false", *args],
         cwd=cwd, capture_output=True, text=True, timeout=timeout,
         encoding="utf-8", errors="replace",
     )
@@ -81,7 +109,7 @@ def collect_working_diff(cwd: str, mode: str = "working",
         return {"success": False,
                 "error": f"Unknown mode '{mode}'. Use: {', '.join(VALID_MODES)}"}
 
-    if not shutil.which("git"):
+    if _git_command() is None:
         return {"success": False, "error": "git is not installed or not on PATH."}
 
     try:

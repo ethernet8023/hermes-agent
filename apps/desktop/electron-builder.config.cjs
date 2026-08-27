@@ -152,6 +152,12 @@ module.exports = {
     displayName,
     publisher: 'CN=Nous Research Inc., O=Nous Research Inc., L=Austin, S=Texas, C=US',
     publisherDisplayName: 'Nous Research',
+    // Floor Windows 11 22H2. Below build 18307 the manifest schema caps
+    // AppExtension Name at 39 chars and Microsoft's own
+    // "com.microsoft.windows.copilotkeyprovider" is 40 (makeappx
+    // 0x80080204 — A/B-verified against the 26100 kit; 18307 exactly
+    // still failed on it, 22621 passes), and 22621 is the documented
+    // Copilot hardware key floor anyway.
     minVersion: '10.0.22621.0',
     maxVersionTested: '10.0.26100.0',
     customExtensionsPath: writeMsixExtensions(),
@@ -204,9 +210,36 @@ function writeMsixExtensions() {
     <uap5:ExecutionAlias Alias="hermes-acp.exe" />
   </uap5:AppExecutionAlias>
 </uap5:Extension>`
+  // The uap3:AppExtension fragment that registers the app as a Windows
+  // Copilot hardware key provider. The press activates hermes://copilot-key/start.
+  //
+  // Content rules (violations are an opaque makeappx 0x80080204):
+  //   * xmlns:uap3 rides on the fragment root — the stock manifest template
+  //     declares no uap3 prefix. A/B-verified fine.
+  //   * children of uap3:Properties are UNPREFIXED (xs:any content, per
+  //     Microsoft's copilot-key-state sample).
+  const copilot = light
+    ? ''
+    : `<uap3:Extension
+    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    Category="windows.appExtension">
+  <uap3:AppExtension
+      Name="com.microsoft.windows.copilotkeyprovider"
+      Id="${appNamePascal}CopilotKeyProvider"
+      DisplayName="${displayName}"
+      Description="Launch ${displayName} with the Copilot key"
+      PublicFolder="Public">
+    <uap3:Properties>
+      <SingleTap>hermes://copilot-key/start?state=Tap</SingleTap>
+      <PressAndHoldStart>hermes://copilot-key/start?state=Down</PressAndHoldStart>
+      <PressAndHoldStop>hermes://copilot-key/stop?state=Up</PressAndHoldStop>
+    </uap3:Properties>
+  </uap3:AppExtension>
+</uap3:Extension>
+${aliases}`
 
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, aliases)
+  fs.writeFileSync(file, copilot)
   return output
 }
 

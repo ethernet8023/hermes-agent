@@ -16217,6 +16217,17 @@ function handleDeepLink(url) {
   })
   const payload = { kind, name, params }
 
+  // Route the Windows Copilot hardware key (registered by the MSIX
+  // copilotkeyprovider fragment). quick-entry is the eventual summon; for
+  // now it falls through to the renderer's deep-link listener. stop and
+  // unknown copilot-key paths are activation noise and must not reach the
+  // renderer (a tap fires start+stop nearly together; acting on stop would
+  // undo the summon).
+  if (kind === 'copilot-key' && name !== 'start') {
+    rememberLog(`[deeplink] ignoring copilot-key path: ${name}`)
+    return
+  }
+
   if (!_rendererReadyForDeepLink || !mainWindow || mainWindow.isDestroyed()) {
     _pendingDeepLink = payload
 

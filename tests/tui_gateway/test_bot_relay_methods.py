@@ -116,6 +116,7 @@ def test_reply_roundtrip_and_id_validation(home):
     assert "error" in err
 
 
+@pytest.mark.linux_only
 def test_deliver_write_failure_still_removes_tempfile(home, monkeypatch, tmp_path):
     """A failed payload write must not leak the relay DM tempfile."""
     import glob

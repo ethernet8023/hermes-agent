@@ -858,6 +858,7 @@ class TestSkillViewCollisionDetection:
             ),
         )
 
+    @pytest.mark.linux_only
     def test_nested_local_collides_with_top_level_external(self, tmp_path):
         """The original bug scenario: nested local + top-level external,
         same name. Now refuses with both paths surfaced."""
@@ -889,6 +890,7 @@ class TestSkillViewCollisionDetection:
         assert "hint" in result
 
 
+    @pytest.mark.linux_only
     def test_support_markdown_does_not_collide_with_real_skill(self, tmp_path):
         """Supporting reference docs named <skill>.md are not skills.
 

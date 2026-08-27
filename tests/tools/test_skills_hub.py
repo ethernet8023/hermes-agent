@@ -412,6 +412,7 @@ class TestUrlSource:
 
 
 class TestCheckForSkillUpdates:
+    @pytest.mark.linux_only
     def test_bundle_content_hash_matches_installed_content_hash(self, tmp_path):
         from tools.skills_guard import content_hash
 
@@ -750,6 +751,7 @@ class TestOptionalSkillSourceMetadata:
 
 
 class TestOptionalSkillSourceBinaryAssets:
+    @pytest.mark.linux_only
     def test_fetch_preserves_binary_assets(self, tmp_path):
         optional_root = tmp_path / "optional-skills"
         skill_dir = optional_root / "mlops" / "models" / "neutts"

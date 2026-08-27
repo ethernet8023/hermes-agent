@@ -540,6 +540,7 @@ class TestMediaDeliveryPathValidation:
         assert BasePlatformAdapter.validate_media_delivery_path(str(scratch)) is None
 
 
+    @pytest.mark.linux_only
     def test_recency_trust_denies_system_paths_even_when_fresh(self, tmp_path, monkeypatch):
         """A freshly-touched file under /etc must NOT be uploaded.
 
@@ -694,6 +695,7 @@ class TestMediaDeliveryDefaultMode:
         assert BasePlatformAdapter.validate_media_delivery_path(str(stale)) is None
 
 
+    @pytest.mark.linux_only
     def test_root_home_deliverable_is_accepted(self, tmp_path, monkeypatch):
         """The motivating bug (#38106): a root-run gateway has ``$HOME=/root``,
         which is on the system-prefix denylist. A plain deliverable the agent
@@ -757,6 +759,7 @@ class TestMediaDeliveryDefaultMode:
         )
 
 
+    @pytest.mark.require_symlinks
     def test_root_home_workdir_symlink_to_credential_blocked(self, tmp_path, monkeypatch):
         """A symlink in the workdir pointing at a credential is rejected on its
         resolved target, even under the $HOME exception.

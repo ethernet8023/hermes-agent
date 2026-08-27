@@ -217,6 +217,12 @@ def suspend_self(
         "\r\n"
     )
     try:
+        # AF_UNIX does not exist on Windows — the flaps socket is a Fly.io
+        # POSIX-only construct.  An AttributeError here (no AF_UNIX) is
+        # treated the same as a missing socket: no suspend, fail-awake.
+        if not hasattr(socket, "AF_UNIX"):
+            logger.warning("scale-to-zero: unix sockets unavailable on this platform")
+            return False
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)
             sock.connect(socket_path)

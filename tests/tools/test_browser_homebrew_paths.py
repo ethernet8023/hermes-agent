@@ -406,6 +406,7 @@ class TestRunBrowserCommandPathConstruction:
         ]
         assert captured_cmd[5:9] == ["--session", "test-session", "--json", "navigate"]
 
+    @pytest.mark.linux_only
     def test_subprocess_path_includes_termux_fallback_dirs(self, tmp_path):
         """Termux fallback dirs should survive browser PATH rebuilding."""
         captured_env = {}

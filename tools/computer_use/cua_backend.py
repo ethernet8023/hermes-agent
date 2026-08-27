@@ -589,7 +589,10 @@ def _wsl_windows_path_to_posix(path: str) -> str:
     drive = (win.drive or "").rstrip(":").lower()
     if not drive:
         return path
-    return os.path.join("/mnt", drive, *(str(part) for part in win.parts[1:]))
+    # Use forward slashes explicitly: this path is consumed by the POSIX
+    # subprocess layer inside WSL, so os.path.join (which uses the host
+    # separator, "\\" on native Windows) would produce /mnt\c\Users\...
+    return "/mnt/" + drive + "/" + "/".join(str(part) for part in win.parts[1:])
 
 
 def _resolve_cua_driver_app_path(driver_cmd: str) -> Optional[str]:

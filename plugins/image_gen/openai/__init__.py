@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent.secret_scope import get_secret
@@ -367,7 +368,7 @@ class OpenAIImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
-            image_ref = str(saved_path)
+            image_ref = Path(saved_path).as_posix()
         elif url:
             # Defensive — gpt-image-2 returns b64 today, but OpenAI's API
             # has previously returned URLs.  Cache the bytes locally so the
@@ -383,7 +384,7 @@ class OpenAIImageGenProvider(ImageGenProvider):
                 )
                 image_ref = url
             else:
-                image_ref = str(saved_path)
+                image_ref = Path(saved_path).as_posix()
         else:
             return error_response(
                 error="OpenAI response contained neither b64_json nor URL",

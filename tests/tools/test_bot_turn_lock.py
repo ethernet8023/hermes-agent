@@ -9,7 +9,6 @@ process, so threads exercise the true kernel-lock semantics.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -18,8 +17,15 @@ import time
 
 import pytest
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 from tools import bot_mode_dm, bot_relay
 from tools.bot_relay import TurnBusyError, acquire_turn_lock, turn_lock_path
+
+pytestmark = pytest.mark.linux_only
 
 
 @pytest.fixture

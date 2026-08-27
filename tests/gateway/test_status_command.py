@@ -429,6 +429,7 @@ async def test_status_command_bypasses_active_session_guard():
 
 
 @pytest.mark.asyncio
+@pytest.mark.linux_only
 async def test_profile_command_reports_source_stamped_profile(monkeypatch, tmp_path):
     """On a multiplexed gateway, /profile reports the profile SERVING the
     source (source.profile — URL prefix / per-credential adapter / room map),

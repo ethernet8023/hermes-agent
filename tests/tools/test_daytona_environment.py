@@ -303,6 +303,7 @@ class TestEnsureSandboxReady:
 # ---------------------------------------------------------------------------
 
 class TestSyncSafety:
+    @pytest.mark.linux_only
     def test_single_upload_quotes_parent_path(self, make_env, tmp_path):
         """A remote path with shell metacharacters must be quoted, not injected."""
         env = make_env()

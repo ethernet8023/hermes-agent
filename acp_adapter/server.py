@@ -9,6 +9,7 @@ import contextvars
 import json
 import logging
 import os
+import sys
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -322,11 +323,23 @@ def _path_from_file_uri(uri: str) -> Path | None:
         path_text = unquote(raw)
 
     # file:///C:/Users/... or C:\Users\...
+    # On native Windows, resolve the URI to a local Windows path directly.
+    # On POSIX (WSL), translate Windows drive letters to /mnt/<drive>/...
+    # so the Linux-side Hermes can read files from the Windows mount.
+    _is_windows = sys.platform == "win32"
     if len(path_text) >= 3 and path_text[0] == "/" and path_text[2] == ":" and path_text[1].isalpha():
+        if _is_windows:
+            # file:///C:/Users/... → C:\Users\...
+            drive = path_text[1].upper()
+            rest = path_text[3:].lstrip("/\\")
+            return Path(f"{drive}:/") / rest if rest else Path(f"{drive}:/")
         drive = path_text[1].lower()
         rest = path_text[3:].lstrip("/\\").replace("\\", "/")
         return Path("/mnt") / drive / rest
     if len(path_text) >= 2 and path_text[1] == ":" and path_text[0].isalpha():
+        if _is_windows:
+            # C:\Users\... (already a Windows path) → use as-is
+            return Path(path_text)
         drive = path_text[0].lower()
         rest = path_text[2:].lstrip("/\\").replace("\\", "/")
         return Path("/mnt") / drive / rest
@@ -340,9 +353,12 @@ def _decode_text_bytes(data: bytes, mime_type: str | None) -> str | None:
         return None
     for encoding in ("utf-8-sig", "utf-8", "latin-1"):
         try:
-            return data.decode(encoding)
+            text = data.decode(encoding)
         except UnicodeDecodeError:
             continue
+        # Normalize CRLF/CR to LF so text resource bodies are
+        # platform-independent (Windows write_text uses CRLF).
+        return text.replace("\r\n", "\n").replace("\r", "\n")
     return data.decode("utf-8", errors="replace")
 
 

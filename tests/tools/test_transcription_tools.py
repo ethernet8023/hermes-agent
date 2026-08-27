@@ -1196,6 +1196,7 @@ class TestRunCommandSttIdleTimeout:
             return subprocess.list2cmdline(list(args))
         return " ".join(shlex.quote(str(arg)) for arg in args)
 
+    @pytest.mark.linux_only
     def test_stderr_progress_extends_beyond_timeout(self, tmp_path):
         """A slow-but-alive command that keeps emitting output survives an
         idle timeout shorter than its total runtime."""

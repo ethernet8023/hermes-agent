@@ -1,3 +1,4 @@
+import pytest
 import json
 import os
 from pathlib import Path
@@ -91,6 +92,7 @@ def test_terminal_output_transform_still_runs_strip_and_redact(monkeypatch, tmp_
     assert "abc123def456" not in result["output"]  # secret body is gone
 
 
+@pytest.mark.linux_only
 def test_large_process_output_is_bounded_before_sudo_and_plugin_hooks(
     monkeypatch, tmp_path
 ):

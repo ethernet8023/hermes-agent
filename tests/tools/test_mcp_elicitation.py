@@ -86,6 +86,7 @@ class TestElicitationHandlerFormMode:
         assert handler.metrics["declined"] == 0
 
 
+    @pytest.mark.linux_only
     def test_schema_read_from_real_sdk_params_reaches_the_summary(self):
         """The requested schema must be read off the *real* SDK model.
 

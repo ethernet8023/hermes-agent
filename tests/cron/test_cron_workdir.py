@@ -45,7 +45,10 @@ class TestNormalizeWorkdir:
         result = _normalize_workdir(str(tmp_path))
         assert result == str(tmp_path.resolve())
 
+    @pytest.mark.linux_only
     def test_tilde_expands(self, tmp_path, monkeypatch):
+        # On Windows, Path("~").expanduser() uses USERPROFILE, not HOME,
+        # so monkeypatching HOME does not redirect the tilde expansion.
         from cron.jobs import _normalize_workdir
         monkeypatch.setenv("HOME", str(tmp_path))
         result = _normalize_workdir("~")

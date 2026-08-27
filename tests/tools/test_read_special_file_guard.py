@@ -14,6 +14,7 @@ import pytest
 from tools.file_tools import _special_file_kind, read_file_tool
 
 
+@pytest.mark.linux_only
 class TestSpecialFileKind:
     def test_regular_file(self, tmp_path):
         p = tmp_path / "a.txt"
@@ -53,6 +54,7 @@ class TestSpecialFileKind:
         assert "character device" in (_special_file_kind("/dev/null") or "")
 
 
+@pytest.mark.linux_only
 class TestReadFileToolFifoGuard:
     def test_fifo_read_returns_note_instantly(self, tmp_path, monkeypatch):
         import time

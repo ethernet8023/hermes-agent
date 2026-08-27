@@ -58,6 +58,19 @@ _BUILTINS_LOADED = False
 _REGISTRY_LOCK = threading.RLock()
 
 
+def _normalize_scope(scope: str) -> str:
+    """Normalize a scope string so the same profile is always the same key.
+
+    ``register_source`` receives the raw string the caller passed (often
+    ``str(path.resolve())``) while ``get_source`` / ``list_sources`` look up
+    via ``hermes_home_key()``, which applies ``os.path.normcase``.  On Windows
+    that lowercases the path, so a scope registered with an uppercase drive
+    letter would never be found by the lookup path.  Run the same
+    ``normcase`` normalization on both sides so the keys agree on every OS.
+    """
+    return os.path.normcase(str(scope))
+
+
 @dataclass
 class AppliedVar:
     """Provenance record for one env var the orchestrator set."""
@@ -141,7 +154,7 @@ def register_source(
     with _REGISTRY_LOCK:
         effective = dict(_SOURCES)
         if scope is not None:
-            effective.update(_SCOPED_SOURCES.get(scope, {}))
+            effective.update(_SCOPED_SOURCES.get(_normalize_scope(scope), {}))
         if name in effective and not replace:
             logger.warning(
                 "Secret source '%s' already registered; ignoring duplicate", name
@@ -159,7 +172,7 @@ def register_source(
                         other_name,
                     )
                     return False
-        target = _SOURCES if scope is None else _SCOPED_SOURCES.setdefault(scope, {})
+        target = _SOURCES if scope is None else _SCOPED_SOURCES.setdefault(_normalize_scope(scope), {})
         target[name] = source
         if scope is None:
             _SOURCE_ORIGINS[name] = "builtin" if builtin else "plugin"
@@ -169,7 +182,8 @@ def register_source(
 def get_source(name: str, *, scope: Optional[str] = None) -> Optional[SecretSource]:
     _ensure_builtin_sources()
     with _REGISTRY_LOCK:
-        return _SCOPED_SOURCES.get(scope or hermes_home_key(), {}).get(
+        key = _normalize_scope(scope) if scope is not None else hermes_home_key()
+        return _SCOPED_SOURCES.get(key, {}).get(
             name
         ) or _SOURCES.get(name)
 
@@ -180,7 +194,7 @@ def snapshot_registration(
     """Return the registration owned by exactly one registry layer."""
     _ensure_builtin_sources()
     with _REGISTRY_LOCK:
-        target = _SOURCES if scope is None else _SCOPED_SOURCES.get(scope, {})
+        target = _SOURCES if scope is None else _SCOPED_SOURCES.get(_normalize_scope(scope), {})
         return target.get(name)
 
 
@@ -193,16 +207,17 @@ def restore_registration(
 ) -> bool:
     """Restore a host-owned source registration if it is still current."""
     _ensure_builtin_sources()
+    key = _normalize_scope(scope) if scope is not None else None
     with _REGISTRY_LOCK:
-        target = _SOURCES if scope is None else _SCOPED_SOURCES.setdefault(scope, {})
+        target = _SOURCES if key is None else _SCOPED_SOURCES.setdefault(key, {})
         if target.get(name) is not current:
             return False
         if previous is None:
             target.pop(name, None)
         else:
             target[name] = previous
-        if scope is not None and not target:
-            _SCOPED_SOURCES.pop(scope, None)
+        if key is not None and not target:
+            _SCOPED_SOURCES.pop(key, None)
     return True
 
 
@@ -210,7 +225,8 @@ def list_sources(*, scope: Optional[str] = None) -> List[SecretSource]:
     _ensure_builtin_sources()
     with _REGISTRY_LOCK:
         merged = dict(_SOURCES)
-        merged.update(_SCOPED_SOURCES.get(scope or hermes_home_key(), {}))
+        key = _normalize_scope(scope) if scope is not None else hermes_home_key()
+        merged.update(_SCOPED_SOURCES.get(key, {}))
         return list(merged.values())
 
 

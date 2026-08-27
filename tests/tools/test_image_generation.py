@@ -398,6 +398,7 @@ class TestExtractHttpStatus:
 class TestManagedGatewayErrorTranslation:
     """4xx from the Nous managed gateway should be translated to a user-actionable message."""
 
+    @pytest.mark.linux_only
     def test_4xx_translates_to_value_error_with_remediation(self, image_tool, monkeypatch):
         """403 from managed gateway → ValueError mentioning FAL_KEY + hermes tools."""
         from unittest.mock import MagicMock
@@ -427,6 +428,7 @@ class TestManagedGatewayErrorTranslation:
         assert exc_info.value.__cause__ is bad_request
 
 
+    @pytest.mark.linux_only
     def test_non_http_exception_from_managed_bubbles_up(self, image_tool, monkeypatch):
         """Connection errors, timeouts, etc. from managed mode aren't 4xx —
         they should bubble up unchanged so callers can retry or diagnose."""

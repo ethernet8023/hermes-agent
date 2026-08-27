@@ -30,6 +30,7 @@ def _write(tmp_path, name: str, text: str, encoding: str) -> str:
 
 
 class TestUtf16Read:
+    @pytest.mark.linux_only
     def test_utf16le_bom(self, fops, tmp_path):
         path = _write(tmp_path, "notepad.txt", "hello\nworld\n", "utf-16-le")
         # prepend BOM manually via utf-16 (writes native-endian BOM); use explicit
@@ -41,6 +42,7 @@ class TestUtf16Read:
         assert "\ufeff" not in result.content
         assert "Transcoded from UTF-16-LE" in (result.hint or "")
 
+    @pytest.mark.linux_only
     def test_utf16be_bom(self, fops, tmp_path):
         raw = "\ufeffbig endian text\nsecond line\n".encode("utf-16-be")
         (tmp_path / "bom-be.txt").write_bytes(raw)
@@ -49,12 +51,14 @@ class TestUtf16Read:
         assert "big endian text" in result.content
         assert "UTF-16-BE" in (result.hint or "")
 
+    @pytest.mark.linux_only
     def test_utf16le_bomless(self, fops, tmp_path):
         path = _write(tmp_path, "bomless.txt", "plain ascii saved as utf16\n", "utf-16-le")
         result = fops.read_file(path)
         assert result.error is None
         assert "plain ascii saved as utf16" in result.content
 
+    @pytest.mark.linux_only
     def test_utf16le_mixed_cjk(self, fops, tmp_path):
         # Mixed Latin/CJK: CJK UTF-16 units carry no zero byte — the parity
         # heuristic must still detect from the Latin characters present.
@@ -63,6 +67,7 @@ class TestUtf16Read:
         assert result.error is None
         assert "你好世界" in result.content
 
+    @pytest.mark.linux_only
     def test_crlf_normalized(self, fops, tmp_path):
         path = _write(tmp_path, "crlf.txt", "\ufeffa\r\nb\r\nc", "utf-16-le")
         result = fops.read_file(path)
@@ -70,6 +75,7 @@ class TestUtf16Read:
         assert result.total_lines == 3
         assert "1|a" in result.content and "2|b" in result.content
 
+    @pytest.mark.linux_only
     def test_pagination(self, fops, tmp_path):
         text = "\ufeff" + "\n".join(f"line{i}" for i in range(1, 21)) + "\n"
         path = str(tmp_path / "paged.txt")

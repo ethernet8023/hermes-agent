@@ -226,7 +226,9 @@ def slug_for(path: Path) -> str:
     rel = path.relative_to(DOCS).with_suffix("")
     if rel.name == "index":
         rel = rel.parent
-    return "" if str(rel) == "." else str(rel)
+    # Use as_posix() so slugs use forward slashes on every OS —
+    # the same separator that appears in URLs and SECTIONS entries.
+    return "" if str(rel) == "." else rel.as_posix()
 
 
 def doc_path(slug: str) -> Path | None:

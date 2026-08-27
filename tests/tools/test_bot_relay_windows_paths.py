@@ -24,6 +24,7 @@ Two failures on a Windows desktop install talking to a remote gateway:
 
 import ast
 import shlex
+import pytest
 from pathlib import Path
 
 import tools.bot_mode_dm as bot_mode_dm
@@ -50,6 +51,7 @@ def test_waiter_windows_path_compiles_after_backslash_folding():
     compile(folded, "<waiter>", "exec")
 
 
+@pytest.mark.linux_only
 def test_waiter_posix_path_and_label_values_roundtrip():
     """On POSIX (backslash-free paths) the raw prefix changes nothing."""
     root = Path("/tmp/hermes-home")
@@ -88,6 +90,7 @@ def test_waiter_raw_prefix_keeps_injection_defense():
     assert "x'); __import__('sys').exit(2); print('x" in code
 
 
+@pytest.mark.linux_only
 def test_local_delivery_resolves_sibling_hermes(tmp_path, monkeypatch):
     bin_dir = tmp_path / "venv" / "bin"
     bin_dir.mkdir(parents=True)

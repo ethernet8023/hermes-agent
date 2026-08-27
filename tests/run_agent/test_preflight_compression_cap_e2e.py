@@ -90,11 +90,11 @@ def _make_agent(monkeypatch, tmp_path: Path, *, max_attempts) -> AIAgent:
     agent._disable_streaming = True
     agent.tool_delay = 0
     agent.save_trajectories = False
-    return agent
+    return agent, db
 
 
 def test_preflight_runs_fourth_compaction_pass_at_cap_six(monkeypatch, tmp_path):
-    agent = _make_agent(monkeypatch, tmp_path, max_attempts=6)
+    agent, db = _make_agent(monkeypatch, tmp_path, max_attempts=6)
     # Config-driven attach seam (agent_init) resolved the raised cap.
     assert agent.max_compression_attempts == 6
 
@@ -145,5 +145,7 @@ def test_preflight_runs_fourth_compaction_pass_at_cap_six(monkeypatch, tmp_path)
         f"got {len(compress_calls)} passes"
     )
     assert len(compress_calls) == 6
+
+    db.close()
 
 

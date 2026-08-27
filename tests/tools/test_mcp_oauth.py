@@ -486,6 +486,7 @@ class TestCallbackPortReservation:
         assert cfg["_resolved_port"] == 49399
         assert 49399 not in mod._reserved_sockets
 
+    @pytest.mark.linux_only
     def test_wait_for_callback_adopts_reserved_socket(self, monkeypatch):
         """E2E: reserve → _wait_for_callback binds the SAME socket and the
         callback round-trips through it."""
@@ -519,6 +520,7 @@ class TestCallbackPortReservation:
         # Reservation was consumed by adoption.
         assert port not in mod._reserved_sockets
 
+    @pytest.mark.linux_only
     def test_concurrent_flows_keep_their_own_callback_ports(self, monkeypatch):
         """#34260: flow A's waiter listens on A's port even after flow B
         overwrites the legacy module-level global.

@@ -566,7 +566,7 @@ def test_update_up_to_date_path_does_not_repark_merged_branch(
 
     monkeypatch.setattr(
         pm,
-        "uv",
+        "ensure",
         lambda *a, **k: (_ for _ in ()).throw(_StopFlow()),
     )
     args = SimpleNamespace(branch=None, yes=False, force=False, force_venv=False)

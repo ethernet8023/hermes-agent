@@ -138,6 +138,7 @@ class TestReadSkillName:
 
 
 class TestComputeRelativeDest:
+    @pytest.mark.linux_only
     def test_preserves_category_structure(self):
         bundled = Path("/repo/skills")
         dest = _compute_relative_dest(Path("/repo/skills/mlops/axolotl"), bundled)

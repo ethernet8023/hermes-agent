@@ -22,6 +22,7 @@ def isolated_home(tmp_path, monkeypatch):
 
 
 class TestCwdEcho:
+    @pytest.mark.linux_only
     def test_cd_reports_new_cwd(self, isolated_home, tmp_path):
         target = tmp_path / "projdir"
         target.mkdir()
@@ -35,6 +36,7 @@ class TestCwdEcho:
         assert r["exit_code"] == 0
         assert "cwd" not in r
 
+    @pytest.mark.linux_only
     def test_cwd_persists_and_stops_reporting_when_stable(self, isolated_home, tmp_path):
         target = tmp_path / "stable"
         target.mkdir()
@@ -45,6 +47,7 @@ class TestCwdEcho:
         assert "cwd" not in r2
         assert os.path.realpath(r2["output"].strip()) == os.path.realpath(str(target))
 
+    @pytest.mark.linux_only
     def test_cd_within_chain_reports_final_dir(self, isolated_home, tmp_path):
         a = tmp_path / "a"
         b = tmp_path / "b"

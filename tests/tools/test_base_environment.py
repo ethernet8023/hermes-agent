@@ -4,6 +4,7 @@ Tests _wrap_command(), _extract_cwd_from_output(), _embed_stdin_heredoc(),
 init_session() failure handling, and the CWD marker contract.
 """
 
+import pytest
 from unittest.mock import MagicMock
 
 from tools.environments.base import BaseEnvironment, _BoundedOutputCollector
@@ -173,6 +174,7 @@ class TestAtomicSnapshotWrite:
         assert boot.index("umask 077") < boot.index("export -p")
 
 
+@pytest.mark.linux_only
 class TestAtomicSnapshotConcurrencyBehavioral:
     """Behavioral regression for #38249 — actually EXECUTES the generated
     snapshot write/read concurrently and asserts the file never tears.
@@ -254,6 +256,7 @@ class TestAtomicSnapshotConcurrencyBehavioral:
 class TestSnapshotFileModes:
     """Snapshot metadata files are private without changing user command umask."""
 
+    @pytest.mark.linux_only
     def test_snapshot_and_cwd_files_are_0600(self, tmp_path):
         import os
         from pathlib import Path

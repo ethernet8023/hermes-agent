@@ -783,11 +783,11 @@ def _save_image_api_entry(entry: Dict[str, Any], prefix: str) -> Optional[str]:
     """
     b64 = entry.get("b64_json")
     if isinstance(b64, str) and b64.strip():
-        return str(save_b64_image(b64, prefix=prefix, extension=_extension_for(entry.get("media_type"))))
+        return Path(save_b64_image(b64, prefix=prefix, extension=_extension_for(entry.get("media_type")))).as_posix()
 
     url = entry.get("url")
     if isinstance(url, str) and url.strip():
-        return str(save_url_image(url.strip(), prefix=prefix))
+        return Path(save_url_image(url.strip(), prefix=prefix)).as_posix()
 
     return None
 
@@ -1423,7 +1423,7 @@ class OpenRouterCompatImageProvider(ImageGenProvider):
                 )
 
             return success_response(
-                image=str(saved_path),
+                image=Path(saved_path).as_posix(),
                 model=model_id,
                 prompt=prompt,
                 aspect_ratio=aspect,

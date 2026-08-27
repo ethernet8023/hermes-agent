@@ -1,5 +1,6 @@
 """Regression tests for local terminal initial cwd normalization."""
 
+import pytest
 from pathlib import Path
 
 from tools.environments.local import LocalEnvironment, _resolve_local_initial_cwd
@@ -13,6 +14,7 @@ def test_relative_initial_cwd_resolves_from_parent(tmp_path, monkeypatch):
     assert _resolve_local_initial_cwd("hermes-agent") == str(project)
 
 
+@pytest.mark.linux_only
 def test_local_environment_keeps_existing_relative_child_cwd(tmp_path, monkeypatch):
     project = tmp_path / "hermes-agent"
     project.mkdir()

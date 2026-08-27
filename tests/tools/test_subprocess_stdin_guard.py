@@ -5,6 +5,7 @@ It runs as part of the test suite so CI catches regressions when new
 subprocess calls are added without stdin=subprocess.DEVNULL.
 """
 
+import pytest
 import importlib.util
 import subprocess
 import sys
@@ -22,6 +23,7 @@ def _load_guard():
     return mod
 
 
+@pytest.mark.linux_only
 def test_all_tui_subprocess_calls_have_stdin():
     """Every subprocess.run/Popen in TUI-context code must set stdin=."""
     result = subprocess.run(

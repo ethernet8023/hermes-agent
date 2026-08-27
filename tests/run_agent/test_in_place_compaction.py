@@ -64,7 +64,7 @@ class TestInPlaceCompaction:
         from hermes_state import SessionDB
         from agent.conversation_compression import compress_context
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260619_120000_aaaaaa"
             _seed(db, sid, "my-research")
@@ -129,7 +129,7 @@ class TestInPlaceCompaction:
         from hermes_state import SessionDB
         from agent.conversation_compression import compress_context
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260619_120500_cccccc"
             _seed(db, sid, "alt")
@@ -148,7 +148,7 @@ class TestInPlaceCompaction:
         from hermes_state import SessionDB
         from agent.conversation_compression import compress_context
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             _seed(db, "rot_flush", "f")
             agent = _make_agent(db, "rot_flush", in_place=False)
@@ -171,7 +171,7 @@ class TestRotationFallbackWhenFlagOff:
         from hermes_state import SessionDB
         from agent.conversation_compression import compress_context
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260619_130000_bbbbbb"
             _seed(db, sid, "my-research")
@@ -215,7 +215,7 @@ class TestInPlaceSignalForGateway:
         from hermes_state import SessionDB
         from agent.conversation_compression import compress_context
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             # in-place → flag True
             _seed(db, "s_ip", "ip")
@@ -258,7 +258,7 @@ class TestInPlaceAntiGrowthGuard:
         from hermes_state import SessionDB
         from agent.conversation_compression import compress_context
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260619_antigrow"
             _seed(db, sid, "grow")
@@ -299,7 +299,7 @@ class TestInPlaceAntiGrowthGuard:
         from agent.conversation_compression import compress_context
         from agent.model_metadata import estimate_messages_tokens_rough
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260819_salvage"
             _seed(db, sid, "salvage")
@@ -355,7 +355,7 @@ class TestInPlaceAntiGrowthGuard:
         from hermes_state import SessionDB
         from agent.conversation_compression import compress_context
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260619_shrink"
             _seed(db, sid, "shrink")
@@ -386,7 +386,7 @@ class TestCompactedTurnsStaySearchable:
     def test_compacted_turns_found_by_default_search(self):
         from hermes_state import SessionDB
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260619_search"
             db.create_session(sid, "cli", model="test/model")
@@ -423,7 +423,7 @@ class TestCompactedTurnsStaySearchable:
         search — the distinction the compacted flag preserves."""
         from hermes_state import SessionDB
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = SessionDB(db_path=Path(tmp) / "t.db")
             sid = "20260619_undo"
             db.create_session(sid, "cli", model="test/model")

@@ -353,6 +353,7 @@ class TestDevGate:
 # ---------------------------------------------------------------------------
 
 class TestObjectBuilding:
+    @pytest.mark.linux_only
     def test_build_tree_blob_and_exec(self, tmp_path):
         d = tmp_path / "skill"
         d.mkdir()

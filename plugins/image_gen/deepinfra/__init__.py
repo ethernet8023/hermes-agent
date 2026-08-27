@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.secret_scope import get_secret
@@ -300,14 +301,14 @@ class DeepInfraImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
-            image_ref = str(saved_path)
+            image_ref = Path(saved_path).as_posix()
         elif url:
             # Materialise the (often short-lived) delivery URL locally so a
             # downstream consumer (Telegram send_photo, browser fetch) doesn't
             # get a dead link — mirrors the openai/xai/krea image plugins.
             # Best-effort: fall back to the bare URL if the download fails.
             try:
-                image_ref = str(save_url_image(url, prefix=f"deepinfra_{short}"))
+                image_ref = Path(save_url_image(url, prefix=f"deepinfra_{short}")).as_posix()
             except Exception as exc:
                 logger.debug("DeepInfra: caching delivery URL failed (%s); returning URL", exc)
                 image_ref = url

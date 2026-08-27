@@ -115,6 +115,7 @@ def test_multibyte_line_over_limit_still_marked_truncated(tmp_path, ops):
     assert first == "1|" + "é" * max_len + "... [truncated]"
 
 
+@pytest.mark.linux_only
 def test_read_file_raw_not_clamped(tmp_path, ops):
     """read_file_raw is documented as no-per-line-truncation — verify."""
     max_len = get_max_line_length()

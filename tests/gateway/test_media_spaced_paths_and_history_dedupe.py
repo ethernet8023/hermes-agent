@@ -81,6 +81,7 @@ class TestHistoryMediaDedupe:
         paths = _collect_history_media_paths(history)
         assert "/tmp/chart.png" in paths
 
+    @pytest.mark.linux_only
     def test_quoted_spaced_home_path_is_collected_in_delivery_form(
         self,
         tmp_path,

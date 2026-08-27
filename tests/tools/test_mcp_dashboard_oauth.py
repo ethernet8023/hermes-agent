@@ -63,6 +63,7 @@ def test_dashboard_flow_accepts_only_one_concurrent_callback():
     assert sorted(outcomes) == ["accepted", "rejected"]
 
 
+@pytest.mark.linux_only
 def test_mcp_oauth_helpers_use_dashboard_flow_without_loopback_port():
     from tools.mcp_dashboard_oauth import DashboardOAuthFlow, dashboard_oauth_flow
     from tools.mcp_oauth import (

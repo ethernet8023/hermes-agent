@@ -229,6 +229,7 @@ def test_install_with_junctioned_skills_dir(served_repo, monkeypatch, tmp_path):
     assert "Installed:" in sink.getvalue()
 
 
+@pytest.mark.linux_only
 def test_bundled_optional_source_still_includes_support_files(tmp_path, monkeypatch):
     from tools.skills_hub import OptionalSkillSource
 

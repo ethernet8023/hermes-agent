@@ -11,6 +11,8 @@ import subprocess
 import sys
 import threading
 
+import pytest
+
 
 
 def _spawn_sleep(seconds: float = 60) -> subprocess.Popen:
@@ -29,6 +31,7 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+@pytest.mark.linux_only
 class TestZombieReproduction:
     """Demonstrate that subprocesses survive when cleanup is not called."""
 

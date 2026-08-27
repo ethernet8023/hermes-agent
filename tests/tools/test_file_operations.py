@@ -439,6 +439,7 @@ class TestSearchFilesFallbackHiddenPaths:
     def _make_env(self):
         return make_real_subprocess_env("/")
 
+    @pytest.mark.linux_only
     def test_hidden_root_with_hidden_ancestor_includes_files(self, tmp_path, monkeypatch):
         """Fallback find should include visible files when path is inside hidden root."""
         root = tmp_path / ".hermes" / "logs"
@@ -459,6 +460,7 @@ class TestSearchFilesFallbackHiddenPaths:
         assert result.error is None
         assert set(result.files) == {str(visible_file), str(visible_nested_file)}
 
+    @pytest.mark.linux_only
     def test_normal_root_still_excludes_hidden_descendants(self, tmp_path, monkeypatch):
         """Fallback find should still exclude hidden descendant paths for normal roots."""
         root = tmp_path / "repo"
@@ -590,6 +592,7 @@ class TestAtomicWriteNewFilePermissions:
     """_atomic_write should apply umask-default perms to new files (not 0600)."""
 
     @pytest.mark.parametrize("test_umask", [0o022, 0o002, 0o077])
+    @pytest.mark.linux_only
     def test_new_file_gets_umask_default_permissions(self, tmp_path, test_umask):
         """Newly created file should get umask-computed perms, not mktemp's 0600.
 
@@ -614,6 +617,7 @@ class TestAtomicWriteNewFilePermissions:
             f"got {actual_mode:04o}"
         )
 
+    @pytest.mark.linux_only
     def test_overwrite_still_preserves_existing_mode(self, tmp_path):
         """The new-file branch must not disturb the overwrite path's
         mode preservation (e.g. an executable script stays 0755)."""
@@ -636,6 +640,7 @@ class TestAtomicWriteThroughSymlink:
     plain file, orphaning the real target and destroying the link (data-loss).
     """
 
+    @pytest.mark.linux_only
     def test_write_follows_symlink_and_preserves_link(self, tmp_path):
         ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))
         real = tmp_path / "real.txt"
@@ -652,6 +657,7 @@ class TestAtomicWriteThroughSymlink:
         assert real.read_text() == "newcontent\n"
         assert os.path.realpath(link) == str(real)
 
+    @pytest.mark.linux_only
     def test_write_through_broken_symlink_falls_back(self, tmp_path):
         """A broken link resolves through readlink -f and creates the target."""
         ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))

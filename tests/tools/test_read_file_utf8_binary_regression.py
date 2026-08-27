@@ -91,6 +91,7 @@ class TestReadFileBinaryClassification:
         assert r.is_binary is True
 
     @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+    @pytest.mark.linux_only
     def test_utf16_transcodes_to_readable_text(self, ops, tmp_path, encoding):
         # Formerly a do-not-regress pin asserting UTF-16 stayed flagged as
         # binary "until a transcode path (#80717) lands" — this is that

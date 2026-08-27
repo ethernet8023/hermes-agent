@@ -474,6 +474,7 @@ def _stream_adapter():
 
 
 @pytest.mark.asyncio
+@pytest.mark.linux_only
 async def test_streamed_explicit_media_resend_is_delivered(tmp_path, monkeypatch):
     """The streaming rescan must deliver an explicit MEDIA tag even when the
     same path was already delivered in a prior turn (sibling of the base.py

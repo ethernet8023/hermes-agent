@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import shlex
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
@@ -108,9 +109,16 @@ def _extract_paths_from_terminal(args: Dict[str, Any], result: str) -> Set[str]:
     cmd = args.get("command") or ""
     if isinstance(cmd, str) and cmd:
         # Tokenise the command — catches `touch /tmp/hermes-x/test_foo.py`
+        # On Windows, shlex.split(posix=True) mangles backslash paths
+        # (treats them as escape characters), so use posix=False there.
         try:
-            for tok in shlex.split(cmd, posix=True):
-                if tok.startswith(("/", "~")):
+            for tok in shlex.split(cmd, posix=sys.platform != "win32"):
+                if tok.startswith(("/", "~",)) or (
+                    sys.platform == "win32"
+                    and len(tok) >= 2
+                    and tok[1] == ":"
+                    and tok[0].isalpha()
+                ):
                     paths.add(tok)
         except ValueError:
             pass

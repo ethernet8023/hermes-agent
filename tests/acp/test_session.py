@@ -158,6 +158,7 @@ class TestWslCwdTranslation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.require_symlinks
 class TestSymlinkAliasNormalization:
     """Ported from PrimeIntellect-ai/prime-agent#628 — symlink aliases of the
     same directory (macOS ``/var`` vs ``/private/var``, ``/tmp`` vs

@@ -1525,7 +1525,10 @@ def _parse_docker_volume_mounts() -> List[Tuple[Path, Path]]:
             container_path = Path(container_raw)
         except (OSError, RuntimeError, ValueError):
             continue
-        if not container_path.is_absolute():
+        # container_path is a container-absolute POSIX path (e.g. /workspace).
+        # On Windows, Path.is_absolute() returns False for such paths (no drive
+        # letter), so check the raw string instead.
+        if not container_path.is_absolute() and not container_raw.startswith("/"):
             continue
         mounts.append((host_path, container_path))
     return mounts
@@ -1696,7 +1699,11 @@ def _translate_docker_container_media_path(candidate: Path, session_key: str = "
     persistent Docker ``/workspace`` host root, and the persistent ``/root``
     home mount.
     """
-    if not candidate.is_absolute():
+    # A Docker container-absolute path (e.g. /workspace/shot.png) is absolute
+    # in the container's Linux filesystem but Path.is_absolute() returns False
+    # for it on Windows (which requires a drive letter). Accept both forms:
+    # native absolute paths AND POSIX-style absolute paths (leading /).
+    if not candidate.is_absolute() and not candidate.as_posix().startswith("/"):
         return None
 
     # In-process gateways (Desktop backend, `hermes serve`) may not have
@@ -1796,15 +1803,18 @@ def validate_media_delivery_path(path: str, session_key: str = "") -> Optional[s
     except (OSError, RuntimeError, ValueError):
         # expanduser raises ValueError("embedded null byte") for a ~\x00 path.
         return None
-    if not expanded.is_absolute():
-        return None
 
     # Docker agents emit MEDIA:/workspace/... (or other configured container
     # mount paths). Resolve those to host paths before the normal host-side
-    # existence / denylist checks.
+    # existence / denylist checks. This must run before the is_absolute() gate
+    # because container paths like /workspace/... are absolute in the
+    # container's Linux filesystem but NOT absolute on a Windows host, so the
+    # gate below would reject them before translation ever runs (#78352).
     translated = _translate_docker_container_media_path(expanded, session_key=session_key)
     if translated is not None:
         resolved = translated
+    elif not expanded.is_absolute():
+        return None
     else:
         try:
             resolved = expanded.resolve(strict=True)

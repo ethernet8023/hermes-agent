@@ -27,7 +27,7 @@ whose behavior is separately covered by a real test.
 from __future__ import annotations
 
 import ast
-import functools
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -114,40 +114,37 @@ def _iter_which_calls(tree: ast.AST):
 
 
 def _source_files() -> list[Path]:
-    files: list[Path] = []
-    for path in REPO_ROOT.rglob("*.py"):
-        rel = path.relative_to(REPO_ROOT)
-        if rel.parts and rel.parts[0] in _EXEMPT_DIRS:
-            continue
-        # Skip packaging copies of the source tree (sdist extractions like
-        # hermes_agent-0.20.5/, build/ and *.egg-info dirs). CI jobs that
-        # build the wheel leave one in the workspace; scanning it re-finds
-        # every already-exempted call site under a versioned path prefix
-        # that can never match an _ALLOWED key, failing the guard on code
-        # that was never touched. A dir is a packaging copy iff its top
-        # level carries PKG-INFO (sdist/egg metadata) or it is a build/
-        # dist output directory.
-        if rel.parts and _is_packaging_copy(rel.parts[0]):
-            continue
-        files.append(path)
-    return files
-
-
-@functools.lru_cache(maxsize=None)
-def _is_packaging_copy(top_level: str) -> bool:
-    """Whether *top_level* (a dir name under REPO_ROOT) is a build artifact."""
-    if top_level in ("build", "dist") or top_level.endswith(".egg-info"):
-        return True
-    candidate = REPO_ROOT / top_level
-    if not candidate.is_dir():
-        return False
-    return (candidate / "PKG-INFO").exists()
+    # Enumerate the .py files git TRACKS, not the working directory. git knows
+    # the source of truth, and that excludes every build artifact by
+    # construction — .venv/, .worktrees/, apps/desktop/build/ and
+    # apps/desktop/release/ (which each bundle a full copy of this source tree
+    # for the MSIX pack), and any sdist/egg extraction. Walking the disk with
+    # rglob would re-find every already-exempted call site inside those copies
+    # under a nested path prefix that can never match an _ALLOWED key. A
+    # gitignored dir cannot carry this branch's real code, so skipping it is
+    # correct, not lossy.
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", "*.py"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Not a git checkout (installed copy, etc.) — fall back to a disk
+        # walk so the guard still runs rather than silently passing.
+        return sorted(REPO_ROOT.rglob("*.py"))
+    rels = out.decode("utf-8", "replace").split("\0")
+    return [REPO_ROOT / rel for rel in rels if rel]
 
 
 def _findings() -> list[tuple[str, str, int]]:
     """Return (relpath, command, lineno) for every bare managed lookup."""
     found: list[tuple[str, str, int]] = []
     for path in _source_files():
+        rel = path.relative_to(REPO_ROOT)
+        if rel.parts and rel.parts[0] in _EXEMPT_DIRS:
+            continue
         try:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -158,9 +155,8 @@ def _findings() -> list[tuple[str, str, int]]:
             tree = ast.parse(source)
         except SyntaxError:
             continue
-        rel = path.relative_to(REPO_ROOT).as_posix()
         for command, lineno in _iter_which_calls(tree):
-            found.append((rel, command, lineno))
+            found.append((rel.as_posix(), command, lineno))
     return found
 
 

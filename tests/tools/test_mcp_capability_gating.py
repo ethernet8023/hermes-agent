@@ -200,6 +200,7 @@ def _mcp_error(code, message="boom"):
 class TestMethodNotFoundDetection:
     """``_is_method_not_found_error`` underpins the ping→list_tools fallback."""
 
+    @pytest.mark.linux_only
     def test_structural_code_match(self):
         from tools.mcp_tool import _is_method_not_found_error
         assert _is_method_not_found_error(_mcp_error(-32601)) is True

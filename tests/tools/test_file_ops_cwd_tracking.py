@@ -17,6 +17,8 @@ Fix: _exec() now prefers the LIVE ``env.cwd`` over the init-time
 
 from __future__ import annotations
 
+import pytest
+
 
 from tools.file_operations import ShellFileOperations
 
@@ -106,6 +108,7 @@ class TestShellFileOpsCwdTracking:
         assert result.exit_code == 0
         assert "fixed-content" in result.stdout
 
+    @pytest.mark.linux_only
     def test_patch_returns_success_only_when_file_actually_written(self, tmp_path):
         """Safety rail: patch_replace success must reflect the real file state.
 

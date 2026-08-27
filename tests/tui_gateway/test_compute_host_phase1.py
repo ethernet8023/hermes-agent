@@ -66,6 +66,7 @@ def test_mutator_route_table_matches_prd_inventory():
     }
 
 
+@pytest.mark.linux_only
 def test_append_log_record_single_write_lines(tmp_path):
     path = tmp_path / "agent.log"
 
@@ -261,6 +262,7 @@ def test_shutdown_retains_live_sessions_within_the_stdin_closed_budget(monkeypat
     assert elapsed < wait
 
 
+@pytest.mark.linux_only
 def test_shutdown_drain_sleep_never_overshoots_the_reserve(monkeypatch):
     """The drain's per-tick sleep must be bounded by the time left to it.
 

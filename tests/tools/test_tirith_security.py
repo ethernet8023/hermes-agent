@@ -67,6 +67,7 @@ class TestExitCodeMapping:
 
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_exit_1_block_with_findings(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": True}
@@ -79,6 +80,7 @@ class TestExitCodeMapping:
 
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_exit_2_warn_with_findings(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": True}
@@ -97,6 +99,7 @@ class TestExitCodeMapping:
 class TestJsonParseFailure:
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_exit_1_invalid_json_still_blocks(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": True}
@@ -122,6 +125,7 @@ class TestJsonParseFailure:
 class TestOSErrorFailOpen:
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_file_not_found_fail_open(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": True}
@@ -132,6 +136,7 @@ class TestOSErrorFailOpen:
 
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_os_error_fail_closed(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": False}
@@ -144,6 +149,7 @@ class TestOSErrorFailOpen:
 class TestTimeoutFailOpen:
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_timeout_fail_closed(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": False}
@@ -156,6 +162,7 @@ class TestTimeoutFailOpen:
 class TestUnknownExitCode:
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_unknown_exit_code_fail_closed(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": False}
@@ -185,6 +192,7 @@ class TestDisabled:
 class TestCaps:
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_findings_and_summary_capped(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": True}
@@ -202,6 +210,7 @@ class TestCaps:
 class TestProgrammingErrors:
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_attribute_error_propagates(self, mock_cfg, mock_run):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": True}
@@ -224,6 +233,7 @@ class TestEnsureInstalled:
 
     @patch("tools.tirith_security.shutil.which", return_value="/usr/local/bin/tirith")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_found_on_path_returns_immediately(self, mock_cfg, mock_which):
         mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
                                  "tirith_timeout": 5, "tirith_fail_open": True}
@@ -303,6 +313,7 @@ class TestFailedDownloadCaching:
     @patch("tools.tirith_security._is_install_failed_on_disk", return_value=False)
     @patch("tools.tirith_security._install_tirith", return_value=(None, "download_failed"))
     @patch("tools.tirith_security.shutil.which", return_value=None)
+    @pytest.mark.linux_only
     def test_failed_install_cached_no_retry(self, mock_which, mock_install,
                                              mock_disk_check, mock_mark):
         """After a failed download, subsequent resolves must not retry."""
@@ -345,6 +356,7 @@ class TestExplicitPathNoAutoDownload:
     @patch("tools.tirith_security._is_install_failed_on_disk", return_value=False)
     @patch("tools.tirith_security._install_tirith", return_value=("/auto/tirith", ""))
     @patch("tools.tirith_security.shutil.which", return_value=None)
+    @pytest.mark.linux_only
     def test_default_path_does_auto_download(self, mock_which, mock_install,
                                               mock_disk_check, mock_mark):
         """The default bare 'tirith' SHOULD trigger auto-download."""
@@ -490,6 +502,7 @@ class TestInstallArchiveMemberValidation:
 # ---------------------------------------------------------------------------
 
 class TestBackgroundInstall:
+    @pytest.mark.linux_only
     def test_ensure_installed_non_blocking(self):
         """ensure_installed must return immediately when download needed."""
         _tirith_mod._resolved_path = None
@@ -596,6 +609,7 @@ class TestSpawnWarningDedup:
 
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_repeated_spawn_failure_logs_once(self, mock_cfg, mock_run, caplog):
         mock_cfg.return_value = {
             "tirith_enabled": True, "tirith_path": "tirith",
@@ -653,6 +667,7 @@ class TestAppTldSuppression:
 
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_mixed_findings_preserve_warn(self, mock_cfg, mock_run):
         """If .app finding is accompanied by another finding, warn is preserved."""
         mock_cfg.return_value = _CFG
@@ -667,6 +682,7 @@ class TestAppTldSuppression:
 
     @patch("tools.tirith_security.subprocess.run")
     @patch("tools.tirith_security._load_security_config")
+    @pytest.mark.linux_only
     def test_block_verdict_never_suppressed(self, mock_cfg, mock_run):
         """block exit code is never downgraded, even if finding looks like .app."""
         mock_cfg.return_value = _CFG
@@ -700,6 +716,7 @@ class TestMkdtempOSErrorNoSpace:
     This prevents the unbounded retry + temp-dir leak described in #51826.
     """
 
+    @pytest.mark.linux_only
     def test_mkdtemp_oserror_returns_no_space(self):
         from tools.tirith_security import _install_tirith
 

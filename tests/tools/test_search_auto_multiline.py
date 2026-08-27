@@ -20,12 +20,14 @@ def proj(tmp_path, monkeypatch):
 
 
 class TestAutoMultiline:
+    @pytest.mark.linux_only
     def test_newline_regex_matches_across_lines(self, proj):
         r = json.loads(search_tool(r"def setup\(\):\n    init_db\(\)", path=str(proj), task_id="t-ml"))
         assert "error" not in r
         assert r["total_count"] >= 1
         assert "multiline" in r.get("warning", "")
 
+    @pytest.mark.linux_only
     def test_literal_newline_in_pattern_matches(self, proj):
         # A raw newline in the pattern (not the \n escape) also routes to
         # multiline mode. Keep the pattern free of regex metachars.

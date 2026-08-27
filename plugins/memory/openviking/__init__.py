@@ -1287,6 +1287,7 @@ def _write_env_vars(env_path: Path, env_writes: dict, remove_keys: tuple[str, ..
         "\n".join(new_lines) + ("\n" if new_lines else ""),
         encoding="utf-8",
         errors="surrogateescape",
+        newline="\n",
     )
     _restrict_secret_file_permissions(env_path)
 

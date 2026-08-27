@@ -552,7 +552,7 @@ class XAIImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
-            image_ref = str(saved_path)
+            image_ref = Path(saved_path).as_posix()
         elif url:
             # xAI's grok-imagine-image returns ephemeral ``imgen.x.ai/xai-tmp-*``
             # URLs that 404 within minutes — by the time Telegram's
@@ -571,7 +571,7 @@ class XAIImageGenProvider(ImageGenProvider):
                 )
                 image_ref = url
             else:
-                image_ref = str(saved_path)
+                image_ref = Path(saved_path).as_posix()
         else:
             return error_response(
                 error="xAI response contained neither b64_json nor URL",

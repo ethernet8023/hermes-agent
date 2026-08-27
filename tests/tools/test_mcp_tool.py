@@ -1272,6 +1272,7 @@ class TestBuildSafeEnv:
         assert result["NOTION_TOKEN"] == "from-op"
         assert "UNTRACKED_SECRET_KEY" not in result
 
+    @pytest.mark.linux_only
     def test_windows_location_vars_passed_without_secrets(self):
         """Windows launcher tools need location vars, but secrets stay filtered."""
         from tools.mcp_tool import _build_safe_env

@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -159,12 +160,46 @@ def _poll_readiness(url: str, timeout: float, interval: float = 1.0) -> tuple[bo
     return False, None, last_error
 
 
+def _kill_process_tree_windows(root_pid: int) -> None:
+    """Kill a process and all its descendants on Windows.
+
+    ``subprocess.Popen(shell=True)`` on Windows spawns ``cmd.exe`` which in turn
+    spawns the real command. ``proc.terminate()`` only kills the direct child
+    (``cmd.exe``), leaving grandchildren alive with the stdout pipe open, which
+    blocks ``proc.stdout.read()``. Use ``psutil`` to walk and kill the entire
+    tree starting from the root pid.
+    """
+    try:
+        import psutil
+    except ImportError:
+        # No psutil — best effort: kill just the root pid.
+        try:
+            subprocess.call(("taskkill", "/F", "/T", "/PID", str(root_pid)),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        return
+    try:
+        root = psutil.Process(root_pid)
+        children = root.children(recursive=True)
+        for child in children:
+            try:
+                child.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        root.kill()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+
+
 def _terminate_process_group(proc: subprocess.Popen) -> None:
     """Terminate the started app and its whole process group cleanly.
 
     On POSIX the child is spawned with ``start_new_session=True`` so we can
     signal the whole group; on Windows (no ``os.killpg``) we fall back to
-    terminating just the direct child.
+    terminating the whole process tree — ``shell=True`` spawns ``cmd.exe``
+    which in turn spawns the real command, so killing only the direct child
+    leaves an orphan holding the stdout pipe open.
     """
     if proc.poll() is not None:
         return
@@ -179,6 +214,12 @@ def _terminate_process_group(proc: subprocess.Popen) -> None:
     try:
         if pgid is not None and killpg is not None:
             killpg(pgid, signal.SIGTERM)  # windows-footgun: ok — POSIX-only branch (killpg checked above)
+        elif sys.platform == "win32":
+            # On Windows, shell=True runs cmd.exe which spawns the real
+            # command as a grandchild. proc.terminate() only kills cmd.exe,
+            # leaving the grandchild alive with the stdout pipe open. Walk
+            # the process tree with psutil and kill every descendant first.
+            _kill_process_tree_windows(proc.pid)
         else:
             proc.terminate()
     except (ProcessLookupError, PermissionError):

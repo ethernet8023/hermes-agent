@@ -236,6 +236,7 @@ word word
         assert result["success"] is False
         assert "match" in result["error"].lower()
 
+    @pytest.mark.require_symlinks
     def test_patch_supporting_file_symlink_escape_blocked(self, tmp_path):
         outside_file = tmp_path / "outside.txt"
         outside_file.write_text("old text here")
@@ -285,6 +286,7 @@ class TestWriteFile:
         assert result["success"] is True
         assert (tmp_path / "my-skill" / "references" / "api.md").exists()
 
+    @pytest.mark.require_symlinks
     def test_write_symlink_escape_blocked(self, tmp_path):
         outside_dir = tmp_path / "outside"
         outside_dir.mkdir()
@@ -314,6 +316,7 @@ class TestRemoveFile:
         assert result["success"] is True
         assert not (tmp_path / "my-skill" / "references" / "api.md").exists()
 
+    @pytest.mark.require_symlinks
     def test_remove_symlink_escape_blocked(self, tmp_path):
         outside_dir = tmp_path / "outside"
         outside_dir.mkdir()
@@ -793,6 +796,7 @@ class TestDeleteSkillRmtreeGuard:
         assert result["success"] is True, result
         assert not (tmp_path / "good-skill").exists()
 
+    @pytest.mark.require_symlinks
     def test_symlinked_skill_dir_refused(self, tmp_path):
         """A skill dir that is a symlink must not be rmtree'd — rmtree would
         otherwise follow it and delete the link target's contents."""

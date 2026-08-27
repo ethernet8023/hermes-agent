@@ -99,12 +99,16 @@ class _FakeAgent:
         pass
 
 
+@pytest.mark.linux_only
 @pytest.mark.asyncio
 async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A bare ``ping`` must get a JSON-RPC -32601 back AND leave stderr clean
     when the filter is installed on the handler.
+
+    Uses ``os.pipe`` + ``loop.connect_write_pipe``, a POSIX-only asyncio
+    transport path that cannot run under Windows' IOCP proactor loop.
     """
     import acp
 

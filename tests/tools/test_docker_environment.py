@@ -600,6 +600,7 @@ def _bind_mount_specs(run_args):
     ]
 
 
+@pytest.mark.linux_only
 def test_persistent_bind_mounts_survive_a_session_key_task_id(monkeypatch, tmp_path):
     """A gateway session key reaches the persistent sandbox path as-is, and it
     carries colons (``session:agent:main:telegram:dm:<chat_id>``). Docker reads

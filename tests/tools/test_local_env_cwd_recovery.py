@@ -9,6 +9,7 @@ Regression coverage for https://github.com/NousResearch/hermes-agent/issues/1755
 """
 
 import os
+import pytest
 import shutil
 import tempfile
 import threading
@@ -28,6 +29,7 @@ class TestResolveSafeCwd:
         assert _resolve_safe_cwd(path) == path
 
 
+    @pytest.mark.linux_only
     def test_returns_root_when_only_root_exists(self, monkeypatch):
         """If every ancestor except the filesystem root is gone, the root
         itself is still a valid recovery target — don't skip it just because

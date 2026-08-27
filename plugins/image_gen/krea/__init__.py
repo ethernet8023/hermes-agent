@@ -26,6 +26,7 @@ import logging
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -881,7 +882,7 @@ class KreaImageGenProvider(ImageGenProvider):
             )
             image_ref = result_image_url
         else:
-            image_ref = str(saved_path)
+            image_ref = Path(saved_path).as_posix()
 
         extra: Dict[str, Any] = {
             "krea_aspect_ratio": krea_ar,

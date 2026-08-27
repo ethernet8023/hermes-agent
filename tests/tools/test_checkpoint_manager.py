@@ -630,6 +630,7 @@ class TestWorkingDirResolution:
 # =========================================================================
 
 class TestGitEnvIsolation:
+    @pytest.mark.linux_only
     def test_env_pins_store_worktree_and_ignores_ambient_git_state(
         self, fake_home, tmp_path, monkeypatch,
     ):
@@ -1102,6 +1103,7 @@ class TestStoreStatus:
 
 
 class TestClearFunctions:
+    @pytest.mark.linux_only
     def test_clear_all_wipes_base_then_is_a_noop(self, tmp_path, monkeypatch, work_dir):
         base = tmp_path / "checkpoints"
         monkeypatch.setattr("tools.checkpoint_manager.CHECKPOINT_BASE", base)

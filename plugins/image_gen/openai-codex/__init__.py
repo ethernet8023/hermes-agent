@@ -743,7 +743,7 @@ class OpenAICodexImageGenProvider(ImageGenProvider):
             )
 
         return success_response(
-            image=str(saved_path),
+            image=Path(saved_path).as_posix(),
             model=tier_id,
             prompt=prompt,
             aspect_ratio=aspect,

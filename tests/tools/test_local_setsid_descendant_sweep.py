@@ -45,6 +45,7 @@ def _wait_for_pid_exit(pid: int, timeout: float = 10.0) -> bool:
     return not _pid_alive(pid)
 
 
+@pytest.mark.linux_only
 @pytest.mark.live_system_guard_bypass
 def test_timeout_kill_reaps_setsid_grandchild(tmp_path):
     """A grandchild that setsid's out of the group must not survive the
@@ -110,6 +111,7 @@ def _sh_quote(s: str) -> str:
     return shlex.quote(s)
 
 
+@pytest.mark.linux_only
 def test_kill_process_survives_psutil_snapshot_failure(monkeypatch):
     """A broken psutil snapshot must never break the kill path — the
     group-kill escalation still runs to completion."""

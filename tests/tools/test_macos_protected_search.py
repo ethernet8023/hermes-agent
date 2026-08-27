@@ -1,5 +1,6 @@
 """macOS TCC-safe behavior for broad file searches."""
 
+import pytest
 from pathlib import Path
 
 import tools.file_operations as file_operations
@@ -110,6 +111,7 @@ def test_legacy_ripgrep_file_fallback_keeps_protected_globs(tmp_path, monkeypatc
         assert "!Downloads/**" in command
 
 
+@pytest.mark.linux_only
 def test_grep_fallback_prunes_by_path_not_basename(tmp_path, monkeypatch):
     """The grep fallback must NOT use --exclude-dir (basename-wide: it would
     skip every nested dir named Downloads anywhere under the root). It routes
@@ -174,6 +176,7 @@ def test_remote_backend_never_prunes(tmp_path, monkeypatch):
     assert result.warning is None
 
 
+@pytest.mark.linux_only
 def test_find_fallback_prunes_protected_directories(tmp_path, monkeypatch):
     home = tmp_path / "Users" / "alice"
     home.mkdir(parents=True)

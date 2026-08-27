@@ -54,10 +54,12 @@ class TestBlocksMutationsInSourceRepo:
         hit, _ = _detect("git checkout main", repo / "agent", repo)
         assert hit is True
 
+    @pytest.mark.linux_only
     def test_dash_c_targeting_repo_from_outside(self, repo, tmp_path):
         hit, _ = _detect(f"git -C {repo} checkout pr-51020", tmp_path, repo)
         assert hit is True
 
+    @pytest.mark.linux_only
     def test_cd_into_repo_then_checkout(self, repo, tmp_path):
         hit, _ = _detect(f"cd {repo} && git checkout pr-51020", tmp_path, repo)
         assert hit is True
@@ -104,11 +106,13 @@ class TestBlocksMutationsInSourceRepo:
         hit, _ = _detect(command, repo, repo)
         assert hit is True
 
+    @pytest.mark.linux_only
     def test_explicit_work_tree_targeting_repo(self, repo, tmp_path):
         command = f"git --git-dir={repo / '.git'} --work-tree={repo} checkout main"
         hit, _ = _detect(command, tmp_path, repo)
         assert hit is True
 
+    @pytest.mark.linux_only
     def test_git_environment_targeting_repo(self, repo, tmp_path):
         command = f"GIT_DIR={repo / '.git'} GIT_WORK_TREE={repo} git checkout main"
         hit, _ = _detect(command, tmp_path, repo)
@@ -147,6 +151,7 @@ class TestBlocksMutationsInSourceRepo:
         hit, _ = _detect(command, repo, repo)
         assert hit is True
 
+    @pytest.mark.linux_only
     def test_tilde_dash_c_path(self, repo, monkeypatch, tmp_path):
         monkeypatch.setenv("HOME", str(repo.parent))
         hit, _ = _detect("git -C ~/hermes-agent checkout main", tmp_path, repo)
@@ -191,10 +196,12 @@ class TestAllowsSafeCommands:
         hit, _ = _detect("git checkout main", other, repo)
         assert hit is False
 
+    @pytest.mark.linux_only
     def test_dash_c_redirects_out_of_repo(self, repo, tmp_path):
         hit, _ = _detect(f"git -C {tmp_path} checkout main", repo, repo)
         assert hit is False
 
+    @pytest.mark.linux_only
     def test_cd_out_of_repo_then_checkout(self, repo, tmp_path):
         hit, _ = _detect(f"cd {tmp_path} && git checkout main", repo, repo)
         assert hit is False
@@ -281,15 +288,18 @@ class TestWorktreeTargetingSourceRoot:
         assert str(repo) in msg
 
     @pytest.mark.parametrize("action", ["remove", "remove -f", "remove --force"])
+    @pytest.mark.linux_only
     def test_blocks_absolute_target_from_outside(self, repo, tmp_path, action):
         hit, _ = _detect(f"git worktree {action} {repo}", tmp_path, repo)
         assert hit is True
 
+    @pytest.mark.linux_only
     def test_blocks_move_of_root_from_outside(self, repo, tmp_path):
         command = f"git worktree move {repo} {tmp_path / 'moved'}"
         hit, _ = _detect(command, tmp_path, repo)
         assert hit is True
 
+    @pytest.mark.linux_only
     def test_blocks_dash_c_worktree_remove(self, repo, tmp_path):
         hit, _ = _detect(f"git -C {tmp_path} worktree remove {repo}", tmp_path, repo)
         assert hit is True
@@ -374,6 +384,7 @@ class TestBlockMessageGuidance:
         assert "tmpfs" in msg
         assert "Delete the clone" in msg
 
+    @pytest.mark.linux_only
     def test_scratch_hint_honors_hermes_home(self, repo, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", "/custom/hermes-home")
         hit, msg = _detect("git rebase origin/main", repo, repo)

@@ -20,8 +20,8 @@ from toolsets import TOOLSETS, resolve_toolset
 GUI_TOOLS = {
     "annotate_preview",
     "close_preview",
-    "drive_preview",
     "close_terminal",
+    "drive_preview",
     "focus_pane",
     "open_preview",
     "read_preview",

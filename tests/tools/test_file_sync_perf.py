@@ -72,6 +72,7 @@ def _report(label: str, durations: list[float]):
 class TestLocalPerf:
     """Local baseline — no file sync, no network. Sets the floor."""
 
+    @pytest.mark.linux_only
     def test_echo_latency(self, local_env):
         durations = _time_executions(local_env, "echo hello", n=20)
         med = _report("local echo", durations)

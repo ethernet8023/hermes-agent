@@ -89,6 +89,7 @@ def test_absolute_terminal_cwd_used_verbatim(_isolated_cwd, monkeypatch):
     assert resolved == (workspace / "target.py")
 
 
+@pytest.mark.require_symlinks
 def test_container_absolute_input_path_does_not_follow_host_symlink(tmp_path, monkeypatch):
     """Docker paths are sandbox-local and must not be host-dereferenced.
 
@@ -118,6 +119,7 @@ def test_container_path_normalization_uses_posix_path_syntax():
     assert str(resolved) == "/workspace/projects/bar"
 
 
+@pytest.mark.require_symlinks
 def test_container_relative_path_keeps_container_cwd_symlink(tmp_path, monkeypatch):
     """Relative Docker paths should stay under the container cwd textually."""
     host_project = tmp_path / "host-project"
@@ -153,6 +155,7 @@ def test_resolution_base_always_absolute_no_terminal_cwd(_isolated_cwd, monkeypa
 # ── B-(ii): workspace-divergence warning ────────────────────────────────────
 
 
+@pytest.mark.linux_only
 def test_warning_fires_when_relative_path_escapes_workspace(_isolated_cwd, monkeypatch):
     """Relative path resolving outside the live workspace must warn."""
     workspace, decoy = _isolated_cwd
@@ -179,6 +182,7 @@ def test_warning_fires_when_relative_path_escapes_workspace(_isolated_cwd, monke
 # anchoring + early warning.)
 
 
+@pytest.mark.linux_only
 def test_warning_fires_from_terminal_cwd_when_registry_empty(_isolated_cwd, monkeypatch):
     """Divergence warning must fire even before any terminal command runs.
 

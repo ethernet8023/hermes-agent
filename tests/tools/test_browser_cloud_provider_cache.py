@@ -63,6 +63,7 @@ class TestCloudProviderCachePolicy:
         assert resolve_for(home_a) is providers[str(home_a)]
         assert resolutions == [str(home_a), str(home_b)]
 
+    @pytest.mark.linux_only
     def test_same_profile_registry_replacement_invalidates_cache(
         self, tmp_path, monkeypatch
     ):
@@ -117,6 +118,7 @@ class TestCloudProviderCachePolicy:
                 )
             reset_hermes_home_override(token)
 
+    @pytest.mark.linux_only
     def test_concurrent_registry_replacement_discards_stale_resolution(
         self, tmp_path, monkeypatch
     ):

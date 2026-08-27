@@ -1,11 +1,22 @@
-"""Tests for file permissions hardening on sensitive files."""
+"""Tests for file permissions hardening on sensitive files.
+
+These tests assert POSIX permission bits (0o600, 0o700). On Windows,
+chmod does not set these bits — stat.S_IMODE returns 0o666 for files
+and 0o777 for directories regardless. Mark linux_only so the tests
+run where the assertions are meaningful and skip on Windows/macOS.
+"""
 
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
+
+pytestmark = pytest.mark.linux_only
 
 
 class TestCronFilePermissions(unittest.TestCase):

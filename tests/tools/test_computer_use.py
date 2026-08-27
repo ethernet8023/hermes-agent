@@ -1385,6 +1385,7 @@ class TestCuaDriverSessionReconnect:
         ]
 
 
+    @pytest.mark.linux_only
     def test_cli_fallback_reads_screenshot_from_file(self, tmp_path, monkeypatch):
         """_call_tool_via_cli must base64-read a screenshot written to disk
         (screenshot_out_file path) when no inline base64 is present."""

@@ -102,6 +102,12 @@ export function relativizePayloadLinks(root) {
     // store entry; it must exist inside THIS payload's tools/.
     const m = target.match(/(?:^|\/)tools\/(.+)$/)
     if (!m) {
+      // A sibling link (e.g. python3 -> python) is already relative and
+      // resolves through the rewritten store link — leave it alone.
+      const sibling = path.resolve(bin, target)
+      if (sibling !== bin && sibling.startsWith(bin + path.sep) && fs.existsSync(sibling)) {
+        continue
+      }
       throw new Error(
         `venv/bin/${ent.name} -> ${target} does not name a store entry (tools/<entry>/...); ` +
         'a bundled venv must reference the payload store',

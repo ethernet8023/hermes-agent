@@ -68,6 +68,29 @@ test('relativizePayloadLinks throws when the named store entry is missing from t
   }
 })
 
+test('relativizePayloadLinks leaves a sibling link (python3 -> python) alone', () => {
+  if (process.platform === 'win32') return
+  const root = tempRoot()
+  try {
+    const store = path.join(root, 'tools', 'python', 'bin')
+    const venv = path.join(root, 'venv', 'bin')
+    fs.mkdirSync(store, { recursive: true })
+    fs.mkdirSync(venv, { recursive: true })
+    const real = path.join(store, 'python3.11')
+    fs.writeFileSync(real, 'interpreter-bytes')
+    // python -> store link; python3 -> python sibling.
+    fs.symlinkSync('/somewhere/build/agent-payload/tools/python/bin/python3.11', path.join(venv, 'python'))
+    fs.symlinkSync('python', path.join(venv, 'python3'))
+
+    const n = relativizePayloadLinks(root)
+    assert.equal(n, 1) // only the store link rewritten
+    assert.equal(fs.readlinkSync(path.join(venv, 'python3')), 'python') // sibling untouched
+    assert.equal(fs.readFileSync(path.join(venv, 'python3'), 'utf8'), 'interpreter-bytes') // resolves via chain
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('relativizePayloadLinks throws when the target does not name a store entry', () => {
   if (process.platform === 'win32') return
   const root = tempRoot()

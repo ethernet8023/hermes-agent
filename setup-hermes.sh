@@ -3,18 +3,17 @@
 # Hermes Agent Setup Script
 # ============================================================================
 # Quick setup for developers who cloned the repo manually.
-# Uses uv for desktop/server setup and Python's stdlib venv + pip on Termux.
+# Uses uv for desktop/server setup.
 #
 # Usage:
 #   ./setup-hermes.sh
 #
 # This script:
-# 1. Detects desktop/server vs Android/Termux setup path
-# 2. Creates a Python 3.11 virtual environment
-# 3. Installs the appropriate dependency set for the platform
-# 4. Creates .env from template (if not exists)
-# 5. Symlinks the 'hermes' CLI command into a user-facing bin dir
-# 6. Runs the setup wizard (optional)
+# 1. Creates a Python 3.11 virtual environment
+# 2. Installs the appropriate dependency set for the platform
+# 3. Creates .env from template (if not exists)
+# 4. Symlinks the 'hermes' CLI command into a user-facing bin dir
+# 5. Runs the setup wizard (optional)
 # ============================================================================
 
 set -e
@@ -35,29 +34,12 @@ export UV_NO_CONFIG=1
 
 PYTHON_VERSION="3.11"
 
-is_termux() {
-    [ -n "${TERMUX_VERSION:-}" ] || [[ "${PREFIX:-}" == *"com.termux/files/usr"* ]]
-}
-
-if is_termux; then
-    echo "Termux is no longer a supported install target." >&2
-    exit 1
-fi
-
 get_command_link_dir() {
-    if is_termux && [ -n "${PREFIX:-}" ]; then
-        echo "$PREFIX/bin"
-    else
-        echo "$HOME/.local/bin"
-    fi
+    echo "$HOME/.local/bin"
 }
 
 get_command_link_display_dir() {
-    if is_termux && [ -n "${PREFIX:-}" ]; then
-        echo '$PREFIX/bin'
-    else
-        echo '~/.local/bin'
-    fi
+    echo '~/.local/bin'
 }
 
 echo ""
@@ -71,10 +53,7 @@ echo ""
 echo -e "${CYAN}→${NC} Checking for uv..."
 
 UV_CMD=""
-if is_termux; then
-    echo -e "${CYAN}→${NC} Termux detected — using Python's stdlib venv + pip instead of uv"
-else
-    if command -v uv &> /dev/null; then
+if command -v uv &> /dev/null; then
         UV_CMD="uv"
     elif [ -x "$HOME/.local/bin/uv" ]; then
         UV_CMD="$HOME/.local/bin/uv"
@@ -129,7 +108,6 @@ else
             exit 1
         fi
     fi
-fi
 
 # ============================================================================
 # Python check (uv can provision it automatically)
@@ -137,34 +115,16 @@ fi
 
 echo -e "${CYAN}→${NC} Checking Python $PYTHON_VERSION..."
 
-if is_termux; then
-    if command -v python >/dev/null 2>&1; then
-        PYTHON_PATH="$(command -v python)"
-        if "$PYTHON_PATH" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
-            PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
-            echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION found"
-        else
-            echo -e "${RED}✗${NC} Termux Python must be 3.11+"
-            echo "    Run: pkg install python"
-            exit 1
-        fi
-    else
-        echo -e "${RED}✗${NC} Python not found in Termux"
-        echo "    Run: pkg install python"
-        exit 1
-    fi
+if $UV_CMD python find "$PYTHON_VERSION" &> /dev/null; then
+    PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
+    PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
+    echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION found"
 else
-    if $UV_CMD python find "$PYTHON_VERSION" &> /dev/null; then
-        PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
-        PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
-        echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION found"
-    else
-        echo -e "${CYAN}→${NC} Python $PYTHON_VERSION not found, installing via uv..."
-        $UV_CMD python install "$PYTHON_VERSION"
-        PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
-        PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
-        echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION installed"
-    fi
+    echo -e "${CYAN}→${NC} Python $PYTHON_VERSION not found, installing via uv..."
+    $UV_CMD python install "$PYTHON_VERSION"
+    PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
+    PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
+    echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION installed"
 fi
 
 # ============================================================================
@@ -178,13 +138,8 @@ if [ -d "venv" ]; then
     rm -rf venv
 fi
 
-if is_termux; then
-    "$PYTHON_PATH" -m venv venv
-    echo -e "${GREEN}✓${NC} venv created with stdlib venv"
-else
-    $UV_CMD venv venv --python "$PYTHON_VERSION"
-    echo -e "${GREEN}✓${NC} venv created (Python $PYTHON_VERSION)"
-fi
+$UV_CMD venv venv --python "$PYTHON_VERSION"
+echo -e "${GREEN}✓${NC} venv created (Python $PYTHON_VERSION)"
 
 export VIRTUAL_ENV="$SCRIPT_DIR/venv"
 SETUP_PYTHON="$SCRIPT_DIR/venv/bin/python"
@@ -195,21 +150,7 @@ SETUP_PYTHON="$SCRIPT_DIR/venv/bin/python"
 
 echo -e "${CYAN}→${NC} Installing dependencies..."
 
-if is_termux; then
-    export ANDROID_API_LEVEL="$(getprop ro.build.version.sdk 2>/dev/null || printf '%s' "${ANDROID_API_LEVEL:-}")"
-    echo -e "${CYAN}→${NC} Termux detected — installing the tested Android bundle"
-    "$SETUP_PYTHON" -m pip install --upgrade pip setuptools wheel
-    if [ -f "constraints-termux.txt" ]; then
-        "$SETUP_PYTHON" -m pip install -e ".[termux]" -c constraints-termux.txt || {
-            echo -e "${YELLOW}⚠${NC} Termux bundle install failed, falling back to base install..."
-            "$SETUP_PYTHON" -m pip install -e "." -c constraints-termux.txt
-        }
-    else
-        "$SETUP_PYTHON" -m pip install -e ".[termux]" || "$SETUP_PYTHON" -m pip install -e "."
-    fi
-    echo -e "${GREEN}✓${NC} Dependencies installed"
-else
-    # Prefer uv sync with lockfile (hash-verified installs) when available,
+# Prefer uv sync with lockfile (hash-verified installs) when available,
     # fall back to pip install for compatibility or when lockfile is stale.
     #
     # Multi-tier pip fallback. Goal: ONE compromised PyPI package
@@ -269,7 +210,6 @@ else
         _try_install
         echo -e "${GREEN}✓${NC} Dependencies installed (transitives re-resolved, not hash-verified)"
     fi
-fi
 
 # ============================================================================
 # ============================================================================
@@ -287,41 +227,33 @@ else
     if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
         INSTALLED=false
 
-        if is_termux; then
-            pkg install -y ripgrep && INSTALLED=true
-        else
-            # Check if sudo is available
-            if command -v sudo &> /dev/null && sudo -n true 2>/dev/null; then
-                if command -v apt &> /dev/null; then
-                    sudo apt install -y ripgrep && INSTALLED=true
-                elif command -v dnf &> /dev/null; then
-                    sudo dnf install -y ripgrep && INSTALLED=true
-                fi
+        # Check if sudo is available
+        if command -v sudo &> /dev/null && sudo -n true 2>/dev/null; then
+            if command -v apt &> /dev/null; then
+                sudo apt install -y ripgrep && INSTALLED=true
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y ripgrep && INSTALLED=true
             fi
+        fi
 
-            # Try brew (no sudo needed)
-            if [ "$INSTALLED" = false ] && command -v brew &> /dev/null; then
-                brew install ripgrep && INSTALLED=true
-            fi
+        # Try brew (no sudo needed)
+        if [ "$INSTALLED" = false ] && command -v brew &> /dev/null; then
+            brew install ripgrep && INSTALLED=true
+        fi
 
-            # Try cargo (no sudo needed)
-            if [ "$INSTALLED" = false ] && command -v cargo &> /dev/null; then
-                echo -e "${CYAN}→${NC} Trying cargo install (no sudo required)..."
-                cargo install ripgrep && INSTALLED=true
-            fi
+        # Try cargo (no sudo needed)
+        if [ "$INSTALLED" = false ] && command -v cargo &> /dev/null; then
+            echo -e "${CYAN}→${NC} Trying cargo install (no sudo required)..."
+            cargo install ripgrep && INSTALLED=true
         fi
 
         if [ "$INSTALLED" = true ]; then
             echo -e "${GREEN}✓${NC} ripgrep installed"
         else
             echo -e "${YELLOW}⚠${NC} Auto-install failed. Install options:"
-            if is_termux; then
-                echo "    pkg install ripgrep          # Termux / Android"
-            else
-                echo "    sudo apt install ripgrep     # Debian/Ubuntu"
-                echo "    brew install ripgrep         # macOS"
-                echo "    cargo install ripgrep        # With Rust (no sudo)"
-            fi
+            echo "    sudo apt install ripgrep     # Debian/Ubuntu"
+            echo "    brew install ripgrep         # macOS"
+            echo "    cargo install ripgrep        # With Rust (no sudo)"
             echo "    https://github.com/BurntSushi/ripgrep#installation"
         fi
     fi
@@ -359,13 +291,9 @@ mkdir -p "$COMMAND_LINK_DIR"
 ln -sf "$HERMES_BIN" "$COMMAND_LINK_DIR/hermes"
 echo -e "${GREEN}✓${NC} Symlinked hermes → $COMMAND_LINK_DISPLAY_DIR/hermes"
 
-if is_termux; then
-    export PATH="$COMMAND_LINK_DIR:$PATH"
-    echo -e "${GREEN}✓${NC} $COMMAND_LINK_DISPLAY_DIR is already on PATH in Termux"
-else
-    # Determine the appropriate shell config file
-    SHELL_CONFIG=""
-    if [[ "$SHELL" == *"zsh"* ]]; then
+# Determine the appropriate shell config file
+SHELL_CONFIG=""
+if [[ "$SHELL" == *"zsh"* ]]; then
         SHELL_CONFIG="$HOME/.zshrc"
     elif [[ "$SHELL" == *"bash"* ]]; then
         SHELL_CONFIG="$HOME/.bashrc"
@@ -398,7 +326,6 @@ else
             echo -e "${GREEN}✓${NC} ~/.local/bin already on PATH"
         fi
     fi
-fi
 
 # ============================================================================
 # Seed bundled skills into ~/.hermes/skills/
@@ -428,31 +355,18 @@ echo -e "${GREEN}✓ Setup complete!${NC}"
 echo ""
 echo "Next steps:"
 echo ""
-if is_termux; then
-    echo "  1. Run the setup wizard to configure API keys:"
-    echo "     hermes setup"
-    echo ""
-    echo "  2. Start chatting:"
-    echo "     hermes"
-    echo ""
-else
-    echo "  1. Reload your shell:"
-    echo "     source $SHELL_CONFIG"
-    echo ""
-    echo "  2. Run the setup wizard to configure API keys:"
-    echo "     hermes setup"
-    echo ""
-    echo "  3. Start chatting:"
-    echo "     hermes"
-    echo ""
-fi
+echo "  1. Reload your shell:"
+echo "     source $SHELL_CONFIG"
+echo ""
+echo "  2. Run the setup wizard to configure API keys:"
+echo "     hermes setup"
+echo ""
+echo "  3. Start chatting:"
+echo "     hermes"
+echo ""
 echo "Other commands:"
 echo "  hermes status        # Check configuration"
-if is_termux; then
-    echo "  hermes gateway       # Run gateway in foreground"
-else
-    echo "  hermes gateway install # Install gateway service (messaging + cron)"
-fi
+echo "  hermes gateway install # Install gateway service (messaging + cron)"
 echo "  hermes cron list     # View scheduled jobs"
 echo "  hermes doctor        # Diagnose issues"
 echo ""

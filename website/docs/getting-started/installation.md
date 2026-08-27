@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: "Installation"
-description: "Install Hermes Agent on Linux, macOS, WSL2, native Windows, or Android via Termux"
+description: "Install Hermes Agent on Linux, macOS, WSL2, or native Windows"
 ---
 
 # Installation
@@ -20,7 +20,7 @@ To easily install the command-line and desktop applications, [download the Herme
 ### Without Hermes Desktop:
 For a command-line only install without Hermes Desktop, run:
 
-#### Linux / macOS / WSL2 / Android (Termux)
+#### Linux / macOS / WSL2
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```

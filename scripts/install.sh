@@ -44,10 +44,7 @@ fail() { printf "\033[1;31m[hermes]\033[0m %s\n" "$1" >&2; exit 1; }
 
 check_platform() {
     case "$(uname -s 2>/dev/null)" in
-        Linux*)
-            if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ]; then
-                fail "Termux is not a supported install target."
-            fi ;;
+        Linux*) : ;;
         Darwin*) : ;;
         *) fail "unsupported platform: $(uname -s). On Windows use install.ps1." ;;
     esac

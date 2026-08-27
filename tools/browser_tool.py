@@ -204,11 +204,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Standard PATH entries for environments with minimal PATH (e.g. systemd services).
-# Includes Android/Termux and macOS Homebrew locations needed for agent-browser,
-# npx, node, and Android's glibc runner (grun).
+# Includes macOS Homebrew locations needed for agent-browser, npx, and node.
 _SANE_PATH_DIRS = (
-    "/data/data/com.termux/files/usr/bin",
-    "/data/data/com.termux/files/usr/sbin",
     "/opt/homebrew/bin",
     "/opt/homebrew/sbin",
     "/usr/local/sbin",
@@ -938,12 +935,7 @@ def _resolve_cloud_provider_uncached() -> Optional[CloudBrowserProvider]:
     return _cached_cloud_provider
 
 
-from hermes_constants import is_termux as _is_termux_environment
-
-
 def _browser_install_hint() -> str:
-    if _is_termux_environment():
-        return "npm install -g agent-browser && agent-browser install"
     return "npm install -g agent-browser && agent-browser install --with-deps"
 
 
@@ -963,17 +955,6 @@ AGENT_BROWSER_NPX_SPEC = "agent-browser@^0.26.0"
 
 def _is_npx_agent_browser_sentinel(browser_cmd: str) -> bool:
     return browser_cmd.strip() == NPX_AGENT_BROWSER_SENTINEL
-
-
-def _requires_real_termux_browser_install(browser_cmd: str) -> bool:
-    return _is_termux_environment() and _is_local_mode() and _is_npx_agent_browser_sentinel(browser_cmd)
-
-
-def _termux_browser_install_error() -> str:
-    return (
-        "Local browser automation on Termux cannot rely on the bare npx fallback. "
-        f"Install agent-browser explicitly first: {_browser_install_hint()}"
-    )
 
 
 def _is_local_mode() -> bool:
@@ -1274,7 +1255,7 @@ def _run_chrome_fallback_command(
     # uses, not a bare shutil.which("npx") — Hermes-managed-Node-only setups
     # resolve npx only through the extended fallback path, and a bare lookup
     # would let a broken system npx shadow a healthy managed one. If npx isn't
-    # found at all (Termux, bare container), fall back to the bare name and
+    # found at all (bare container), fall back to the bare name and
     # let Popen raise with a readable "FileNotFoundError: 'npx'" rather than
     # WinError 193.
     if _is_npx_agent_browser_sentinel(browser_cmd):
@@ -2568,7 +2549,7 @@ def _find_agent_browser(*, validate: bool = True) -> str:
         return which_result
 
     # Build an extended search PATH including Hermes-managed Node, macOS
-    # versioned Homebrew installs, and fallback system dirs like Termux.
+    # versioned Homebrew installs, and fallback system dirs.
     extended_path = _merge_browser_path("")
     if extended_path:
         which_result = shutil.which("agent-browser", path=extended_path)
@@ -2856,11 +2837,6 @@ def _run_browser_command(
     except FileNotFoundError as e:
         logger.warning("agent-browser CLI not found: %s", e)
         return {"success": False, "error": str(e)}
-
-    if _requires_real_termux_browser_install(browser_cmd):
-        error = _termux_browser_install_error()
-        logger.warning("browser command blocked on Termux: %s", error)
-        return {"success": False, "error": error}
 
     # Local mode with no Chromium on disk: fail fast with an actionable
     # message instead of hanging for _command_timeout seconds per call.
@@ -5313,13 +5289,6 @@ def check_browser_requirements() -> bool:
     except FileNotFoundError:
         return False
 
-    # On Termux, the bare npx fallback is too fragile to treat as a satisfied
-    # local browser dependency. Require a real install (global or local) so the
-    # browser tool is not advertised as available when it will likely fail on
-    # first use.
-    if _requires_real_termux_browser_install(browser_cmd):
-        return False
-
     # In cloud mode, also require provider credentials. Cloud browsers
     # don't need a local Chromium binary.
     provider = _get_cloud_provider()
@@ -5380,10 +5349,7 @@ if __name__ == "__main__":
         print("❌ Missing requirements:")
         try:
             browser_cmd = _find_agent_browser()
-            if _requires_real_termux_browser_install(browser_cmd):
-                print("   - bare npx fallback found (insufficient on Termux local mode)")
-                print(f"     Install: {_browser_install_hint()}")
-            elif _cp is None and not _chromium_installed():
+            if _cp is None and not _chromium_installed():
                 print("   - Chromium browser binary not found")
                 searched = ", ".join(_chromium_search_roots()) or "(no candidate paths)"
                 print(f"     Searched: {searched}")

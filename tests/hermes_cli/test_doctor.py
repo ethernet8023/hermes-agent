@@ -18,14 +18,6 @@ from hermes_cli.doctor import _has_provider_env_config
 
 
 class TestDoctorPlatformHints:
-    def test_termux_package_hint(self, monkeypatch):
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        assert doctor._is_termux() is True
-        assert doctor._python_install_cmd() == "python -m pip install"
-        assert doctor._system_package_install_cmd("ripgrep") == "pkg install ripgrep"
-
-
     def test_sqlite_upgrade_hint_recreates_docker_containers(self, monkeypatch):
         monkeypatch.setattr(doctor, "detect_install_method", lambda _root: "docker")
 
@@ -341,36 +333,6 @@ class TestDoctorMemoryProviderSection:
         out = self._run_doctor_and_capture(monkeypatch, tmp_path, provider="mem0")
         assert "Memory Provider" in out
         assert "Built-in memory active" not in out
-
-
-def test_run_doctor_termux_treats_docker_and_browser_warnings_as_expected(monkeypatch, tmp_path):
-    helper = TestDoctorMemoryProviderSection()
-    monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-    monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-
-    real_which = doctor_mod.shutil.which
-
-    def fake_which(cmd):
-        if cmd in {"docker", "node", "npm"}:
-            return None
-        return real_which(cmd)
-
-    monkeypatch.setattr(doctor_mod.shutil, "which", fake_which)
-
-    out = helper._run_doctor_and_capture(monkeypatch, tmp_path, provider="")
-
-    assert "Docker backend is not available inside Termux" in out
-    assert "Node.js not found (browser tools are optional in the tested Termux path)" in out
-    assert "Install Node.js on Termux with: pkg install nodejs" in out
-    assert "Termux browser setup:" in out
-    assert "1) pkg install nodejs" in out
-    assert "2) npm install -g agent-browser" in out
-    assert "3) agent-browser install" in out
-    assert "Termux compatibility fallbacks:" in out
-    assert "Matrix E2EE extra is excluded on Termux" in out
-    assert "Local faster-whisper extra is excluded on Termux" in out
-    assert "STT fallback: use Groq Whisper (set GROQ_API_KEY) or OpenAI Whisper (set VOICE_TOOLS_OPENAI_KEY)." in out
-    assert "docker not found (optional)" not in out
 
 
 def test_run_doctor_accepts_named_provider_from_providers_section(monkeypatch, tmp_path):
@@ -698,52 +660,8 @@ def test_run_doctor_accepts_kimi_coding_cn_provider(monkeypatch, tmp_path):
     assert "model.provider 'kimi-coding-cn' is not a recognised provider" not in out
 
 
-def test_run_doctor_termux_does_not_mark_browser_available_without_agent_browser(monkeypatch, tmp_path):
-    home = tmp_path / ".hermes"
-    home.mkdir(parents=True, exist_ok=True)
-    (home / "config.yaml").write_text("memory: {}\n", encoding="utf-8")
-    project = tmp_path / "project"
-    project.mkdir(exist_ok=True)
-
-    monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-    monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-    monkeypatch.setattr(doctor_mod, "HERMES_HOME", home)
-    monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)
-    monkeypatch.setattr(doctor_mod, "_DHH", str(home))
-    monkeypatch.setattr(doctor_mod.shutil, "which", lambda cmd: "/data/data/com.termux/files/usr/bin/node" if cmd in {"node", "npm"} else None)
-
-    fake_model_tools = types.SimpleNamespace(
-        check_tool_availability=lambda *a, **kw: (["terminal"], [{"name": "browser", "env_vars": [], "tools": ["browser_navigate"]}]),
-        TOOLSET_REQUIREMENTS={
-            "terminal": {"name": "terminal"},
-            "browser": {"name": "browser"},
-        },
-    )
-    monkeypatch.setitem(sys.modules, "model_tools", fake_model_tools)
-
-    try:
-        from hermes_cli import auth as _auth_mod
-        monkeypatch.setattr(_auth_mod, "get_nous_auth_status_local", lambda: {})
-        monkeypatch.setattr(_auth_mod, "get_codex_auth_status", lambda: {})
-        monkeypatch.setattr(_auth_mod, "get_xai_oauth_auth_status", lambda: {})
-    except Exception:
-        pass
-
-    import io, contextlib
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        doctor_mod.run_doctor(Namespace(fix=False))
-    out = buf.getvalue()
-
-    assert "✓ browser" not in out
-    assert "browser" in out
-    assert "system dependency not met" in out
-    assert "agent-browser is not installed (expected in the tested Termux path)" in out
-    assert "npm install -g agent-browser && agent-browser install" in out
-
-
 def _doctor_env_for_agent_browser(monkeypatch, tmp_path):
-    """Shared non-Termux fixture setup for the agent-browser npx-resolution
+    """Shared fixture setup for the agent-browser npx-resolution
     branch in run_doctor (hermes_cli/doctor.py ~1557-1605)."""
     home = tmp_path / ".hermes"
     home.mkdir(parents=True, exist_ok=True)
@@ -751,7 +669,6 @@ def _doctor_env_for_agent_browser(monkeypatch, tmp_path):
     project = tmp_path / "project"
     project.mkdir(exist_ok=True)
 
-    monkeypatch.delenv("TERMUX_VERSION", raising=False)
     monkeypatch.setenv("PREFIX", "/usr")
     monkeypatch.setattr(doctor_mod, "HERMES_HOME", home)
     monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)

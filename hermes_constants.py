@@ -971,16 +971,6 @@ def resolve_reasoning_config(cfg: dict | None, model: str = "") -> dict | None:
     return result
 
 
-def is_termux() -> bool:
-    """Return True when running inside a Termux (Android) environment.
-
-    Checks ``TERMUX_VERSION`` (set by Termux) or the Termux-specific
-    ``PREFIX`` path.  Import-safe — no heavy deps.
-    """
-    prefix = os.getenv("PREFIX", "")
-    return bool(os.getenv("TERMUX_VERSION") or "com.termux/files/usr" in prefix)
-
-
 _wsl_detected: bool | None = None
 
 

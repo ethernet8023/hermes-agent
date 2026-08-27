@@ -60,7 +60,6 @@ class TestCheckBrowserRequirementsChromium:
     def test_local_mode_with_chromium_returns_true(self, monkeypatch, tmp_path):
         monkeypatch.setattr(bt, "_is_camofox_mode", lambda: False)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda **_kw: "/usr/local/bin/agent-browser")
-        monkeypatch.setattr(bt, "_requires_real_termux_browser_install", lambda _: False)
         monkeypatch.setattr(bt, "_get_cloud_provider", lambda: None)
         monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
         (tmp_path / "chromium-1208").mkdir()

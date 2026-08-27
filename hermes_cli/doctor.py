@@ -70,16 +70,11 @@ _PROVIDER_ENV_HINTS = (
 )
 
 
-from hermes_constants import is_termux as _is_termux
-
-
 def _python_install_cmd() -> str:
-    return "python -m pip install" if _is_termux() else "uv pip install"
+    return "uv pip install"
 
 
 def _system_package_install_cmd(pkg: str) -> str:
-    if _is_termux():
-        return f"pkg install {pkg}"
     if sys.platform == "darwin":
         return f"brew install {pkg}"
     return f"sudo apt install {pkg}"
@@ -239,25 +234,6 @@ def _safe_which(cmd: str) -> str | None:
         return shutil.which(cmd)
     except Exception:
         return None
-
-
-def _termux_browser_setup_steps(node_installed: bool) -> list[str]:
-    steps: list[str] = []
-    step = 1
-    if not node_installed:
-        steps.append(f"{step}) pkg install nodejs")
-        step += 1
-    steps.append(f"{step}) npm install -g agent-browser")
-    steps.append(f"{step + 1}) agent-browser install")
-    return steps
-
-
-def _termux_install_all_fallback_notes() -> list[str]:
-    return [
-        "Matrix E2EE extra is excluded on Termux (python-olm currently fails to build).",
-        "Local faster-whisper extra is excluded on Termux (ctranslate2/av build path unavailable).",
-        "STT fallback: use Groq Whisper (set GROQ_API_KEY) or OpenAI Whisper (set VOICE_TOOLS_OPENAI_KEY).",
-    ]
 
 
 def _has_provider_env_config(content: str) -> bool:
@@ -2649,14 +2625,8 @@ def run_doctor(args):
                 break
 
         # Determine the expected command link directory (mirrors install.sh logic)
-        _prefix = os.environ.get("PREFIX", "")
-        _is_termux_env = bool(os.environ.get("TERMUX_VERSION")) or "com.termux/files/usr" in _prefix
-        if _is_termux_env and _prefix:
-            _cmd_link_dir = Path(_prefix) / "bin"
-            _cmd_link_display = "$PREFIX/bin"
-        else:
-            _cmd_link_dir = Path.home() / ".local" / "bin"
-            _cmd_link_display = "~/.local/bin"
+        _cmd_link_dir = Path.home() / ".local" / "bin"
+        _cmd_link_display = "~/.local/bin"
         _cmd_link = _cmd_link_dir / "hermes"
 
         if _venv_bin is None:
@@ -2783,8 +2753,6 @@ def run_doctor(args):
             )
     elif _safe_which("docker"):
         check_ok("docker", "(optional)")
-    elif _is_termux():
-        check_info("Docker backend is not available inside Termux (expected on Android)")
     elif running_in_container:
         pass  # already explained above
     else:
@@ -2979,12 +2947,6 @@ def run_doctor(args):
                 "agent-browser found but not runnable",
                 f"(broken symlink at {_resolved_ab}? run: npx agent-browser --version)",
             )
-        elif _is_termux():
-            check_info("agent-browser is not installed (expected in the tested Termux path)")
-            check_info("Install it manually later with: npm install -g agent-browser && agent-browser install")
-            check_info("Termux browser setup:")
-            for step in _termux_browser_setup_steps(node_installed=True):
-                check_info(step)
         else:
             check_warn("agent-browser not installed", "(requires npm/npx on PATH)")
 
@@ -2992,9 +2954,8 @@ def run_doctor(args):
         # agent-browser is found but no Playwright-managed Chromium is on disk
         # (tools/browser_tool.py::check_browser_requirements filters them out
         # before the agent ever sees them).  Reuse the exact predicate it uses
-        # so the two checks cannot diverge.  Skip on Termux (not a tested
-        # path).
-        if agent_browser_ok and not _is_termux():
+        # so the two checks cannot diverge.
+        if agent_browser_ok:
             try:
                 # Lazy import: browser_tool is a ~150KB module we don't want
                 # to eagerly load in every `hermes doctor` invocation.
@@ -3037,12 +2998,6 @@ def run_doctor(args):
                                 f"Install with: cd {PROJECT_ROOT} && "
                                 "npx playwright install --with-deps chromium"
                             )
-    elif _is_termux():
-        check_info("Node.js not found (browser tools are optional in the tested Termux path)")
-        check_info("Install Node.js on Termux with: pkg install nodejs")
-        check_info("Termux browser setup:")
-        for step in _termux_browser_setup_steps(node_installed=False):
-            check_info(step)
     else:
         check_warn("Node.js not found", "(optional, needed for browser tools)")
     
@@ -3144,11 +3099,6 @@ def run_doctor(args):
                     )
             except Exception:
                 pass
-
-    if _is_termux():
-        check_info("Termux compatibility fallbacks:")
-        for note in _termux_install_all_fallback_notes():
-            check_info(note)
 
     _section("API Connectivity")
     # Refactor: every connectivity probe below is HTTP-bound and fully

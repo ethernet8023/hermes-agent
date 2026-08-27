@@ -315,71 +315,6 @@ class TestCheckVoiceRequirements:
 # AudioRecorder
 # ============================================================================
 
-class TestCreateAudioRecorder:
-    def test_termux_uses_termux_audio_recorder_when_api_present(self, monkeypatch):
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-
-        from tools.voice_mode import create_audio_recorder, TermuxAudioRecorder
-        recorder = create_audio_recorder()
-
-        assert isinstance(recorder, TermuxAudioRecorder)
-        assert recorder.supports_silence_autostop is False
-
-class TestTermuxAudioRecorder:
-    def test_start_and_stop_use_termux_microphone_commands(self, monkeypatch, temp_voice_dir):
-        command_calls = []
-        output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
-
-        def fake_run(cmd, **kwargs):
-            command_calls.append(cmd)
-            if cmd[1] == "-f":
-                Path(cmd[2]).write_bytes(b"aac-bytes")
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-        monkeypatch.setattr("tools.voice_mode.time.strftime", lambda fmt: "20260409_120000")
-        monkeypatch.setattr("tools.voice_mode.subprocess.run", fake_run)
-
-        from tools.voice_mode import TermuxAudioRecorder
-        recorder = TermuxAudioRecorder()
-        recorder.start()
-        recorder._start_time = time.monotonic() - 1.0
-        result = recorder.stop()
-
-        assert result == str(output_path)
-        assert command_calls[0][:2] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-f"]
-        assert command_calls[1] == ["/data/data/com.termux/files/usr/bin/termux-microphone-record", "-q"]
-
-    def test_cancel_removes_partial_termux_recording(self, monkeypatch, temp_voice_dir):
-        output_path = Path(temp_voice_dir) / "recording_20260409_120000.aac"
-
-        def fake_run(cmd, **kwargs):
-            if cmd[1] == "-f":
-                Path(cmd[2]).write_bytes(b"aac-bytes")
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
-        monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
-        monkeypatch.setattr("tools.voice_mode._termux_microphone_command", lambda: "/data/data/com.termux/files/usr/bin/termux-microphone-record")
-        monkeypatch.setattr("tools.voice_mode._termux_api_app_installed", lambda: True)
-        monkeypatch.setattr("tools.voice_mode.time.strftime", lambda fmt: "20260409_120000")
-        monkeypatch.setattr("tools.voice_mode.subprocess.run", fake_run)
-
-        from tools.voice_mode import TermuxAudioRecorder
-        recorder = TermuxAudioRecorder()
-        recorder.start()
-        recorder.cancel()
-
-        assert output_path.exists() is False
-        assert recorder.is_recording is False
-
-
 class TestAudioRecorder:
     def test_start_raises_without_audio_libs(self, monkeypatch):
         def _fail_import():
@@ -399,7 +334,6 @@ class TestAudioRecorder:
         def _fail_import():
             raise OSError("PortAudio library not found")
         monkeypatch.setattr("tools.voice_mode._import_audio", _fail_import)
-        monkeypatch.setattr("tools.voice_mode._is_termux_environment", lambda: False)
 
         from tools.voice_mode import AudioRecorder
 

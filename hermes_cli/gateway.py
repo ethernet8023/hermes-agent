@@ -1590,12 +1590,6 @@ def _probe_launchd_service_running() -> bool:
 def get_gateway_runtime_snapshot(system: bool = False) -> GatewayRuntimeSnapshot:
     """Return a unified view of gateway liveness for the current profile."""
     gateway_pids = tuple(find_gateway_pids())
-    if is_termux():
-        return GatewayRuntimeSnapshot(
-            manager="Termux / manual process",
-            gateway_pids=gateway_pids,
-        )
-
     from hermes_constants import is_container
 
     if is_linux() and is_container():
@@ -2058,7 +2052,7 @@ def is_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
-from hermes_constants import is_container, is_termux, is_wsl
+from hermes_constants import is_container, is_wsl
 
 
 def _wsl_systemd_operational() -> bool:
@@ -2107,7 +2101,7 @@ def _container_systemd_operational() -> bool:
 
 
 def supports_systemd_services() -> bool:
-    if not is_linux() or is_termux():
+    if not is_linux():
         return False
     if shutil.which("systemctl") is None:
         return False
@@ -3066,8 +3060,6 @@ def get_systemd_linger_status() -> tuple[bool | None, str]:
         (False, "") when linger is disabled.
         (None, detail) when the status could not be determined.
     """
-    if is_termux():
-        return None, "not supported in Termux"
     if not is_linux():
         return None, "not supported on this platform"
 
@@ -3864,7 +3856,7 @@ def _print_linger_enable_warning(username: str, detail: str | None = None) -> No
 
 def _ensure_linger_enabled() -> None:
     """Enable linger when possible so the user gateway survives logout."""
-    if is_termux() or not is_linux():
+    if not is_linux():
         return
 
     import getpass
@@ -7559,14 +7551,6 @@ def gateway_setup():
                 print_info(
                     "  To enable systemd: add systemd=true to /etc/wsl.conf, then 'wsl --shutdown'"
                 )
-            elif is_termux():
-                from hermes_constants import display_hermes_home as _dhh
-
-                print_info("  Termux does not use systemd/launchd services.")
-                print_info("  Run in foreground: hermes gateway run")
-                print_info(
-                    f"  Or start it manually in the background (best effort): nohup hermes gateway run >{_dhh()}/logs/gateway.log 2>&1 &"
-                )
             else:
                 print_info("  Service install not supported on this platform.")
                 print_info("  Run in foreground: hermes gateway run")
@@ -7848,10 +7832,6 @@ def _gateway_command_inner(args):
         force = getattr(args, "force", False)
         system = getattr(args, "system", False)
         run_as_user = getattr(args, "run_as_user", None)
-        if is_termux():
-            print("Gateway service installation is not supported on Termux.")
-            print("Run manually: hermes gateway")
-            sys.exit(1)
         if supports_systemd_services():
             if is_wsl():
                 print_warning(
@@ -7972,12 +7952,6 @@ def _gateway_command_inner(args):
             managed_error("uninstall gateway service")
             return
         system = getattr(args, "system", False)
-        if is_termux():
-            print(
-                "Gateway service uninstall is not supported on Termux because there is no managed service to remove."
-            )
-            print("Stop manual runs with: hermes gateway stop")
-            sys.exit(1)
         if supports_systemd_services():
             systemd_uninstall(system=system)
         elif is_macos():
@@ -8025,12 +7999,6 @@ def _gateway_command_inner(args):
                 )
                 _wait_for_gateway_exit(timeout=10.0, force_after=5.0)
 
-        if is_termux():
-            print(
-                "Gateway service start is not supported on Termux because there is no system service manager."
-            )
-            print("Run manually: hermes gateway")
-            sys.exit(1)
         if supports_systemd_services():
             systemd_start(system=system)
         elif is_macos():
@@ -8377,10 +8345,7 @@ def _gateway_command_inner(args):
                     for line in runtime_lines:
                         print(f"  {line}")
                 print()
-                if is_termux():
-                    print("Termux note:")
-                    print("  Android may stop background jobs when Termux is suspended")
-                elif is_wsl():
+                if is_wsl():
                     print("WSL note:")
                     print(
                         "  The gateway is running in foreground/manual mode (recommended for WSL)."
@@ -8408,11 +8373,7 @@ def _gateway_command_inner(args):
                 print()
                 print("To start:")
                 print("  hermes gateway run      # Run in foreground")
-                if is_termux():
-                    print(
-                        "  nohup hermes gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # Best-effort background start"
-                    )
-                elif is_wsl():
+                if is_wsl():
                     print(
                         "  tmux new -s hermes 'hermes gateway run'         # persistent via tmux"
                     )

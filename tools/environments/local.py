@@ -1767,7 +1767,7 @@ class LocalEnvironment(BaseEnvironment):
     def get_temp_dir(self) -> str:
         """Return a shell-safe writable temp dir for local execution.
 
-        Termux does not provide /tmp by default, but exposes a POSIX TMPDIR.
+        Some Unix hosts do not provide /tmp but do export a POSIX TMPDIR.
         Prefer POSIX-style env vars when available, keep using /tmp on regular
         Unix systems, and only fall back to tempfile.gettempdir() when it also
         resolves to a POSIX path.

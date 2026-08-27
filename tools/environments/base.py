@@ -677,8 +677,8 @@ class BaseEnvironment(ABC):
         """Return the backend temp directory used for session artifacts.
 
         Most sandboxed backends use ``/tmp`` inside the target environment.
-        LocalEnvironment overrides this on platforms like Termux where ``/tmp``
-        may be missing and ``TMPDIR`` is the portable writable location.
+        LocalEnvironment overrides this on hosts where ``/tmp`` may be missing
+        and ``TMPDIR`` is the portable writable location.
         """
         return "/tmp"
 

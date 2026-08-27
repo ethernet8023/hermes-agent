@@ -184,15 +184,12 @@ def _has_agent_browser() -> bool:
     # agent-browser is no longer a root package.json dependency (#43564) — it
     # resolves lazily via npx for most installs, which a bare PATH +
     # node_modules probe can't see. Mirror the local-CLI tail of
-    # :func:`tools.browser_tool.check_browser_requirements` (same cascade, same
-    # Termux carve-out) so the setup/status surfaces can't diverge from what
-    # browser tools actually find at runtime; validate=False keeps this a cheap
-    # existence check with no subprocess spawn.
+    # :func:`tools.browser_tool.check_browser_requirements` (same cascade) so
+    # the setup/status surfaces can't diverge from what browser tools actually
+    # find at runtime; validate=False keeps this a cheap existence check with
+    # no subprocess spawn.
     try:
-        from tools.browser_tool import (
-            _find_agent_browser,
-            _requires_real_termux_browser_install,
-        )
+        from tools.browser_tool import _find_agent_browser
     except Exception:
         # If the runtime probe can't be imported, fall back to binary presence
         # (prior behaviour) rather than crashing the setup/status surface.
@@ -224,12 +221,8 @@ def _has_agent_browser() -> bool:
         return False
 
     try:
-        browser_cmd = _find_agent_browser(validate=False)
+        _find_agent_browser(validate=False)
     except FileNotFoundError:
-        return False
-    # On Termux, the bare npx fallback is too fragile to advertise as ready —
-    # require a real install, matching check_browser_requirements.
-    if _requires_real_termux_browser_install(browser_cmd):
         return False
     return True
 

@@ -157,7 +157,6 @@ class TestLightpandaRequirements:
         with patch("tools.browser_tool._is_camofox_mode", return_value=False), \
              patch("tools.browser_tool._get_cdp_override", return_value=""), \
              patch("tools.browser_tool._find_agent_browser", return_value="/usr/bin/agent-browser"), \
-             patch("tools.browser_tool._requires_real_termux_browser_install", return_value=False), \
              patch("tools.browser_tool._get_cloud_provider", return_value=None), \
              patch("tools.browser_tool._get_browser_engine", return_value="lightpanda"), \
              patch("tools.browser_tool._chromium_installed", return_value=False):
@@ -169,7 +168,6 @@ class TestLightpandaRequirements:
         with patch("tools.browser_tool._is_camofox_mode", return_value=False), \
              patch("tools.browser_tool._get_cdp_override", return_value=""), \
              patch("tools.browser_tool._find_agent_browser", return_value="/usr/bin/agent-browser"), \
-             patch("tools.browser_tool._requires_real_termux_browser_install", return_value=False), \
              patch("tools.browser_tool._get_cloud_provider", return_value=None), \
              patch("tools.browser_tool._get_browser_engine", return_value="auto"), \
              patch("tools.browser_tool._chromium_installed", return_value=False):

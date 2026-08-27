@@ -170,10 +170,6 @@ def _node_symlink_candidate_dirs() -> "list[Path]":
     # Root FHS installs put links in /usr/local/bin.
     if sys.platform == "linux":
         dirs.append(Path("/usr/local/bin"))
-    # Termux installs put links in $PREFIX/bin.
-    prefix = os.environ.get("PREFIX", "")
-    if prefix and "com.termux" in prefix:
-        dirs.append(Path(prefix) / "bin")
     return dirs
 
 
@@ -185,7 +181,6 @@ def remove_node_symlinks(hermes_home: Path) -> list:
     ``hermes`` command:
 
     - ``/usr/local/bin/`` on root FHS installs (Linux, uid 0)
-    - ``$PREFIX/bin/`` on Termux
     - ``~/.local/bin/`` otherwise (the common non-root case)
 
     We check all candidate directories so that uninstall works regardless of
@@ -232,12 +227,11 @@ def uninstall_gateway_service():
     - macOS: launchd plists
     - Windows: Scheduled Task + Startup-folder fallback, via ``gateway_windows``
     - All platforms: standalone ``hermes gateway run`` processes
-    - Termux/Android: skips systemd (no systemd on Android), still kills standalone processes
     """
     import platform
     stopped_something = False
 
-    # 1. Kill any standalone gateway processes (all platforms, including Termux)
+    # 1. Kill any standalone gateway processes (all platforms)
     try:
         from hermes_cli.gateway import kill_gateway_processes, find_gateway_pids
         pids = find_gateway_pids()
@@ -250,12 +244,6 @@ def uninstall_gateway_service():
         log_warn(f"Could not check for gateway processes: {e}")
 
     system = platform.system()
-
-    # Termux/Android has no systemd and no launchd — nothing left to do.
-    prefix = os.getenv("PREFIX", "")
-    is_termux = bool(os.getenv("TERMUX_VERSION") or "com.termux/files/usr" in prefix)
-    if is_termux:
-        return stopped_something
 
     # 2. Linux: uninstall systemd services (both user and system scopes)
     if system == "Linux":

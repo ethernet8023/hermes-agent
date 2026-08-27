@@ -30,7 +30,7 @@ negative costs somebody's install, mid-update, on a half-new tree.
 A dynamic trace (driving real updates and watching imports) has the
 opposite bias and is the wrong tool here for the same reason: one run
 takes one path. It never enters the diverged-history reset, the Windows
-rollback, the termux rung, or the ZIP fallback, so it reports a SMALLER
+rollback, or the ZIP fallback, so it reports a SMALLER
 surface than reality.
 
 THE DYNAMIC PATTERNS THAT MATTER (and why they are not missed)

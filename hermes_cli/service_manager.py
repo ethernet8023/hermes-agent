@@ -92,7 +92,7 @@ def detect_service_manager() -> ServiceManagerKind:
         "windows" — native Windows host
         "launchd" — macOS host
         "systemd" — Linux host with a working user/system bus
-        "none" — anything else (Termux, sandbox shells, etc.)
+        "none" — anything else (sandbox shells, etc.)
 
     This function does NOT replace ``supports_systemd_services()`` —
     host call sites continue to use that. It exists for new backend-

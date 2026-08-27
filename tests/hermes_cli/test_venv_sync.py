@@ -63,26 +63,34 @@ class TestStdlibOnly:
         or conditional imports fire. First-party pm is allowed at SYNC
         time but must not load at IMPORT time either — the bare import
         happens on trees where even reading pm's ledger is premature.
+
+        Measure the *delta*: snapshot the foreign modules already loaded
+        before the import and only flag what the import adds. A hardcoded
+        allowlist of ".pth"-injected bootstrap names is not portable — the
+        interpreter loads ``.pth`` hooks at startup (setuptools'
+        ``_distutils_hack``, pywin32's ``pywin32_bootstrap``, the
+        editable-install ``__editable___…_finder``, ``_virtualenv``…) before
+        the snippet runs, and that set varies per platform and install
+        shape. A before/after diff is sensitive to the import and immune to
+        that harness noise.
         """
         result = _run_bare(
             f"""
             import sys
             sys.path.insert(0, {str(REPO_ROOT)!r})
-            import hermes_cli.venv_sync
-            loaded = {{
-                name.split(".")[0]
-                for name, mod in sys.modules.items()
-                if mod is not None and getattr(mod, "__file__", None)
-            }}
             stdlib = set(sys.stdlib_module_names)
-            foreign = {{
-                n for n in loaded
-                # _virtualenv is the venv machinery's own .pth hook (test
-                # harness noise, loaded before our import runs), not a
-                # dependency of venv_sync.
-                if n not in stdlib and n not in ("hermes_cli", "_virtualenv")
-            }}
-            assert not foreign, f"venv_sync loaded non-stdlib: {{foreign}}"
+
+            def _foreign():
+                return {{
+                    name.split(".")[0]
+                    for name, mod in sys.modules.items()
+                    if mod is not None and getattr(mod, "__file__", None)
+                }} - stdlib
+
+            before = _foreign()
+            import hermes_cli.venv_sync
+            dragged_in = {{n for n in _foreign() - before if n != "hermes_cli"}}
+            assert not dragged_in, f"venv_sync loaded non-stdlib: {{dragged_in}}"
             print("ok")
             """
         )

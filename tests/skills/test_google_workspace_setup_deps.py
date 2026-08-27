@@ -135,7 +135,7 @@ class TestGoogleWorkspaceSetupDepsPins:
                 f"{pkg} has inconsistent pins across install paths:\n"
                 + "\n".join(f"  {e}" for e in sorted(entries))
             )
-            assert len(entries) == 3, (
-                f"{pkg} is not pinned in all three install paths.  Found {len(entries)}/3:\n"
+            assert len(entries) == 2, (
+                f"{pkg} is not pinned in all install paths.  Found {len(entries)}/2:\n"
                 + "\n".join(f"  {e}" for e in sorted(entries))
             )

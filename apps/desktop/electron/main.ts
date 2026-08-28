@@ -268,6 +268,7 @@ import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
 import { LEGACY_OAUTH_PARTITION, resolveOauthPartition } from './oauth-partition'
 import { createParentStartMarkerResolver, parentWatchdogEnv } from './parent-process-identity'
 import { adoptPayloadVenv, isBundledInstall, resolvePayload } from './payload-backend'
+import { checkAppInstallerUpdate, PLACEHOLDER_FEED_BASE_URL, triggerAppInstallerUpdate } from './app-updater'
 import { registerPetOverlayIpc } from './pet-overlay-ipc'
 import {
   buildRegistryProfileRoutes,
@@ -710,7 +711,12 @@ function loadInstallStamp() {
           builtAt: parsed.builtAt || null,
           dirty: Boolean(parsed.dirty),
           source: parsed.source || null,
-          path: p
+          path: p,
+          // Bundled/light artifacts carry these; mirror them so the union
+          // with the baked stamp stays typed (tag/payload drive the App
+          // Installer channel + variant).
+          tag: typeof parsed.tag === 'string' ? parsed.tag : null,
+          payload: parsed.payload === 'light' || parsed.payload === 'bundled' ? parsed.payload : 'bootstrap'
         })
       }
     } catch (e) {
@@ -2909,6 +2915,51 @@ async function resolveHealedBranch(updateRoot, branch) {
 }
 
 async function checkUpdates() {
+  // A bundled install has no checkout to pull — the OS App Installer owns
+  // the update loop for out-of-store MSIX installs. Ask the OS whether a
+  // newer package is available on the registered .appinstaller source.
+  const bundledPayload = resolvePayload(process.resourcesPath, { fileExists, directoryExists, isWindows: IS_WINDOWS })
+  if (bundledPayload) {
+    if (IS_WINDOWS && !isWindowsStore()) {
+      try {
+        const check = await checkAppInstallerUpdate({
+          python: bundledPayload.storePython,
+          // The checker ships inside the payload's repo snapshot (git archive
+          // of the committed tree): <payload>/<repo>/apps/desktop/scripts/.
+          script: path.join(bundledPayload.repoDir, 'apps', 'desktop', 'scripts', 'check-appinstaller-update.py'),
+          run: runPayloadPython
+        })
+
+        return {
+          supported: true,
+          mechanism: 'app-installer',
+          channel: resolveUpdaterChannelFromStamp(),
+          currentVersion: app.getVersion(),
+          latestVersion: null,
+          updateAvailable: check.available === true,
+          // null = unknown (checker unavailable) — surface honestly.
+          error: check.available === null ? (check.error || 'update check unavailable') : undefined,
+          fetchedAt: Date.now()
+        }
+      } catch (error) {
+        return {
+          supported: true,
+          mechanism: 'app-installer',
+          error: 'check-failed',
+          message: error?.message || String(error),
+          fetchedAt: Date.now()
+        }
+      }
+    }
+
+    return {
+      supported: false,
+      reason: 'bundled-not-appinstaller',
+      message: 'bundled install: updates are applied by the installer (Microsoft Store or App Installer).',
+      fetchedAt: Date.now()
+    }
+  }
+
   const updateRoot = resolveUpdateRoot()
   let { branch } = readDesktopUpdateConfig()
   const gitDir = path.join(updateRoot, '.git')
@@ -3134,6 +3185,99 @@ async function readCommitLog(cwd, branch, isShallow) {
 }
 
 let updateInFlight = false
+
+// ── bundled / App Installer helpers ─────────────────────────────────────────
+
+/** True when this process is a Microsoft Store deployment. */
+function isWindowsStore(): boolean {
+  return Boolean((process as any).windowsStore)
+}
+
+/**
+ * The App Installer feed base URL for a bundled MSIX install: config.yaml's
+ * `updates.desktop_feed_base_url`, then HERMES_DESKTOP_FEED_BASE_URL, then
+ * the documented placeholder. Empty only when nothing configured the feed.
+ */
+function resolveDesktopFeedBaseUrl(): string {
+  const configured = readUpdatesFeedBaseFromConfig()
+  if (configured) return configured
+  const env = process.env.HERMES_DESKTOP_FEED_BASE_URL
+  if (env) return env
+  return PLACEHOLDER_FEED_BASE_URL
+}
+
+/** Read `updates.desktop_feed_base_url` from the user's config.yaml. */
+function readUpdatesFeedBaseFromConfig(): string {
+  try {
+    const configPath = path.join(HERMES_HOME, 'config.yaml')
+    if (!fileExists(configPath)) return ''
+    const raw = fs.readFileSync(configPath, 'utf8')
+    const match = raw.match(/^\s*desktop_feed_base_url\s*:\s*(.+)\s*$/m)
+    if (!match) return ''
+    const value = match[1].trim().replace(/^['"]|['"]$/g, '')
+    return value
+  } catch {
+    return ''
+  }
+}
+
+/** The updater channel from the baked install stamp ('nightly' vs 'stable'). */
+function resolveUpdaterChannelFromStamp(): 'stable' | 'nightly' {
+  const tag = INSTALL_STAMP?.tag || ''
+  return /-nightly\./.test(tag) ? 'nightly' : 'stable'
+}
+
+/** True when this artifact is the light (remote-only) variant. */
+function isLightVariant(): boolean {
+  return INSTALL_STAMP?.payload === 'light'
+}
+
+/**
+ * Run a bundled payload python script. The payload python needs the payload
+ * venv's site-packages on PYTHONPATH to import the winrt module — the same
+ * way the CLI shim sets it (bin/shim-target.txt line 2). Without it the
+ * checker would always fail with "winrt import failed".
+ */
+async function runPayloadPython(python: string, script: string): Promise<{ code: number; stdout: string }> {
+  const payload = resolvePayload(process.resourcesPath, { fileExists, directoryExists, isWindows: IS_WINDOWS })
+  const env = { ...process.env }
+  if (payload?.sitePackages) {
+    env.PYTHONPATH = payload.sitePackages
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn(python, [script], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk.toString() })
+    child.stderr.on('data', chunk => { stderr += chunk.toString() })
+    child.on('error', (error) => resolve({ code: 1, stdout: JSON.stringify({ available: null, error: error.message }) }))
+    child.on('close', (code) => {
+      if (stderr) console.error(`[app-installer] checker stderr: ${stderr.slice(0, 400)}`)
+      resolve({ code: code ?? 1, stdout })
+    })
+  })
+}
+
+/**
+ * Graceful teardown before the OS App Installer swaps the package: stop the
+ * primary backend + all pool backends (tree-kill their children) so no
+ * process keeps files in the install dir locked while Windows replaces it.
+ * Same primitive the update hand-off uses (stopBackendTreesForUpdate).
+ */
+async function teardownBundledBackend(): Promise<void> {
+  const hermesProcess = backendConnectionState.getProcess()
+  if (hermesProcess || backendPool.size > 0) {
+    stopBackendTreesForUpdate(hermesProcess, {
+      forceKillProcessTree,
+      stopAllPoolBackends
+    })
+  }
+}
 
 // Set to true when the desktop is about to quit so a detached swap/install/
 // uninstall script can take over. On macOS, app.quit() closes windows but
@@ -3646,6 +3790,40 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
   // A bundled install ships its whole runtime as a sealed payload — there
   // is no checkout to pull or venv to sync. New app release IS the update.
   if (resolvePayload(process.resourcesPath, { fileExists, directoryExists, isWindows: IS_WINDOWS })) {
+    // Out-of-store MSIX installs are App Installer owned: the OS registered
+    // the .appinstaller URI as the update source at install, so "apply"
+    // means run the graceful teardown (backend children holding install-dir
+    // locks must die first — the same teardown the old in-app updater ran
+    // between download and install), then hand the process to the OS App
+    // Installer and quit.
+    if (IS_WINDOWS && !isWindowsStore()) {
+      const feedBaseUrl = resolveDesktopFeedBaseUrl()
+
+      if (feedBaseUrl) {
+        emitUpdateProgress({
+          stage: 'restart',
+          message: 'Applying the Hermes update — the window will close and the App Installer will finish.',
+          percent: 100
+        })
+
+        await triggerAppInstallerUpdate(
+          feedBaseUrl,
+          resolveUpdaterChannelFromStamp(),
+          isLightVariant(),
+          { openExternal: url => shell.openExternal(url) },
+          teardownBundledBackend
+        )
+
+        // The OS App Installer now owns the swap. Quit so no process holds
+        // files in the install dir while Windows replaces the package.
+        app.quit()
+
+        return { ok: true, manual: false, bundled: true }
+      }
+    }
+
+    // No App Installer source (a non-MSIX bundled install, or no feed
+    // configured): the manual card remains the fallback.
     emitUpdateProgress({
       stage: 'manual',
       message: 'bundled install: update by installing the new app release',

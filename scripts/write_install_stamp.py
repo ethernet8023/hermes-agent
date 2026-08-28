@@ -210,15 +210,19 @@ def build_stamp(
     #   light     — NO runtime at all, remote connections only. A Python
     #               process must never read a light stamp: the artifact
     #               contains no Python (the stamp readers raise on it).
-    # bundled and light both pin a release tag: electron-updater keys on
+    #   store     — a Store-submission build: the SAME bundled payload, but a
+    #               different MSIX packaging identity. Stamps as 'bundled'
+    #               so the bundled shape logic (shared userData, steward-
+    #               owned updates, no in-app updater) holds for it too.
+    # bundled, light and store all pin a release tag: electron-updater keys on
     # it, so a tagless artifact of either kind cannot update itself.
     variant = os.environ.get("HERMES_DESKTOP_VARIANT", "").strip()
-    if variant not in ("", "bootstrap", "bundled", "light"):
+    if variant not in ("", "bootstrap", "bundled", "light", "store"):
         raise SystemExit(
             f"write_install_stamp: unknown HERMES_DESKTOP_VARIANT {variant!r} "
-            "(expected unset, 'bootstrap', 'bundled', or 'light')"
+            "(expected unset, 'bootstrap', 'bundled', 'light', or 'store')"
         )
-    payload = variant or "bootstrap"
+    payload = "bundled" if variant == "store" else (variant or "bootstrap")
     tag = os.environ.get("HERMES_PAYLOAD_TAG") or None
     # Stable (vX.Y.Z) and nightly (vX.Y.0-nightly.YYYYMMDDHHMMSS, or the
     # legacy date-only shape) tags are both release-feed keys; anything

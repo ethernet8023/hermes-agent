@@ -1,22 +1,19 @@
-// app-updater.ts — the two-armed in-app updater for bundled desktop installs.
+// app-updater.ts — the update arms for bundled desktop installs.
 //
-// D1-settled design: two platform arms, one renderer-facing surface.
+// D1-settled design: platform arms, one renderer-facing surface.
 //
-//   win32  — Electron's BUILTIN autoUpdater against the MSIX release feed.
-//            The artifact is an MSIX package; the builtin updater is fed a
-//            per-channel feed URL via setFeedURL and drives download +
-//            install itself (update-downloaded → quitAndInstall). Installs
-//            that Windows manages for us — Microsoft Store deployments
-//            (process.windowsStore) and stamps whose updateMechanism is
-//            'external' — get NO in-app updater at all: the store/steward
-//            owns the update loop, and a second updater fighting it corrupts
-//            the package identity.
+//   win32  — the OS App Installer owns the apply. The package was installed
+//            from an .appinstaller, which registered the feed URI as the
+//            package's update source; the OS checks it and swaps the package
+//            wholesale. The app's only job is the checker: ask the OS whether
+//            an update is available (via the bundled payload python's winrt),
+//            show its own prompt, run graceful teardown, then trigger
+//            ms-appinstaller: and quit. Installations that Windows manages
+//            for us — Microsoft Store deployments (process.windowsStore) and
+//            stamps whose updateMechanism is 'external' — get NO in-app
+//            updater at all: the store/steward owns the update loop.
 //   darwin — electron-updater against latest-mac.yml (per-channel feed file
 //            under the release the channel resolves to).
-//
-// Feed URLs come from config (updates.desktop_feed_base_url) with a
-// documented placeholder default: W3's R2 hosting supplies the real base
-// URL. Nothing in this module hardcodes a GitHub Releases URL.
 //
 // Source installs never reach this module. The callers gate on the install
 // stamp first and fall through to the git-based update path.
@@ -39,9 +36,8 @@ import type { UpdateChannel } from './payload-backend'
  * a documented dead end that `resolveFeedBaseUrl` lets config override
  * (`updates.desktop_feed_base_url` in config.yaml). Layout under the base:
  *
- *   <base>/win32/<channel>/            — MSIX feed dir (RELEASES manifest +
- *                                        .msix packages) for the builtin
- *                                        autoUpdater's setFeedURL.
+ *   <base>/win32/<channel>/            — App Installer feed dir (.appinstaller
+ *                                        + .msixbundle) for out-of-store MSIX.
  *   <base>/darwin/<channel>/latest-mac.yml
  *                                      — electron-updater feed file + dmg/zip.
  *
@@ -109,7 +105,7 @@ export function shouldUseAppUpdater(facts: UpdaterGateFacts): boolean {
   return true
 }
 
-export type UpdaterArm = 'win32-builtin' | 'darwin-electron-updater'
+export type UpdaterArm = 'win32-app-installer' | 'darwin-electron-updater'
 
 /**
  * Which updater arm serves `platform`. Linux bundles have no in-app
@@ -118,7 +114,7 @@ export type UpdaterArm = 'win32-builtin' | 'darwin-electron-updater'
  */
 export function selectUpdaterArm(platform: NodeJS.Platform): UpdaterArm | null {
   if (platform === 'win32') {
-    return 'win32-builtin'
+    return 'win32-app-installer'
   }
 
   if (platform === 'darwin') {
@@ -140,19 +136,18 @@ export function resolveUpdaterChannel(channel: UpdateChannel): 'stable' | 'night
 }
 
 /**
- * win32 arm: the MSIX feed URL for the builtin autoUpdater's setFeedURL.
- * One directory per channel; the RELEASES manifest inside it names the
- * newest package. The light variant feeds from its own subtree so the two
- * variants can never serve each other's packages.
+ * The App Installer feed dir for a channel. The .appinstaller for a channel
+ * lives under this dir; the OS re-reads it on launch (HoursBetweenUpdateChecks)
+ * and swaps the bundle when a newer version is there. The light variant feeds
+ * from its own subtree so the two variants can never serve each other's
+ * packages.
  */
-export function win32FeedUrl(
-  baseUrl: string,
+export function win32AppInstallerFeedPath(
   channel: 'stable' | 'nightly',
   light: boolean
 ): string {
   const variant = light ? 'light/' : ''
-
-  return `${baseUrl}/win32/${variant}${channel}/`
+  return `win32/${variant}${channel}/`
 }
 
 /**
@@ -227,126 +222,83 @@ export function describeFeedCheck(
   }
 }
 
-// ─── win32 arm (builtin autoUpdater, MSIX feed) ─────────────────────────────
+// ─── win32 arm (OS App Installer checker + trigger) ────────────────────────
 
-/**
- * The slice of Electron's builtin autoUpdater the win32 arm consumes.
- * Injectable so vitest covers the arm without an Electron runtime.
- */
-export interface BuiltinAutoUpdater {
-  setFeedURL(options: { url: string }): void
-  checkForUpdates(): void
-  quitAndInstall(): void
-  on(event: string, listener: (...args: unknown[]) => void): unknown
-  removeListener(event: string, listener: (...args: unknown[]) => void): unknown
+/** The result of an App Installer update check. */
+export interface AppInstallerCheck {
+  /** null when the check could not run (no winrt, not packaged, error). */
+  available: boolean | null
+  /** Human-readable availability string from the OS, when reported. */
+  availability?: string
+  error?: string
 }
 
-let cachedBuiltin: BuiltinAutoUpdater | null = null
+/**
+ * The payload-python invocation the win32 arm needs. Injectable so vitest
+ * covers the arm without a payload.
+ */
+export interface PayloadPythonRunner {
+  /** Absolute path to the bundled payload python (tools/<entry>/python.exe). */
+  python: string
+  /** The checker script's absolute path. */
+  script: string
+  /** Run the script; resolve with {code, stdout}. */
+  run: (python: string, script: string) => Promise<{ code: number; stdout: string }>
+}
 
-/** Lazy singleton for Electron's builtin autoUpdater (win32 arm). */
-export function getBuiltinAutoUpdater(): BuiltinAutoUpdater {
-  if (cachedBuiltin) {
-    return cachedBuiltin
+/**
+ * win32 arm: ask the OS whether an App Installer update is available, via
+ * the bundled payload python's winrt (PackageManager.CheckPackageUpdateAvailabilityAsync).
+ * The OS compares the package's registered .appinstaller source against the
+ * installed version; it does NOT download anything.
+ */
+export async function checkAppInstallerUpdate(
+  runner: PayloadPythonRunner
+): Promise<AppInstallerCheck> {
+  const { code, stdout } = await runner.run(runner.python, runner.script)
+  const text = stdout.trim()
+  let parsed: { available?: boolean | null; availability?: string; error?: string; reason?: string } | null = null
+  try {
+    parsed = text ? JSON.parse(text) : null
+  } catch {
+    parsed = null
   }
 
-  const { autoUpdater } = require('electron') as { autoUpdater: BuiltinAutoUpdater }
-
-  cachedBuiltin = autoUpdater
-
-  return autoUpdater
+  if (parsed && typeof parsed.available === 'boolean') {
+    return { available: parsed.available, availability: parsed.availability, error: parsed.error }
+  }
+  if (parsed && parsed.available === null) {
+    return { available: null, error: parsed.error || 'checker returned unknown' }
+  }
+  if (code !== 0) {
+    return { available: null, error: parsed?.error || `checker exited ${code}` }
+  }
+  return { available: null, error: 'checker returned no availability' }
 }
 
 /**
- * win32 arm: point the builtin autoUpdater at the channel's MSIX feed and
- * run one check. The builtin updater has no promise API — it announces the
- * outcome through events — so this wraps one check cycle in a promise:
- * `update-available`/`update-not-available` resolve the availability
- * question, `error` rejects, and every listener comes off in all cases
- * (the updater is a process-wide singleton; leaked listeners fire on the
- * NEXT check and double-report).
- *
- * The builtin updater downloads in the background once it announces
- * update-available; `update-downloaded` carries the new version. The
- * caller applies it later via quitAndInstall (applyAppUpdate).
+ * win32 arm: trigger the OS App Installer to apply the update and quit.
+ * `ms-appinstaller:?source=<feed .appinstaller URL>` makes the OS re-read the
+ * package's update source and install the newer bundle; the app then exits so
+ * the package swap is not contested. `beforeInstall` runs first (backend
+ * teardown while the process is still alive).
  */
-export function checkWin32Update(
-  feedUrl: string,
-  updater: BuiltinAutoUpdater = getBuiltinAutoUpdater()
-): Promise<{ updateAvailable: boolean; version: string | null }> {
-  updater.setFeedURL({ url: feedUrl })
-
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      updater.removeListener('update-available', onAvailable)
-      updater.removeListener('update-not-available', onNotAvailable)
-      updater.removeListener('error', onError)
-    }
-
-    const onAvailable = () => {
-      cleanup()
-      resolve({ updateAvailable: true, version: null })
-    }
-
-    const onNotAvailable = () => {
-      cleanup()
-      resolve({ updateAvailable: false, version: null })
-    }
-
-    const onError = (...args: unknown[]) => {
-      cleanup()
-      reject(args[0] instanceof Error ? args[0] : new Error(String(args[0])))
-    }
-
-    updater.on('update-available', onAvailable)
-    updater.on('update-not-available', onNotAvailable)
-    updater.on('error', onError)
-    updater.checkForUpdates()
-  })
-}
-
-/**
- * win32 arm: wait for the background download to finish, run the caller's
- * teardown, then hand the process to the installer. `beforeInstall` runs
- * between `update-downloaded` and quitAndInstall — the caller uses it for
- * backend teardown that must happen while the process is alive (a
- * surviving backend grandchild keeps files in the install directory
- * locked while the package swaps).
- */
-export function applyWin32Update(
-  beforeInstall?: () => void | Promise<void>,
-  updater: BuiltinAutoUpdater = getBuiltinAutoUpdater()
+export async function triggerAppInstallerUpdate(
+  feedBaseUrl: string,
+  channel: 'stable' | 'nightly',
+  light: boolean,
+  shell: { openExternal: (url: string) => Promise<void> },
+  beforeInstall?: () => void | Promise<void>
 ): Promise<{ ok: true }> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      updater.removeListener('update-downloaded', onDownloaded)
-      updater.removeListener('error', onError)
-    }
+  if (beforeInstall) {
+    await beforeInstall()
+  }
 
-    const onDownloaded = async () => {
-      cleanup()
+  const appinstallerUrl =
+    `${feedBaseUrl.replace(/\/+$/, '')}/${win32AppInstallerFeedPath(channel, light)}${channel}.appinstaller`
+  await shell.openExternal(`ms-appinstaller:?source=${encodeURIComponent(appinstallerUrl)}`)
 
-      try {
-        if (beforeInstall) {
-          await beforeInstall()
-        }
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(String(error)))
-
-        return
-      }
-
-      updater.quitAndInstall()
-      resolve({ ok: true })
-    }
-
-    const onError = (...args: unknown[]) => {
-      cleanup()
-      reject(args[0] instanceof Error ? args[0] : new Error(String(args[0])))
-    }
-
-    updater.on('update-downloaded', onDownloaded)
-    updater.on('error', onError)
-  })
+  return { ok: true }
 }
 
 // ─── darwin arm (electron-updater) ──────────────────────────────────────────

@@ -22,11 +22,11 @@ import {
   authHeader,
   canonicalQuery,
   channelForTag,
+  contentTypeFor,
   encodeKeyPath,
   feedDirFor,
   mergeFeedYmls,
   nightlyDoomedKeys,
-  renderReleases,
   rewriteFeedPaths,
   stagingKeyFor,
   parseListXml,
@@ -183,14 +183,14 @@ test('stagingKeyFor + feedDirFor produce the layout keys', () => {
   assert.equal(feedDirFor('darwin', 'nightly'), 'releases/darwin/nightly')
 })
 
-test('renderReleases emits Squirrel manifest lines with the absolute object key', () => {
-  const text = renderReleases([
-    { sha1: 'a'.repeat(40), size: 123, filename: '/releases/tag/v0.28.0/HermesBundled-0.28.0-win-arm64.msix' },
-    { sha1: 'b'.repeat(40), size: 456, filename: '/releases/tag/v0.28.0/HermesBundled-0.28.0-win-x64.msix' },
-  ])
-  assert.equal(text,
-    `${'a'.repeat(40)} 123 /releases/tag/v0.28.0/HermesBundled-0.28.0-win-arm64.msix\n` +
-    `${'b'.repeat(40)} 456 /releases/tag/v0.28.0/HermesBundled-0.28.0-win-x64.msix\n`)
+test('contentTypeFor maps MSIX / App Installer artifacts to their MIME types', () => {
+  assert.equal(contentTypeFor('HermesBundled-0.28.0-win-x64.msix'), 'application/msix')
+  assert.equal(contentTypeFor('HermesBundled-0.28.0-win.msixbundle'), 'application/msixbundle')
+  assert.equal(contentTypeFor('stable.appinstaller'), 'application/appinstaller')
+  assert.equal(contentTypeFor('HermesBundled-0.28.0-mac-x64.dmg'), undefined)
+  assert.equal(contentTypeFor('latest-mac.yml'), undefined)
+  // Case-insensitive on the suffix.
+  assert.equal(contentTypeFor('X.APPINSTALLER'), 'application/appinstaller')
 })
 
 test('rewriteFeedPaths rewrites path:/url: to absolute /releases/tag keys, idempotent', () => {

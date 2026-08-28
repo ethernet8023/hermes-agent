@@ -15,12 +15,19 @@ const path = require('node:path')
 
 const {
   light,
+  store,
+  storeMsix,
   displayName,
   appId,
   appNamePascal,
   channel,
   msixAppIdWithOrg
 } = require('./product-identity.cjs')
+
+// The out-of-store MSIX publisher (ATS cert subject) — single source, shared
+// with the .appinstaller generator so the manifest and the App Installer can
+// never drift (see scripts/msix-shared.mjs).
+const { OUT_OF_STORE_PUBLISHER } = require('../../scripts/msix-shared.mjs')
 
 /** @typedef {import("app-builder-lib").Configuration} Configuration */
 
@@ -45,19 +52,25 @@ module.exports = {
       schemes: ['hermes']
     }
   ],
-  artifactName: `${appNamePascal}-\${version}-\${os}-\${arch}.\${ext}`,
+  // A store build is archived, never served to a feed — prefix its artifact
+  // so it can't collide with the out-of-store MSIX of the same tag/arch, and
+  // the release pipeline can keep the two apart.
+  artifactName: `${store ? 'Store-' : ''}${appNamePascal}-\${version}-\${os}-\${arch}.\${ext}`,
   icon: 'assets/icon',
   // The electron-updater feed. CI builds set CLOUDFLARE_R2_PUBLIC_URL (the R2
   // public bucket / custom domain) and publish there — the feed yml, blockmaps
   // and installers all live in the same flat R2 bucket, and electron-updater
   // resolves the yml's relative artifact paths against it. Builds without the
   // var (local, or a fork without the R2 vars) keep the github provider, which
-  // is exactly today's behavior.
-  publish: [
-    process.env.CLOUDFLARE_R2_PUBLIC_URL
-      ? { provider: 'generic', url: process.env.CLOUDFLARE_R2_PUBLIC_URL.replace(/\/+$/, ''), channel }
-      : { provider: 'github', owner, repo, channel }
-  ],
+  // is exactly today's behavior. The store build has no feed at all (the Store
+  // owns its distribution and updates).
+  publish: store
+    ? null
+    : [
+        process.env.CLOUDFLARE_R2_PUBLIC_URL
+          ? { provider: 'generic', url: process.env.CLOUDFLARE_R2_PUBLIC_URL.replace(/\/+$/, ''), channel }
+          : { provider: 'github', owner, repo, channel }
+      ],
   extraMetadata: {
     name: appNamePascal,
     desktopName: appId
@@ -150,11 +163,14 @@ module.exports = {
     ...windowsSigning()
   },
   msix: {
-    identityName: msixAppIdWithOrg,
+    // A store build uses the Partner Center packaging identity (the Store
+    // re-signs + rewrites the publisher on submission); everything else uses
+    // the out-of-store ATS-cert identity.
+    identityName: store ? storeMsix.identityName : msixAppIdWithOrg,
     applicationId: appNamePascal,
     displayName,
-    publisher: 'CN=Nous Research Inc., O=Nous Research Inc., L=Austin, S=Texas, C=US',
-    publisherDisplayName: 'Nous Research',
+    publisher: store ? storeMsix.publisher : OUT_OF_STORE_PUBLISHER,
+    publisherDisplayName: store ? storeMsix.publisherDisplayName : 'Nous Research',
     // Floor Windows 11 22H2. Below build 18307 the manifest schema caps
     // AppExtension Name at 39 chars and Microsoft's own
     // "com.microsoft.windows.copilotkeyprovider" is 40 (makeappx

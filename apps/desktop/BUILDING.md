@@ -29,7 +29,7 @@ cua-driver) is digest-pinned and staged at build time.
 
 | Platform | Artifact | Notes |
 |---|---|---|
-| Windows | MSIX `.msix` | The shipping artifact. Signed with Azure Trusted Signing. Updated in-app via Electron's builtin autoUpdater MSIX path. |
+| Windows | MSIX `.msix` / `.msixbundle` | The shipping artifact. Signed with Azure Trusted Signing. Out-of-store installs update via the OS App Installer (.appinstaller source; the app checks + prompts, the OS applies). Store-submission builds (HERMES_DESKTOP_VARIANT=store) use the Partner Center identity and update via the Store. |
 | macOS | `.dmg` | Signed and notarized when the `APPLE_*` / `CSC_*` secrets are set. Updated via electron-updater against the `latest-mac.yml` feed. |
 | Linux | unpacked / AppImage | Unsigned. |
 

@@ -39,8 +39,8 @@ const variant = args.find(a => a.startsWith('--variant='))?.slice('--variant='.l
 const dashDash = process.argv.indexOf('--')
 const extraBuilderArgs = dashDash === -1 ? [] : process.argv.slice(dashDash + 1)
 
-if (!['bundled', 'light'].includes(variant)) {
-  fail(`--variant must be 'bundled' or 'light', got '${variant}'`)
+if (!['bundled', 'light', 'store'].includes(variant)) {
+  fail(`--variant must be 'bundled', 'light', or 'store', got '${variant}'`)
 }
 
 function fail(message) {

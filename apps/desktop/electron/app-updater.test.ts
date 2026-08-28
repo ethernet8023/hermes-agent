@@ -4,8 +4,7 @@ import { test } from 'vitest'
 
 import {
   applyDarwinUpdate,
-  applyWin32Update,
-  checkWin32Update,
+  checkAppInstallerUpdate,
   describeFeedCheck,
   feedSelection,
   PLACEHOLDER_FEED_BASE_URL,
@@ -13,7 +12,8 @@ import {
   resolveUpdaterChannel,
   selectUpdaterArm,
   shouldUseAppUpdater,
-  win32FeedUrl
+  triggerAppInstallerUpdate,
+  win32AppInstallerFeedPath
 } from './app-updater'
 
 // ── gate ────────────────────────────────────────────────────────────
@@ -56,12 +56,12 @@ test('externally-managed stamps get no in-app updater', () => {
 // ── arm selection ───────────────────────────────────────────────────
 
 test('each platform gets its settled arm', () => {
-  assert.equal(selectUpdaterArm('win32'), 'win32-builtin')
+  assert.equal(selectUpdaterArm('win32'), 'win32-app-installer')
   assert.equal(selectUpdaterArm('darwin'), 'darwin-electron-updater')
   assert.equal(selectUpdaterArm('linux'), null)
 })
 
-// ── channel folding + feed URLs ─────────────────────────────────────
+// ── channel folding + feed paths ───────────────────────────────────
 
 test('main folds to stable for feed purposes; nightly stays', () => {
   // Bundled artifacts only have two feeds — 'main' is a git-branch
@@ -78,13 +78,11 @@ test('the feed base URL comes from config, defaulting to the documented placehol
   assert.equal(resolveFeedBaseUrl('https://r2.example.com/feeds/'), 'https://r2.example.com/feeds')
 })
 
-test('win32 MSIX feed URLs are per-channel and per-variant', () => {
-  const base = 'https://r2.example.com/feeds'
-
-  assert.equal(win32FeedUrl(base, 'stable', false), 'https://r2.example.com/feeds/win32/stable/')
-  assert.equal(win32FeedUrl(base, 'nightly', false), 'https://r2.example.com/feeds/win32/nightly/')
-  assert.equal(win32FeedUrl(base, 'stable', true), 'https://r2.example.com/feeds/win32/light/stable/')
-  assert.equal(win32FeedUrl(base, 'nightly', true), 'https://r2.example.com/feeds/win32/light/nightly/')
+test('win32 App Installer feed paths are per-channel and per-variant', () => {
+  assert.equal(win32AppInstallerFeedPath('stable', false), 'win32/stable/')
+  assert.equal(win32AppInstallerFeedPath('nightly', false), 'win32/nightly/')
+  assert.equal(win32AppInstallerFeedPath('stable', true), 'win32/light/stable/')
+  assert.equal(win32AppInstallerFeedPath('nightly', true), 'win32/light/nightly/')
 })
 
 // ── darwin feedSelection ────────────────────────────────────────────
@@ -138,14 +136,14 @@ test('feed check reports an available update when versions differ', () => {
 })
 
 test('feed check reports up to date when versions match', () => {
-  const out = describeFeedCheck('win32-builtin', '0.17.0', { version: '0.17.0' })
+  const out = describeFeedCheck('win32-app-installer', '0.17.0', { version: '0.17.0' })
 
   assert.equal(out.updateAvailable, false)
   assert.equal(out.latestVersion, '0.17.0')
 })
 
 test('feed check tolerates a missing update info payload', () => {
-  const out = describeFeedCheck('win32-builtin', '0.17.0', null)
+  const out = describeFeedCheck('win32-app-installer', '0.17.0', null)
 
   assert.equal(out.updateAvailable, false)
   assert.equal(out.latestVersion, null)
@@ -155,87 +153,76 @@ test('a null arm reports unsupported', () => {
   assert.equal(describeFeedCheck(null, '0.17.0', null).supported, false)
 })
 
-// ── win32 arm (builtin autoUpdater) ─────────────────────────────────
+// ── win32 arm (OS App Installer checker + trigger) ─────────────────
 
-type Listener = (...args: unknown[]) => void
-
-function fakeBuiltin(calls: string[]) {
-  const listeners = new Map<string, Listener[]>()
-
+function fakePayloadRunner(stdout: string, code = 0) {
+  const calls: string[] = []
   return {
-    updater: {
-      setFeedURL: (options: { url: string }) => void calls.push(`feed:${options.url}`),
-      checkForUpdates: () => void calls.push('check'),
-      quitAndInstall: () => void calls.push('install'),
-      on: (event: string, listener: Listener) => {
-        listeners.set(event, [...(listeners.get(event) ?? []), listener])
-      },
-      removeListener: (event: string, listener: Listener) => {
-        listeners.set(event, (listeners.get(event) ?? []).filter(l => l !== listener))
+    runner: {
+      python: 'C:\\payload\\tools\\cpython\\python.exe',
+      script: 'C:\\payload\\scripts\\check-appinstaller-update.py',
+      run: async (python: string, script: string) => {
+        calls.push(`${python} ${script}`)
+        return { code, stdout }
       }
-    },
-    emit: (event: string, ...args: unknown[]) => {
-      for (const listener of [...(listeners.get(event) ?? [])]) {
-        listener(...args)
-      }
-    },
-    count: (event: string) => (listeners.get(event) ?? []).length
+    } as any,
+    calls
   }
 }
 
-test('win32 check sets the channel feed before checking and resolves on the verdict', async () => {
+test('win32 check reports available when the OS says a newer package exists', async () => {
+  const { runner } = fakePayloadRunner(JSON.stringify({ available: true, availability: 'Available' }))
+  const result = await checkAppInstallerUpdate(runner)
+
+  assert.equal(result.available, true)
+  assert.equal(result.availability, 'Available')
+})
+
+test('win32 check reports not-available cleanly', async () => {
+  const { runner } = fakePayloadRunner(JSON.stringify({ available: false, availability: 'NoApplicableUpdate' }))
+  const result = await checkAppInstallerUpdate(runner)
+
+  assert.equal(result.available, false)
+})
+
+test('win32 check surfaces an unknown verdict (missing winrt) without crashing', async () => {
+  const { runner } = fakePayloadRunner(JSON.stringify({ available: null, error: 'winrt import failed' }), 1)
+  const result = await checkAppInstallerUpdate(runner)
+
+  assert.equal(result.available, null)
+  assert.match(result.error || '', /winrt import failed/)
+})
+
+test('win32 trigger opens ms-appinstaller with the channel .appinstaller after teardown', async () => {
   const calls: string[] = []
-  const fake = fakeBuiltin(calls)
-  const pending = checkWin32Update('https://r2.example.com/feeds/win32/nightly/', fake.updater)
+  const shell = {
+    openExternal: async (url: string) => void calls.push(`open:${url}`)
+  }
 
-  assert.deepEqual(calls, ['feed:https://r2.example.com/feeds/win32/nightly/', 'check'])
-  fake.emit('update-available')
+  const result = await triggerAppInstallerUpdate(
+    'https://updates.example.com/',
+    'stable',
+    false,
+    shell as any,
+    () => void calls.push('teardown')
+  )
 
-  const result = await pending
-
-  assert.equal(result.updateAvailable, true)
-  // Every listener came off — the singleton must not double-report on the
-  // NEXT check.
-  assert.equal(fake.count('update-available'), 0)
-  assert.equal(fake.count('update-not-available'), 0)
-  assert.equal(fake.count('error'), 0)
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls, [
+    'teardown',
+    'open:ms-appinstaller:?source=https%3A%2F%2Fupdates.example.com%2Fwin32%2Fstable%2Fstable.appinstaller'
+  ])
 })
 
-test('win32 check resolves false when the feed has nothing newer', async () => {
-  const fake = fakeBuiltin([])
-  const pending = checkWin32Update('https://r2.example.com/feeds/win32/stable/', fake.updater)
-
-  fake.emit('update-not-available')
-  assert.equal((await pending).updateAvailable, false)
-})
-
-test('win32 check rejects on updater error and detaches listeners', async () => {
-  const fake = fakeBuiltin([])
-  const pending = checkWin32Update('https://r2.example.com/feeds/win32/stable/', fake.updater)
-
-  fake.emit('error', new Error('feed unreachable'))
-  await assert.rejects(pending, /feed unreachable/)
-  assert.equal(fake.count('error'), 0)
-})
-
-test('win32 apply runs beforeInstall between the download and the install', async () => {
+test('win32 trigger light+nightly targets the light nightly feed dir', async () => {
   const calls: string[] = []
-  const fake = fakeBuiltin(calls)
-  const pending = applyWin32Update(() => void calls.push('teardown'), fake.updater)
+  const shell = {
+    openExternal: async (url: string) => void calls.push(url)
+  }
 
-  fake.emit('update-downloaded')
-  await pending
-  assert.deepEqual(calls, ['teardown', 'install'])
-})
+  await triggerAppInstallerUpdate('https://updates.example.com', 'nightly', true, shell as any)
 
-test('a failed win32 download installs nothing and skips beforeInstall', async () => {
-  const calls: string[] = []
-  const fake = fakeBuiltin(calls)
-  const pending = applyWin32Update(() => void calls.push('teardown'), fake.updater)
-
-  fake.emit('error', new Error('download failed'))
-  await assert.rejects(pending, /download failed/)
-  assert.deepEqual(calls, [])
+  assert.equal(calls[0], 'ms-appinstaller:?source=https%3A%2F%2Fupdates.example.com%2Fwin32%2Flight%2Fnightly%2Fnightly.appinstaller')
 })
 
 // ── darwin arm (electron-updater) ───────────────────────────────────

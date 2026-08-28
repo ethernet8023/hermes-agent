@@ -22,14 +22,18 @@ const variants = {
   }
 }
 
-const variant = process.env.HERMES_DESKTOP_VARIANT
-if (variant !== 'light' && variant !== 'bundled' && variant !== '' && variant !== undefined) {
-  throw new Error(`Unknown HERMES_DESKTOP_VARIANT ${variant}. expected one of (empty), light, bundled`)
+const variant = process.env.HERMES_DESKTOP_VARIANT || ''
+if (!['', 'light', 'bundled', 'store'].includes(variant)) {
+  throw new Error(`Unknown HERMES_DESKTOP_VARIANT ${variant}. expected one of (empty), light, bundled, store`)
 }
 
-const name = variants[variant ?? '']
-
-const light = process.env.HERMES_DESKTOP_VARIANT === 'light'
+// 'store' is a Store-submission packaging identity layered on the bundled
+// variant: same Electron app (displayName/appId/appNamePascal -> shared
+// userData + single-instance lock with the out-of-store install), different
+// MSIX package identity. The Store re-signs on submission.
+const store = variant === 'store'
+const light = variant === 'light'
+const name = variants[store ? 'bundled' : (variant || '')]
 
 // The electron-updater feed channel this build PUBLISHES to. A nightly
 // tag (vX.Y.0-nightly.YYYYMMDDHHMMSS) writes nightly.yml / light-nightly.yml;
@@ -42,12 +46,26 @@ const nightly = /-nightly\.20\d{6}(?:\d{6})?$/.test(process.env.HERMES_PAYLOAD_T
 
 /** @type {ProductIdentity} */
 const identity = {
+  store,
   light,
   displayName: name.display,
   appId: `com.nousresearch.${name.kebab}`,
-  channel: light ? (nightly ? 'light-nightly' : 'light') : (nightly ? 'nightly' : 'latest'),
+  // The store build never publishes to a release feed (the Store owns its
+  // updates); null means "no feed" for its publish config.
+  channel: store ? null : light ? (nightly ? 'light-nightly' : 'light') : (nightly ? 'nightly' : 'latest'),
   appNamePascal: name.pascal,
-  msixAppIdWithOrg: `NousResearch.${name.pascal}`
+  msixAppIdWithOrg: `NousResearch.${name.pascal}`,
+  ...(store
+    ? {
+        storeMsix: {
+          // Partner Center publisher identity (the account's publisher ID) —
+          // validated + re-signed by the Store on submission.
+          identityName: 'NousResearchInc.HermesAgent',
+          publisher: 'CN=EE6D86E4-606F-4E38-B940-AD7248C9D519',
+          publisherDisplayName: 'Nous Research Inc.'
+        }
+      }
+    : {})
 }
 
 module.exports = identity

@@ -4,15 +4,17 @@ name: Desktop Bundled Release
 #
 #   tag validation → 6-target matrix → pm bundle → electron-builder
 #   → stage artifacts to R2 (releases/tag/<tag>/) → finalize job merges
-#   the per-channel feeds (releases/win32/<ch>/RELEASES + msix,
-#   releases/darwin/<ch>/<channel>-mac.yml + dmg/zip) → builds table.
+#   the darwin feeds (releases/darwin/<ch>/<channel>-mac.yml + dmg/zip),
+#   the msixbundle job stages the win32 App Installer feeds
+#   (releases/win32/<ch>/*.appinstaller + *.msixbundle) → builds table.
 #   The GitHub release keeps the notes only — no binaries.
 #
 # Feed layout (matches apps/desktop/electron/app-updater.ts's arms):
-#   releases/win32/<stable|nightly>/RELEASES   builtin autoUpdater (MSIX)
+#   releases/win32/<stable|nightly>/<ch>.appinstaller   App Installer feed
+#     releases/win32/<stable|nightly>/*.msixbundle      (msixbundle job)
 #   releases/darwin/<stable|nightly>/*-mac.yml electron-updater (dmg/zip)
-# The finalize job writes the feeds ONCE after the whole matrix is green,
-# so a failed leg can never publish a partial channel.
+# The finalize + msixbundle jobs write the feeds ONCE after the whole matrix
+# is green, so a failed leg can never publish a partial channel.
 #
 # Payload staging is `hermes pm bundle` on the native runner. There is
 # no cross-target staging. Signing and notarization are a later commit;
@@ -355,6 +357,12 @@ jobs:
             echo "file descriptor limit: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
           fi
           node scripts/build-bundled-desktop.mjs --tag="$HERMES_PAYLOAD_TAG" --variant=bundled
+          # The Store-submission MSIX is the same bundled payload re-packed
+          # with the Partner Center packaging identity (msixbundle job uploads
+          # it to the tag archive; it never enters a feed dir).
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            node scripts/build-bundled-desktop.mjs --tag="$HERMES_PAYLOAD_TAG" --variant=store
+          fi
 
       - name: Audit bundle architecture
         shell: bash
@@ -363,40 +371,16 @@ jobs:
           node apps/desktop/scripts/audit-bundle-arch.mjs \
             --arch="${MATRIX_LABEL##*-}" --root=apps/desktop/release
 
-      - name: Compute release hashes
-        shell: bash
-        run: |
-          label="${{ matrix.target.label }}"
-          mkdir -p release-meta
-          out="release-meta/hashes-$label.json"
-          {
-            echo '['
-            first=1
-            for f in apps/desktop/release/*.msix; do
-              [ -f "$f" ] || continue
-              [ $first -eq 0 ] && echo ','
-              first=0
-              size=$(stat -c%s "$f")
-              sha1=$(sha1sum "$f" | awk '{print $1}')
-              printf '{"filename":"%s","sha1":"%s","size":%s}' "$(basename "$f")" "$sha1" "$size"
-            done
-            echo ''
-            echo ']'
-          } > "$out"
-          cat "$out"
-
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          # Only the metadata finalize needs: per-leg msix hashes (sha1+size
-          # for the win32 RELEASES feed) + the mac feed ymls. The binaries
-          # themselves go straight to R2 from each leg; finalize computes the
-          # feed manifests from these, so no multi-hundred-MB artifact
-          # round-trip per nightly.
+          # The mac feed ymls for finalize + (win32 legs) the actual .msix +
+          # Store-.msix binaries for the msixbundle job to bundle and stage.
+          # The mac/linux/AppImage binaries go straight to R2 from each leg.
           name: hermes-bundled-${{ matrix.target.label }}-${{ inputs.tag }}
           path: |
-            release-meta/hashes-*.json
             apps/desktop/release/*-mac.yml
+            apps/desktop/release/*.msix
           retention-days: 30
           if-no-files-found: warn
 
@@ -409,6 +393,8 @@ jobs:
         # failed leg cannot publish a partial feed.
         run: |
           shopt -s nullglob
+          # Store-*.msix are archived by the dedicated loop below — exclude
+          # them here so they are not uploaded twice.
           files=(apps/desktop/release/*.dmg apps/desktop/release/*.zip \
                  apps/desktop/release/*.msix \
                  apps/desktop/release/*.AppImage \
@@ -418,6 +404,16 @@ jobs:
             echo "::error::no release artifacts found"; exit 1
           fi
           for f in "${files[@]}"; do
+            case "$f" in
+              */Store-*) continue ;;  # archived by the Store loop below
+            esac
+            node scripts/r2-release.mjs put \
+              --tag "$HERMES_PAYLOAD_TAG" --key "$(basename "$f")" --file "$f"
+          done
+          # The Store-submission MSIX (built by the win legs) goes to the tag
+          # archive too — hidden from the builds table and never a feed dir.
+          for f in apps/desktop/release/Store-*.msix; do
+            [ -f "$f" ] || continue
             node scripts/r2-release.mjs put \
               --tag "$HERMES_PAYLOAD_TAG" --key "$(basename "$f")" --file "$f"
           done
@@ -450,6 +446,64 @@ jobs:
           CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
         run: node scripts/r2-release.mjs finalize --tag "$HERMES_PAYLOAD_TAG" --dir staged
 
+  msixbundle:
+    name: Bundle the win32 MSIX feeds
+    needs: [build]
+    if: inputs.upload_release == true
+    runs-on: windows-2025
+    environment: release-signing
+    timeout-minutes: 45
+    env:
+      HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+      CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+      CLOUDFLARE_R2_PUBLIC_URL: ${{ vars.CLOUDFLARE_R2_PUBLIC_URL }}
+      AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
+      AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
+      AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
+      AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
+    steps:
+      - name: Download win legs' MSIX
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: hermes-bundled-win32-*-${{ inputs.tag }}
+          path: apps/desktop/release
+          merge-multiple: true
+
+      - name: Azure login (OIDC)
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Mint federated token for the signing dlib
+        shell: bash
+        run: |
+          file="$RUNNER_TEMP/azure-federated-token"
+          mint() {
+            curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+              | jq -r .value > "$file.tmp" && mv -f "$file.tmp" "$file"
+          }
+          mint
+          ( while sleep 240; do mint || true; done ) &
+          echo "AZURE_FEDERATED_TOKEN_FILE=$file" >> "$GITHUB_ENV"
+
+      - name: Bundle + stage the MSIX feeds
+        shell: bash
+        env:
+          AZURE_TOKEN_CREDENTIALS: prod
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+        run: |
+          # Out-of-store feed (bundled variant): universal .msixbundle +
+          # .appinstaller per channel; plus re-upload the Store-submission
+          # .msix to the tag archive (never a feed dir).
+          node scripts/stage-msixbundle.mjs --tag "$HERMES_PAYLOAD_TAG" --variant bundled
+
   builds-pending:
     name: Mark the builds table as in progress
     if: inputs.upload_release == true
@@ -472,7 +526,7 @@ jobs:
 
   builds-table:
     name: Render the release builds table
-    needs: [build, finalize]
+    needs: [build, msixbundle, finalize]
     if: inputs.upload_release == true
     runs-on: ubuntu-24.04
     environment: release-signing
@@ -497,13 +551,14 @@ jobs:
 
   publish-nightly:
     name: Publish the nightly release
-    needs: [build, builds-table, finalize]
+    needs: [build, builds-table, msixbundle, finalize]
     if: |
       always()
       && inputs.upload_release == true
       && contains(inputs.tag, '-nightly.')
       && needs.build.result == 'success'
       && needs.builds-table.result == 'success'
+      && needs.msixbundle.result == 'success'
       && needs.finalize.result == 'success'
     runs-on: ubuntu-24.04
     steps:

@@ -18,8 +18,9 @@
 //
 // Bucket layout (matches app-updater.ts's D1-settled arms):
 //   releases/tag/<tag>/<filename>          immutable per-release staging/archive
-//   releases/win32/<channel>/RELEASES      builtin autoUpdater (Squirrel MSIX
-//     releases/win32/<channel>/*.msix      feed) — setFeedURL targets this dir
+//   releases/win32/<channel>/<channel>.appinstaller   App Installer feed
+//     releases/win32/<channel>/*.msixbundle           (produced by the
+//                                                     msixbundle job)
 //   releases/darwin/<channel>/<channel>-mac.yml   electron-updater feed
 //     releases/darwin/<channel>/*.{dmg,zip,blockmap}
 // where <channel> is stable | nightly (from the tag: -nightly. → nightly).
@@ -29,6 +30,12 @@ import { createHash, createHmac } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { contentTypeFor } from './msix-shared.mjs'
+
+// Re-exported for the r2 test (the Content-Type mapping is shared with the
+// stage job; msix-shared.mjs is the single source).
+export { contentTypeFor } from './msix-shared.mjs'
 
 const REGION = 'auto'
 const SERVICE = 's3'
@@ -133,12 +140,16 @@ function requiredEnv(name) {
   return value
 }
 
-function r2Headers(method, host, path, query, bodyHash, now, creds) {
+function r2Headers(method, host, path, query, bodyHash, now, creds, contentType) {
   const headers = {
     host,
     'x-amz-date': now,
     'x-amz-content-sha256': bodyHash,
   }
+  // Optional Content-Type for binary artifacts (App Installer / MSIX). It is
+  // added BEFORE the Authorization header is computed, so it lands in the
+  // SigV4 canonical headers + SignedHeaders exactly like host / x-amz-*.
+  if (contentType) headers['Content-Type'] = contentType
   headers.authorization = authHeader({
     method,
     host,
@@ -153,10 +164,10 @@ function r2Headers(method, host, path, query, bodyHash, now, creds) {
   return headers
 }
 
-async function signedFetch(method, url, { body, bodyHash, creds, now }) {
+async function signedFetch(method, url, { body, bodyHash, creds, now, contentType }) {
   const { host, pathname, search } = new URL(url)
   const query = search.replace(/^\?/, '')
-  const headers = r2Headers(method, host, pathname, query, bodyHash, now, creds)
+  const headers = r2Headers(method, host, pathname, query, bodyHash, now, creds, contentType)
   const res = await fetch(url, {
     method,
     headers,
@@ -196,6 +207,9 @@ export function channelForTag(tag) {
   return /-nightly\.20\d{6}(?:\d{6})?$/.test(tag) ? 'nightly' : 'stable'
 }
 
+// Content-Type for MSIX / App Installer artifacts lives in msix-shared.mjs
+// (single source — the same suffixes must drive the stage job's uploads).
+
 /** Immutable per-release staging key. */
 export function stagingKeyFor(tag, filename) {
   return `releases/tag/${tag}/${filename}`
@@ -204,13 +218,6 @@ export function stagingKeyFor(tag, filename) {
 /** The feed directory key for a platform arm + channel, e.g. releases/win32/stable/. */
 export function feedDirFor(platform, channel) {
   return `releases/${platform}/${channel}`
-}
-
-/** Squirrel.Windows RELEASES manifest: one '<sha1> <size> <filename>' line per package, newest first. */
-export function renderReleases(packages) {
-  return packages
-    .map((p) => `${p.sha1} ${p.size} ${p.filename}`)
-    .join('\n') + '\n'
 }
 
 /**
@@ -319,11 +326,11 @@ export function rewriteFeedPaths(ymlText, absKey) {
 // Commands
 // ---------------------------------------------------------------------------
 
-async function putObject(creds, base, bucket, key, buffer, now) {
+async function putObject(creds, base, bucket, key, buffer, now, contentType) {
   const bodyHash = sha256hex(buffer)
   const url = `${base}/${bucket}/${encodeKeyPath(key)}`
   await retry(async () => {
-    const { res, text } = await signedFetch('PUT', url, { body: buffer, bodyHash, creds, now })
+    const { res, text } = await signedFetch('PUT', url, { body: buffer, bodyHash, creds, now, contentType })
     if (!res.ok) throw new Error(`PUT ${key} -> ${res.status}${text ? `: ${text.slice(0, 300)}` : ''}`)
   })
   const { res: headRes, text: headText } = await retry(async () => {
@@ -339,7 +346,7 @@ async function putObject(creds, base, bucket, key, buffer, now) {
   console.log(`✓ r2: ${key} (${buffer.length} bytes)`)
 }
 
-async function cmdPut({ tag, key, file }) {
+async function cmdPut({ tag, key, file, keyIsFull = false }) {
   const accountId = requiredEnv('CLOUDFLARE_R2_ACCOUNT_ID')
   const accessKeyId = requiredEnv('CLOUDFLARE_R2_ACCESS_KEY_ID')
   const secretKey = requiredEnv('CLOUDFLARE_R2_SECRET_ACCESS_KEY')
@@ -349,7 +356,11 @@ async function cmdPut({ tag, key, file }) {
 
   const buffer = fs.readFileSync(file)
   const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
-  await putObject(creds, base, bucket, stagingKeyFor(tag, key), buffer, now)
+  // Feed-dir uploads (win32/<ch>/…, darwin/<ch>/…) pass the FULL object key
+  // (keyIsFull) so they land under releases/win32/…, NOT inside the immutable
+  // per-tag archive (releases/tag/<tag>/…).
+  const keyPath = keyIsFull ? key : stagingKeyFor(tag, key)
+  await putObject(creds, base, bucket, keyPath, buffer, now, contentTypeFor(key))
 }
 
 /**
@@ -357,18 +368,18 @@ async function cmdPut({ tag, key, file }) {
  * binaries. Binaries live ONCE under releases/tag/<tag>/ (staged by the
  * matrix legs); the feed dirs carry only the manifests:
  *
- *   releases/win32/<channel>/RELEASES         Squirrel manifest, one line
- *     per .msix, filename = absolute /releases/tag/<tag>/<msix> (the builtin
- *     autoUpdater resolves it against the feed host root).
  *   releases/darwin/<channel>/<channel>-mac.yml
  *     merged electron-updater feed; path:/url: entries rewritten to the
  *     absolute /releases/tag/<tag>/<file> locations (electron-updater
  *     resolves them with new URL(path, baseUrl)).
  *
+ * The win32 App Installer feed (.appinstaller + .msixbundle per channel
+ * dir) is produced by the msixbundle job (scripts/stage-msixbundle.mjs),
+ * which uploads the manifests directly — nothing for finalize to merge.
+ *
  * Expects --dir to contain the merged METADATA for ONE tag (the build
  * matrix uploads only this — the binaries go straight to R2 from each
  * leg and are never round-tripped through artifacts):
- *   hashes-<target>.json   per-leg [{filename, sha1, size}] for the msix
  *   *-mac.yml              the per-leg electron-updater feed files
  */
 async function cmdFinalize({ tag, dir }) {
@@ -384,27 +395,6 @@ async function cmdFinalize({ tag, dir }) {
   const files = fs.readdirSync(dir).filter((f) => fs.statSync(path.join(dir, f)).isFile())
   // Absolute key of a staged artifact — the feed manifests reference these.
   const absKey = (filename) => `/${stagingKeyFor(tag, filename)}`
-
-  // --- win32: RELEASES manifest only (msix stay under releases/tag/<tag>/) ---
-  // The msix metadata (sha1+size) arrives in the per-leg hashes-*.json
-  // files the build matrix uploads — the binaries themselves go straight
-  // to R2 from each leg and are never round-tripped through artifacts.
-  const msixPackages = []
-  for (const hf of files.filter((f) => f.startsWith('hashes-') && f.endsWith('.json'))) {
-    const entries = JSON.parse(fs.readFileSync(path.join(dir, hf), 'utf8'))
-    msixPackages.push(...entries)
-  }
-  if (msixPackages.length > 0) {
-    const packages = msixPackages.map(({ filename, sha1, size }) => ({
-      sha1,
-      size,
-      // The manifest's filename is the absolute object key; the client
-      // resolves it against the feed host root.
-      filename: absKey(filename)
-    }))
-    const winDir = feedDirFor('win32', channel)
-    await putObject(creds, base, bucket, `${winDir}/RELEASES`, Buffer.from(renderReleases(packages), 'utf8'), now)
-  }
 
   // --- darwin: merged feed yml only (dmg/zip/blockmap stay in the tag dir) ---
   const macYmls = files.filter((f) => f.endsWith(`-mac.yml`))
@@ -505,10 +495,13 @@ async function cmdPrune({ keepDays, dryRun }) {
 
 function usage() {
   console.error(`usage:
-  node scripts/r2-release.mjs put --tag vX.Y.Z --key <filename> --file <path>
+  node scripts/r2-release.mjs put --tag vX.Y.Z --key <filename> --file <path> [--key-is-full]
   node scripts/r2-release.mjs finalize --tag vX.Y.Z --dir <staging-dir>
   node scripts/r2-release.mjs list [--prefix <p>]
-  node scripts/r2-release.mjs prune-nightlies --keep-days <n> [--dry-run]`)
+  node scripts/r2-release.mjs prune-nightlies --keep-days <n> [--dry-run]
+
+  --key-is-full: the --key is a FULL object key (e.g. releases/win32/stable/…),
+                 not a filename to archive under releases/tag/<tag>/.`)
   process.exit(2)
 }
 
@@ -523,8 +516,8 @@ export async function main(argv = process.argv.slice(2)) {
     const flag = rest[i]
     if (['--tag', '--key', '--file', '--prefix', '--keep-days', '--dir'].includes(flag)) {
       args[flag.slice(2)] = rest[++i]
-    } else if (flag === '--dry-run') {
-      args.dryRun = true
+    } else if (flag === '--dry-run' || flag === '--key-is-full') {
+      args[flag.slice(2)] = true
     } else {
       usage()
     }
@@ -532,7 +525,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (cmd === 'put') {
     const tag = args.tag || process.env.HERMES_PAYLOAD_TAG
     if (!tag || !args.key || !args.file) usage()
-    await cmdPut({ tag, key: args.key, file: args.file })
+    await cmdPut({ tag, key: args.key, file: args.file, keyIsFull: Boolean(args['key-is-full']) })
   } else if (cmd === 'finalize') {
     if (!args.tag || !args.dir) usage()
     await cmdFinalize({ tag: args.tag, dir: args.dir })

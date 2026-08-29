@@ -68,8 +68,15 @@ export function canonicalQuery(params) {
  */
 export function canonicalRequest(method, path, query, headers, payloadHash) {
   const names = Object.keys(headers).map((n) => n.toLowerCase()).sort()
+  // Header values are read case-insensitively: keys may be mixed-case
+  // ('Content-Type'), but SigV4 canonicalizes the NAME to lowercase, so
+  // `headers[lowerName]` would miss the value. Find the original-key match.
+  const valueFor = (name) => {
+    const key = Object.keys(headers).find((k) => k.toLowerCase() === name)
+    return key == null ? undefined : headers[key]
+  }
   const canonicalHeaders = names
-    .map((n) => `${n}:${String(headers[n]).trim().replace(/\s+/g, ' ')}`)
+    .map((n) => `${n}:${String(valueFor(n)).trim().replace(/\s+/g, ' ')}`)
     .join('\n')
   return [
     method,

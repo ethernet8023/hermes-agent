@@ -21,6 +21,7 @@ import { test } from 'vitest'
 import {
   authHeader,
   canonicalQuery,
+  canonicalRequest,
   channelForTag,
   contentTypeFor,
   encodeKeyPath,
@@ -191,6 +192,28 @@ test('contentTypeFor maps MSIX / App Installer artifacts to their MIME types', (
   assert.equal(contentTypeFor('latest-mac.yml'), undefined)
   // Case-insensitive on the suffix.
   assert.equal(contentTypeFor('X.APPINSTALLER'), 'application/appinstaller')
+})
+
+test('canonicalRequest reads mixed-case header values (Content-Type)', () => {
+  // Regression: canonicalRequest lowercased the header NAME for the canonical
+  // line but read the value with `headers[lowerName]` — a 'Content-Type'
+  // value came out as 'undefined' while R2 canonicalized 'application/msix',
+  // so every signed msix PUT (the only artifact with Content-Type) failed
+  // with SignatureDoesNotMatch / 403. Value lookup must be case-insensitive.
+  const host = 'abc123.r2.cloudflarestorage.com'
+  const now = '20150830T123600Z'
+  const bodyHash = '44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072'
+  const headers = {
+    host,
+    'x-amz-date': now,
+    'x-amz-content-sha256': bodyHash,
+    'Content-Type': 'application/msix'
+  }
+  const canon = canonicalRequest('PUT', '/hermes-releases/HermesBundled-0.28.0-win-x64.msix', '', headers, bodyHash)
+  assert.ok(canon.includes('content-type:application/msix'), 'content-type value must survive canonicalization')
+  assert.ok(!canon.includes('undefined'), 'no undefined values leaked into the canonical request')
+  // The canonical line ordering + header list match what SigV4/R2 recompute.
+  assert.ok(canon.includes('content-type;host;x-amz-content-sha256;x-amz-date'))
 })
 
 test('rewriteFeedPaths rewrites path:/url: to absolute /releases/tag keys, idempotent', () => {

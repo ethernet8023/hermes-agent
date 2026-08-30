@@ -45,7 +45,7 @@ def build_gateway_parser(
 
     # gateway run (default)
     gateway_run = gateway_subparsers.add_parser(
-        "run", help="Run gateway in foreground (recommended for WSL, Docker, Termux)"
+        "run", help="Run gateway in foreground (recommended for WSL and Docker)"
     )
     gateway_run.add_argument(
         "-v",

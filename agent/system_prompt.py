@@ -566,7 +566,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             f"not on any model name returned by the API."
         )
 
-    # Environment hints (WSL, Termux, etc.) — tell the agent about the
+    # Environment hints (WSL, containers, etc.) — tell the agent about the
     # execution environment so it can translate paths and adapt behavior.
     # Stable for the lifetime of the process.
     _env_hints = _r.build_environment_hints()

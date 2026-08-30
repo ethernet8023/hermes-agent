@@ -434,7 +434,7 @@ def check_for_updates() -> Optional[int]:
     # (web_server.py); mirror that here so the banner/TUI surfaces agree.
     try:
         from hermes_cli.config import detect_install_method, get_project_root
-        if detect_install_method(get_project_root()) in {"docker", "apt"}:
+        if detect_install_method(get_project_root()) in {"docker"}:
             return None
     except Exception:
         pass
@@ -444,7 +444,7 @@ def check_for_updates() -> Optional[int]:
     now = time.time()
     try:
         if cache_file.exists():
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            cached = json.loads(cache_file.read_text(encoding="utf-8-sig"))
             if (
                 now - cached.get("ts", 0) < _UPDATE_CHECK_CACHE_SECONDS
                 and cached.get("rev") == embedded_rev
@@ -531,8 +531,8 @@ def get_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
     For source installs and dev images this runs ``git rev-parse`` against
     the active checkout.  When no checkout is available — the canonical case
     is the published Docker image, which excludes ``.git`` from the build
-    context — we fall back to the baked-in build SHA (see
-    ``hermes_cli/build_info.py``) and return it as a frozen
+    context — we fall back to the install stamp's commit (see
+    ``hermes_cli/version_info.py``) and return it as a frozen
     ``upstream == local`` state with ``ahead=0``.  A built image is by
     definition pinned to one commit, so "ahead" is always zero and the
     banner correctly shows ``· upstream <sha>`` with no carried-commits
@@ -553,31 +553,42 @@ def get_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
     return state
 
 
+def _stamped_sha8() -> Optional[str]:
+    """Return the install stamp's commit (8 chars), or None.
+
+    Packaged builds (Docker/Nix) carry no ``.git``; their provenance comes
+    from the build-time install stamp read by ``hermes_cli.version_info``.
+    A ``git``-sourced result means there is no stamp — return None so the
+    caller doesn't fabricate a frozen state for a live checkout.
+    """
+    try:
+        from hermes_cli.version_info import get_version_info
+
+        info = get_version_info()
+        if info.commit and info.source != "git":
+            return info.commit[:8]
+    except Exception:
+        pass
+    return None
+
+
 def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
     repo_dir = repo_dir or _resolve_repo_dir()
     if repo_dir is None:
-        # No git checkout — try the baked build SHA (Docker image path).
-        try:
-            from hermes_cli.build_info import get_build_sha
-            baked = get_build_sha(short=8)
-            if baked:
-                return {"upstream": baked, "local": baked, "ahead": 0}
-        except Exception:
-            pass
+        # No git checkout — try the install stamp (Docker/Nix image path).
+        baked = _stamped_sha8()
+        if baked:
+            return {"upstream": baked, "local": baked, "ahead": 0}
         return None
 
     upstream = _git_short_hash(repo_dir, "origin/main")
     local = _git_short_hash(repo_dir, "HEAD")
     if not upstream or not local:
         # Live-git lookup failed (e.g. shallow clone without origin/main).
-        # Fall back to the baked build SHA if available.
-        try:
-            from hermes_cli.build_info import get_build_sha
-            baked = get_build_sha(short=8)
-            if baked:
-                return {"upstream": baked, "local": baked, "ahead": 0}
-        except Exception:
-            pass
+        # Fall back to the install stamp if available.
+        baked = _stamped_sha8()
+        if baked:
+            return {"upstream": baked, "local": baked, "ahead": 0}
         return None
 
     ahead = 0
@@ -852,7 +863,7 @@ def banner_snapshot_fingerprint() -> Optional[str]:
 def load_banner_snapshot(enabled_toolsets: List[str] = None) -> Optional[Dict[str, Any]]:
     """Return the stored banner snapshot when its fingerprint is current."""
     try:
-        blob = json.loads(_banner_snapshot_path().read_text(encoding="utf-8"))
+        blob = json.loads(_banner_snapshot_path().read_text(encoding="utf-8-sig"))
     except Exception:
         return None
     if not isinstance(blob, dict):

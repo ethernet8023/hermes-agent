@@ -461,32 +461,10 @@ def test_has_agent_browser_true_for_npx_only_resolution(monkeypatch):
         return "npx agent-browser"
 
     monkeypatch.setattr(browser_tool, "_find_agent_browser", fake_find_agent_browser)
-    monkeypatch.setattr(
-        browser_tool, "_requires_real_termux_browser_install", lambda cmd: False
-    )
 
     assert ns._has_agent_browser() is True
     # A readiness probe must resolve without spawning the daemon.
     assert calls and all(call["validate"] is False for call in calls)
-
-
-def test_has_agent_browser_false_for_termux_local_bare_npx(monkeypatch):
-    """On Termux in local mode the bare npx fallback is not a usable install."""
-    _block_legacy_agent_browser_checks(monkeypatch)
-    import tools.browser_tool as browser_tool
-
-    monkeypatch.setattr(
-        browser_tool,
-        "_find_agent_browser",
-        lambda *, validate=True: "npx agent-browser",
-    )
-    monkeypatch.setattr(
-        browser_tool,
-        "_requires_real_termux_browser_install",
-        lambda cmd: cmd.strip() == "npx agent-browser",
-    )
-
-    assert ns._has_agent_browser() is False
 
 
 def test_has_agent_browser_false_when_nothing_resolvable(monkeypatch):

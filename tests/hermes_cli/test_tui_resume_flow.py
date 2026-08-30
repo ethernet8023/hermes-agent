@@ -51,23 +51,6 @@ def main_mod(monkeypatch):
 
 
 
-def test_termux_skips_bundled_skill_sync_when_stamp_fresh(monkeypatch, tmp_path, main_mod):
-    calls = []
-
-    monkeypatch.setenv("TERMUX_VERSION", "1")
-    monkeypatch.setattr(main_mod, "get_hermes_home", lambda: tmp_path)
-    monkeypatch.setattr(main_mod, "_termux_bundled_skills_fingerprint", lambda: "fp1")
-    main_mod._mark_termux_bundled_skills_synced()
-    monkeypatch.setitem(
-        sys.modules,
-        "tools.skills_sync",
-        types.SimpleNamespace(sync_skills=lambda quiet: calls.append(quiet)),
-    )
-
-    assert main_mod._sync_bundled_skills_for_startup() is False
-    assert calls == []
-
-
 
 
 

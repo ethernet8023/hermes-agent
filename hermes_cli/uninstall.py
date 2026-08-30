@@ -30,6 +30,35 @@ def get_project_root() -> Path:
     return Path(__file__).parent.parent.resolve()
 
 
+def code_removal_refusal() -> "str | None":
+    """Why the uninstaller must not remove this tree's code, or ``None``.
+
+    A git checkout (the install.sh / install.ps1 / `hermes desktop` layout)
+    is ours to remove. A sealed tree (no ``.git``) belongs to a steward —
+    the Nix store, the bundled desktop app, a Docker image — and only the
+    steward removes it. Returns the user-facing refusal text for sealed
+    trees; the text always points at ``hermes uninstall --data`` for the
+    user-data cleanup that IS allowed everywhere.
+    """
+    from hermes_cli.steward import sealed_steward, steward_uninstall_message
+
+    steward = sealed_steward(get_project_root())
+    if steward is None:
+        return None
+    return steward_uninstall_message(steward)
+
+
+def _refuse_if_steward_owned() -> None:
+    """Exit with the steward's instructions when code removal is forbidden."""
+    refusal = code_removal_refusal()
+    if refusal is None:
+        return
+    print()
+    print(refusal)
+    print()
+    raise SystemExit(1)
+
+
 def find_shell_configs() -> list:
     """Find shell configuration files that might have PATH entries."""
     home = Path.home()
@@ -57,7 +86,7 @@ def remove_path_from_shell_configs():
     
     for config_path in configs:
         try:
-            content = config_path.read_text(encoding="utf-8")
+            content = config_path.read_text(encoding="utf-8-sig")
             original_content = content
             
             # Remove lines containing hermes-agent or hermes PATH entries
@@ -125,7 +154,7 @@ def remove_wrapper_script():
         if wrapper.exists():
             try:
                 # Check if it's our wrapper (contains hermes_cli reference)
-                content = wrapper.read_text(encoding="utf-8")
+                content = wrapper.read_text(encoding="utf-8-sig")
                 if 'hermes_cli' in content or 'hermes-agent' in content:
                     wrapper.unlink()
                     removed.append(wrapper)
@@ -141,21 +170,17 @@ def _node_symlink_candidate_dirs() -> "list[Path]":
     # Root FHS installs put links in /usr/local/bin.
     if sys.platform == "linux":
         dirs.append(Path("/usr/local/bin"))
-    # Termux installs put links in $PREFIX/bin.
-    prefix = os.environ.get("PREFIX", "")
-    if prefix and "com.termux" in prefix:
-        dirs.append(Path(prefix) / "bin")
     return dirs
 
 
 def remove_node_symlinks(hermes_home: Path) -> list:
     """Remove the node/npm/npx symlinks the installer placed on PATH.
 
-    The POSIX installer (``scripts/install.sh`` / ``scripts/lib/node-bootstrap.sh``)
-    symlinks node/npm/npx into the same directory as the ``hermes`` command:
+    Historical POSIX installs (``scripts/install.sh`` before pm owned the
+    Node runtime) symlinked node/npm/npx into the same directory as the
+    ``hermes`` command:
 
     - ``/usr/local/bin/`` on root FHS installs (Linux, uid 0)
-    - ``$PREFIX/bin/`` on Termux
     - ``~/.local/bin/`` otherwise (the common non-root case)
 
     We check all candidate directories so that uninstall works regardless of
@@ -202,12 +227,11 @@ def uninstall_gateway_service():
     - macOS: launchd plists
     - Windows: Scheduled Task + Startup-folder fallback, via ``gateway_windows``
     - All platforms: standalone ``hermes gateway run`` processes
-    - Termux/Android: skips systemd (no systemd on Android), still kills standalone processes
     """
     import platform
     stopped_something = False
 
-    # 1. Kill any standalone gateway processes (all platforms, including Termux)
+    # 1. Kill any standalone gateway processes (all platforms)
     try:
         from hermes_cli.gateway import kill_gateway_processes, find_gateway_pids
         pids = find_gateway_pids()
@@ -220,12 +244,6 @@ def uninstall_gateway_service():
         log_warn(f"Could not check for gateway processes: {e}")
 
     system = platform.system()
-
-    # Termux/Android has no systemd and no launchd — nothing left to do.
-    prefix = os.getenv("PREFIX", "")
-    is_termux = bool(os.getenv("TERMUX_VERSION") or "com.termux/files/usr" in prefix)
-    if is_termux:
-        return stopped_something
 
     # 2. Linux: uninstall systemd services (both user and system scopes)
     if system == "Linux":
@@ -444,20 +462,55 @@ def remove_portable_tooling_windows(hermes_home: Path) -> list[Path]:
     return removed
 
 
-def remove_windows_bin_launchers(*, windows: bool | None = None) -> list[Path]:
-    """Delete the ``hermes`` launchers install.ps1 staged in the managed
-    binary dir (the default Hermes root's ``bin``, next to the managed uv).
+def remove_legacy_runtime_trees(hermes_home: Path) -> list[Path]:
+    """Delete managed-runtime trees a PRE-SPLIT install left in HERMES_HOME.
 
-    Every uninstall mode deletes the code checkout, so the launchers —
-    which invoke ``<checkout>\\venv\\Scripts`` — would otherwise dangle:
-    ``hermes`` in a new terminal resolves to a launcher whose target is
-    gone and errors, which reads worse than command-not-found. The managed
-    uv (uv*.exe) in the same dir is left for keep-data reinstalls.
+    Runtime artifacts are install-scoped now, so the current locations go
+    away with ``rmtree(project_root)``. But a checkout OUTSIDE the home
+    (the common case: ``~/src/hermes-agent``) used to put its node/uv
+    under ``$HERMES_HOME`` — that tree survives removing the checkout and
+    survives "keep my data" uninstalls, because it is not data.
+
+    Only the exact managed layout is removed: ``node/`` (a tree the
+    installer owned wholesale) and ``bin/uv`` (the single binary, NOT the
+    whole ``bin/`` dir — a user's own scripts can live there). Profile
+    state is never touched.
+    """
+    removed: list[Path] = []
+
+    node_tree = hermes_home / "node"
+    if node_tree.is_dir():
+        try:
+            shutil.rmtree(node_tree, ignore_errors=False)
+            removed.append(node_tree)
+        except Exception as e:
+            log_warn(f"Could not remove {node_tree}: {e}")
+
+    for uv_name in ("uv", "uv.exe"):
+        uv_binary = hermes_home / "bin" / uv_name
+        if uv_binary.is_file():
+            try:
+                uv_binary.unlink()
+                removed.append(uv_binary)
+            except Exception as e:
+                log_warn(f"Could not remove {uv_binary}: {e}")
+
+    return removed
+
+
+def remove_windows_bin_launchers(*, windows: bool | None = None) -> list[Path]:
+    """Delete the managed binary dir (the default Hermes root's ``bin``).
+
+    The dir holds only hermes-owned launcher copies (the relocatable venv's
+    console scripts, staged onto PATH by first-run repair) — pm keeps uv in
+    its own store entry, so nothing shared lives here and the whole dir goes.
+    Every uninstall mode deletes the code checkout, so a surviving launcher
+    would dangle: ``hermes`` in a new terminal resolves and then errors on
+    its missing venv target, which reads worse than command-not-found.
 
     A launcher that IS this process's own trampoline is mandatory-locked
-    against deletion but not rename (same fact
-    ``_install_repair._quarantine_running_hermes_exe`` relies on), so
-    deletion falls back to renaming it aside with a non-executable suffix.
+    against deletion but not rename, so removal falls back to renaming it
+    aside with a non-executable suffix.
 
     *windows* is an injectable platform verdict for tests (same pattern as
     ``_install_repair.ensure_windows_bin_launchers``).
@@ -467,32 +520,33 @@ def remove_windows_bin_launchers(*, windows: bool | None = None) -> list[Path]:
     if not windows:
         return []
     try:
-        # Lockstep launcher-name list — the same names install.ps1 and the
-        # startup heal stage into this dir.
-        from hermes_cli._install_repair import _WINDOWS_BIN_LAUNCHERS
         from hermes_constants import get_default_hermes_root
 
         bin_dir = get_default_hermes_root() / "bin"
     except Exception as e:
         log_warn(f"Could not locate the managed binary dir: {e}")
         return []
+    if not bin_dir.is_dir():
+        return []
 
     removed: list[Path] = []
-    for name in _WINDOWS_BIN_LAUNCHERS:
-        for suffix in (".exe", ".cmd"):
-            launcher = bin_dir / f"{name}{suffix}"
-            if not launcher.exists():
-                continue
+    for launcher in sorted(bin_dir.iterdir()):
+        if not launcher.is_file():
+            continue
+        try:
+            launcher.unlink()
+            removed.append(launcher)
+        except OSError:
+            aside = launcher.with_name(f"{launcher.name}.uninstalled.{os.getpid()}")
             try:
-                launcher.unlink()
+                os.rename(launcher, aside)
                 removed.append(launcher)
-            except OSError:
-                aside = launcher.with_name(f"{launcher.name}.uninstalled.{os.getpid()}")
-                try:
-                    os.rename(launcher, aside)
-                    removed.append(launcher)
-                except OSError as e:
-                    log_warn(f"Could not remove {launcher}: {e}")
+            except OSError as e:
+                log_warn(f"Could not remove {launcher}: {e}")
+    try:
+        bin_dir.rmdir()
+    except OSError:
+        pass  # leftovers (renamed-aside trampolines) keep the dir until next run
     return removed
 
 
@@ -575,6 +629,85 @@ def _uninstall_profile(profile) -> None:
         log_warn(f"  Could not remove {profile_home}: {e}")
 
 
+def run_data_uninstall(args):
+    """Remove Hermes user data only — no code, on any install kind.
+
+    This is the one destructive action that is valid everywhere: source
+    checkouts, the bundled desktop app, Nix, Docker. It removes everything
+    under ``$HERMES_HOME`` EXCEPT the ``hermes-agent`` checkout (which is
+    code, owned by the code-removal modes / the steward), plus the desktop
+    app's Electron userData directory.
+    """
+    hermes_home = get_hermes_home()
+    agent_root = hermes_home / "hermes-agent"
+    skip_confirm = bool(getattr(args, "yes", False))
+
+    targets = []
+    if hermes_home.exists():
+        targets = sorted(
+            (p for p in hermes_home.iterdir() if p.name != "hermes-agent"),
+            key=lambda p: p.name,
+        )
+
+    from hermes_cli.gui_uninstall import desktop_userdata_dir
+
+    userdata = desktop_userdata_dir()
+
+    if not targets and not userdata.exists():
+        print("No Hermes user data found.")
+        print(f"  Checked: {hermes_home}")
+        return
+
+    print()
+    print(color("This removes your Hermes data — config, chats, secrets, logs.", Colors.YELLOW, Colors.BOLD))
+    print(color("Installed code is not touched.", Colors.CYAN))
+    print()
+    print(color("Will remove:", Colors.YELLOW, Colors.BOLD))
+    for p in targets:
+        print(f"  • {p}")
+    if userdata.exists():
+        print(f"  • {userdata}  (desktop app data)")
+    if agent_root.exists():
+        print()
+        print(color("Kept intact:", Colors.GREEN, Colors.BOLD))
+        print(f"  • {agent_root}")
+    print()
+
+    if not skip_confirm:
+        try:
+            confirm = input(f"Type '{color('yes', Colors.YELLOW)}' to remove your Hermes data: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            print("Cancelled.")
+            return
+        if confirm != "yes":
+            print()
+            print("Uninstall cancelled.")
+            return
+
+    print()
+    for p in targets:
+        try:
+            if p.is_symlink() or p.is_file():
+                p.unlink()
+            else:
+                shutil.rmtree(p)
+            log_success(f"Removed {p}")
+        except Exception as e:
+            log_warn(f"Could not remove {p}: {e}")
+
+    if userdata.exists():
+        try:
+            shutil.rmtree(userdata)
+            log_success(f"Removed {userdata}")
+        except Exception as e:
+            log_warn(f"Could not remove {userdata}: {e}")
+
+    print()
+    print(color("✓ Hermes data removed.", Colors.GREEN, Colors.BOLD))
+    print()
+
+
 def run_gui_uninstall(args):
     """GUI-only uninstall: remove the Chat GUI, leave the agent + data intact.
 
@@ -588,6 +721,8 @@ def run_gui_uninstall(args):
         gui_install_summary,
         uninstall_gui,
     )
+
+    _refuse_if_steward_owned()
 
     hermes_home = get_hermes_home()
     summary = gui_install_summary(hermes_home)
@@ -655,6 +790,8 @@ def run_uninstall(args):
     - Full uninstall: removes code + ~/.hermes/ (configs, data, logs)
     - Keep data: removes code but keeps ~/.hermes/ for future reinstall
     """
+    _refuse_if_steward_owned()
+
     project_root = get_project_root()
     hermes_home = get_hermes_home()
 
@@ -952,7 +1089,22 @@ def _perform_uninstall(
         log_warn(f"Could not fully remove {project_root}: {e}")
         log_info("You may need to manually remove it")
 
-    # 4b. Remove Windows-only installer artifacts that are NOT user data:
+    # 4b. Remove managed-runtime trees a PRE-SPLIT install left in
+    #     HERMES_HOME. Current installs keep these inside the checkout, so
+    #     step 4 already removed them — but a checkout outside the home
+    #     (~/src/hermes-agent) used to leave its node/uv behind, surviving
+    #     both the checkout removal and a "keep my data" uninstall. They
+    #     are install tooling, not data, so removing them is correct in
+    #     either mode.
+    log_info("Removing managed runtime trees...")
+    removed_runtimes = remove_legacy_runtime_trees(hermes_home)
+    if removed_runtimes:
+        for path in removed_runtimes:
+            log_success(f"Removed {path}")
+    else:
+        log_info("No legacy runtime trees to remove")
+
+    # 4c. Remove Windows-only installer artifacts that are NOT user data:
     #     PortableGit, bundled Node, gateway-service dir.  Installer put them
     #     under HERMES_HOME but they're install tooling, not config — safe to
     #     remove even in "keep data" mode.  If we're doing a full uninstall
@@ -1025,11 +1177,12 @@ class _UninstallArgs:
         self.gui = mode == "gui"
         self.gui_summary = False
         self.full = mode == "full"
+        self.data = mode == "data"
         self.yes = True  # the module entrypoint is always non-interactive
 
 
 def main(argv=None) -> int:
-    """Module entrypoint: ``python -m hermes_cli.uninstall --mode <gui|lite|full>``.
+    """Module entrypoint: ``python -m hermes_cli.uninstall --mode <gui|lite|full|data>``.
 
     Exists so the desktop app can run the uninstall under a Python interpreter
     OUTSIDE the venv being deleted. On Windows, ``lite``/``full`` rmtree the
@@ -1038,23 +1191,30 @@ def main(argv=None) -> int:
     The desktop launches this with the system Python + ``PYTHONPATH=<agentRoot>``
     so ``import hermes_cli`` resolves from source while the venv is torn down.
 
+    ``data`` removes user data only (no code) and is the one mode allowed on
+    steward-owned installs (Nix, the bundled desktop app, Docker); the
+    code-removing modes hard-fail there with the steward's instructions.
+
     This module imports only stdlib + ``hermes_constants`` + ``hermes_cli.colors``
-    (and lazily ``hermes_cli.gui_uninstall``), so it runs fine under a bare
-    system Python with no site-packages from the venv.
+    (and lazily ``hermes_cli.gui_uninstall`` / ``hermes_cli.steward``), so it
+    runs fine under a bare system Python with no site-packages from the venv.
     """
     import argparse
 
     parser = argparse.ArgumentParser(prog="python -m hermes_cli.uninstall")
     parser.add_argument(
         "--mode",
-        choices=["gui", "lite", "full"],
+        choices=["gui", "lite", "full", "data"],
         required=True,
-        help="gui = Chat GUI only; lite = GUI + agent, keep data; full = everything",
+        help="gui = Chat GUI only; lite = GUI + agent, keep data; "
+        "full = everything; data = user data only, keep code",
     )
     ns = parser.parse_args(argv)
     args = _UninstallArgs(mode=ns.mode)
 
-    if args.gui:
+    if args.data:
+        run_data_uninstall(args)
+    elif args.gui:
         run_gui_uninstall(args)
     else:
         run_uninstall(args)

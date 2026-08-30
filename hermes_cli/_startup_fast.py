@@ -7,15 +7,14 @@ no argparse). A guard test (``test_startup_fast_import_weight``) subprocess-
 imports this module and fails if any heavy module sneaks into sys.modules.
 
 Why this module exists (the bug class it kills): version-printing kept being
-reimplemented as ``*_fast()`` copies at the top of main.py (Termux first,
-then globally), each duplicating canonical logic — project-root resolution,
-container detection, profile detection. The copies drifted: eb4040242
-changed the canonical output and referenced ``PROJECT_ROOT`` inside the fast
-function, which doesn't exist yet on the fast path → the Termux fast path
-NameError'd on --version and nobody noticed. One implementation, imported
-by both the fast path and the module constants, makes that drift
-structurally impossible; the parity guard test would have caught eb4040242
-the day it landed.
+reimplemented as ``*_fast()`` copies at the top of main.py, each duplicating
+canonical logic — project-root resolution, container detection, profile
+detection. The copies drifted: eb4040242 changed the canonical output and
+referenced ``PROJECT_ROOT`` inside the fast function, which doesn't exist
+yet on the fast path → the fast path NameError'd on --version and nobody
+noticed. One implementation, imported by both the fast path and the module
+constants, makes that drift structurally impossible; the parity guard test
+would have caught eb4040242 the day it landed.
 
 ``hermes_cli/config.py``'s ``get_container_exec_info()`` reads the same
 ``.container-mode`` file; keep the file-format assumptions here and there in
@@ -31,8 +30,6 @@ import sys
 __all__ = [
     "project_root_str",
     "ensure_project_root_on_path",
-    "is_termux_env",
-    "is_termux_fast_version_argv",
     "is_global_fast_version_argv",
     "is_container_startup_environment",
     "active_profile_may_override_home",
@@ -62,20 +59,6 @@ def ensure_project_root_on_path() -> None:
     sys.path.insert(0, project_root)
 
 
-def is_termux_env() -> bool:
-    """Tiny Termux check for pre-import startup shortcuts."""
-    prefix = os.environ.get("PREFIX", "")
-    return bool(
-        os.environ.get("TERMUX_VERSION")
-        or "com.termux/files/usr" in prefix
-        or prefix.startswith("/data/data/com.termux/")
-    )
-
-
-def is_termux_fast_version_argv(argv: list[str]) -> bool:
-    return argv in (["--version"], ["-V"])
-
-
 def is_global_fast_version_argv(argv: list[str]) -> bool:
     return argv in (["--version"], ["-V"])
 
@@ -85,7 +68,7 @@ def is_container_startup_environment() -> bool:
     if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
         return True
     try:
-        with open("/proc/1/cgroup", encoding="utf-8") as handle:
+        with open("/proc/1/cgroup", encoding="utf-8-sig") as handle:
             cgroup = handle.read()
     except OSError:
         return False
@@ -97,7 +80,7 @@ def active_profile_may_override_home(hermes_root: str) -> bool:
     active_profile = os.path.join(hermes_root, "active_profile")
     try:
         if os.path.exists(active_profile):
-            with open(active_profile, encoding="utf-8") as handle:
+            with open(active_profile, encoding="utf-8-sig") as handle:
                 active = handle.read().strip()
             return bool(active and active != "default")
     except (OSError, UnicodeDecodeError):
@@ -149,7 +132,7 @@ def read_openai_version() -> str | None:
             base = os.getcwd()
         version_file = os.path.join(base, "openai", "_version.py")
         try:
-            with open(version_file, encoding="utf-8") as handle:
+            with open(version_file, encoding="utf-8-sig") as handle:
                 for line in handle:
                     stripped = line.strip()
                     if not stripped.startswith("__version__"):
@@ -173,7 +156,7 @@ def read_install_method() -> str | None:
     """
     stamp = os.path.join(_resolved_home(), ".install_method")
     try:
-        with open(stamp, encoding="utf-8") as handle:
+        with open(stamp, encoding="utf-8-sig") as handle:
             method = handle.read().strip().lower()
         return method or None
     except OSError:
@@ -256,19 +239,13 @@ def try_fast_version(argv: list[str] | None = None) -> bool:
     Only ``--version``/``-V`` (the ``version`` subcommand was removed —
     ``--version`` now carries the full output incl. update status), and
     never when container mode may need to route the command into the
-    container. Termux keeps the HERMES_TERMUX_DISABLE_FAST_CLI escape hatch.
+    container.
     """
     if argv is None:
         argv = sys.argv[1:]
-    is_termux = is_termux_env()
-    if is_termux and os.environ.get("HERMES_TERMUX_DISABLE_FAST_CLI") == "1":
+    if not is_global_fast_version_argv(argv):
         return False
-    if is_termux:
-        if not is_termux_fast_version_argv(argv):
-            return False
-    elif not is_global_fast_version_argv(argv):
-        return False
-    elif container_mode_may_be_active():
+    if container_mode_may_be_active():
         return False
 
     print_fast_version_info()

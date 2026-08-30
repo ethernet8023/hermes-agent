@@ -419,26 +419,6 @@ def get_hermes_dir(
     return home / new_subpath
 
 
-def iter_hermes_node_dirs(home: Path | None = None) -> list[Path]:
-    """Return Hermes-managed Node.js directories in preferred lookup order.
-
-    Windows installs from ``scripts/install.ps1`` unpack portable Node directly
-    into ``%LOCALAPPDATA%\\hermes\\node``. POSIX installs use
-    ``$HERMES_HOME/node/bin``. Include both shapes on every platform so mixed
-    or migrated installs still work.
-    """
-    root = home or get_hermes_home()
-    dirs = [root / "node"]
-    bin_dir = root / "node" / "bin"
-    # NOTE: keep this ordering in sync with hermesManagedNodePathEntries() in
-    # apps/desktop/electron/backend-env.ts — the Electron main process is Node
-    # and cannot import this module, so the platform-ordering rule is mirrored
-    # there (once; main.ts imports it rather than keeping its own copy).
-    if sys.platform == "win32":
-        return dirs + [bin_dir]
-    return [bin_dir] + dirs
-
-
 def _candidate_node_command_names(command: str) -> list[str]:
     base = Path(command).name
     if sys.platform != "win32" or "." in base:
@@ -454,10 +434,6 @@ def _candidate_node_command_names(command: str) -> list[str]:
     return [f"{base}.cmd", f"{base}.exe", base]
 
 
-_HERMES_NODE_TARGET_MAJOR = int(os.environ.get("HERMES_NODE_TARGET_MAJOR", "22"))
-_managed_node_heal_attempted = False
-_NODE_BOOTSTRAP_SCRIPT = Path(__file__).resolve().parent / "scripts" / "lib" / "node-bootstrap.sh"
-
 # Install tree root (this file lives at <install_root>/hermes_constants.py).
 # Used by secure_parent_dir() to skip chmod on the install dir — chmodding it
 # 0700 breaks hermes-user traversal in Docker (UID 10000). See #25821, #93050.
@@ -467,12 +443,9 @@ _INSTALL_ROOT = Path(__file__).resolve().parent
 def node_tool_runnable(path: str | None) -> bool:
     """Return True only when *path* is a Node/npm/npx binary that actually runs.
 
-    Hermes-managed Node trees live under ``$HERMES_HOME/node`` (or a profile's
-    ``HERMES_HOME``). A partial upgrade or interrupted install can leave
-    ``bin/npm`` behind while ``lib/cli.js`` is missing — the wrapper exists but
-    immediately throws ``MODULE_NOT_FOUND``. ``find_hermes_node_executable``
-    used to trust file presence alone, so ``hermes update`` would pick that
-    broken npm and fail the Node refresh / web UI build.
+    A partial upgrade or interrupted install can leave ``bin/npm`` behind
+    while ``lib/cli.js`` is missing — the wrapper exists but immediately
+    throws ``MODULE_NOT_FOUND``. Presence alone is therefore not trusted.
 
     Probe with ``--version`` (same pattern as :func:`agent_browser_runnable`) so
     broken managed wrappers are detected before use.
@@ -503,451 +476,6 @@ def node_tool_runnable(path: str | None) -> bool:
     return result.returncode == 0
 
 
-def hermes_managed_node_tree_present(home: Path | None = None) -> bool:
-    """Return True when any Hermes-managed node/npm/npx shim exists on disk."""
-    names = set()
-    for command in ("node", "npm", "npx"):
-        names.update(_candidate_node_command_names(command))
-    for directory in iter_hermes_node_dirs(home):
-        for name in names:
-            candidate = directory / name
-            if candidate.is_file() and (
-                sys.platform == "win32" or os.access(candidate, os.X_OK)
-            ):
-                return True
-    return False
-
-
-def _path_under_any(path: str, roots: list[str]) -> bool:
-    """Return True when *path* sits inside one of *roots* (same drive).
-
-    Windows paths are case-insensitive and psutil / env vars can disagree on
-    drive-letter casing, so compare through ``normcase`` (a no-op on POSIX).
-    Each root is evaluated individually so disjoint roots both work.
-    """
-    path_norm = os.path.normcase(os.path.normpath(path))
-    for root in roots:
-        root_norm = os.path.normcase(os.path.normpath(root))
-        try:
-            if os.path.commonpath([path_norm, root_norm]) == root_norm:
-                return True
-        except ValueError:
-            # Different drives on Windows — commonpath raises.
-            continue
-    return False
-
-
-def managed_node_tree_in_use(home: Path | None = None) -> bool:
-    """Return True when any running process executes from the managed Node tree.
-
-    Windows locks executables and loaded scripts against deletion or
-    overwrite while a process runs them, so the updater must not rewrite
-    ``%HERMES_HOME%\\node`` while the desktop app's Node processes hold it —
-    ``PermissionError: [WinError 5]`` on ``npm.cmd`` is the classic symptom
-    (#80926). Always ``False`` on POSIX, which has no equivalent lock
-    semantics.
-
-    The scan is a fast pre-check that avoids pointless re-downloads in
-    long-lived processes; the rename-based swap in
-    :func:`_heal_managed_node_windows` is the authoritative in-use guard.
-    """
-    if sys.platform != "win32":
-        return False
-    try:
-        import psutil
-    except Exception:
-        return False
-    dirs: list[str] = []
-    for directory in iter_hermes_node_dirs(home):
-        try:
-            dirs.append(str(Path(directory).resolve()))
-        except OSError:
-            continue
-    if not dirs:
-        return False
-    try:
-        procs = psutil.process_iter(["exe", "cmdline"])
-    except Exception:
-        return False
-    for proc in procs:
-        try:
-            info = proc.info
-        except Exception:
-            continue
-        exe = info.get("exe")
-        if exe:
-            try:
-                exe_path = str(Path(exe).resolve())
-            except (OSError, ValueError):
-                exe_path = str(exe)
-            if _path_under_any(exe_path, dirs):
-                return True
-        for arg in info.get("cmdline") or []:
-            if _path_under_any(arg, dirs):
-                return True
-    return False
-
-
-_managed_node_in_use_notice_printed = False
-
-
-def _print_managed_node_in_use_notice() -> None:
-    """Print the managed-Node deferral notice once per process."""
-    global _managed_node_in_use_notice_printed
-    if _managed_node_in_use_notice_printed:
-        return
-    _managed_node_in_use_notice_printed = True
-    print(
-        "→ Hermes-managed Node.js is in use by a running app; deferring its "
-        "upgrade until the app is closed (re-run `hermes update` afterwards).",
-        flush=True,
-    )
-
-
-def _heal_managed_node_windows(home: Path | None = None) -> bool | None:
-    """Redownload the portable Node zip into ``%HERMES_HOME%\\node`` on Windows.
-
-    Returns ``True`` on success, ``False`` on a genuine failure (offline,
-    download error, bad archive), and ``None`` when the tree is in use and the
-    heal is deferred — callers must not record the once-per-process attempt
-    for ``None`` so a later call can retry once the tree is free.
-
-    The replacement is staging-first: the new tree is fully downloaded and
-    extracted to a sibling ``node.new-*`` directory, then the live tree is
-    renamed aside (``node.old-*``) and the staged tree renamed into place.
-    The live tree is never deleted before its replacement is ready, so an
-    interrupted heal cannot gut the running installation. Windows allows
-    renaming a tree whose executables are running (images are mapped with
-    ``FILE_SHARE_DELETE`` — the same mechanism as the hermes.exe quarantine);
-    when the OS refuses the rename, that refusal *is* the in-use signal and
-    the heal defers instead of forcing the write and crashing with
-    ``PermissionError: [WinError 5]`` on ``npm.cmd`` (#80926).
-    """
-    import re
-    import tempfile
-    import time
-    import urllib.request
-    import uuid
-    import zipfile
-
-    arch = (os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get("PROCESSOR_ARCHITECTURE", "")).lower()
-    if arch in ("amd64", "x86_64"):
-        node_arch = "x64"
-    elif arch == "arm64":
-        node_arch = "arm64"
-    elif arch in ("x86",):
-        node_arch = "x86"
-    else:
-        return False
-
-    home = home or get_hermes_home()
-    target = home / "node"
-
-    # Cheap pre-check: skip the download and staging work when the tree is
-    # already visibly in use.  The rename-based swap below is the
-    # authoritative guard — this scan only avoids pointless re-downloads for
-    # long-lived processes whose npm resolution retries.
-    if managed_node_tree_in_use(home):
-        _print_managed_node_in_use_notice()
-        return None
-
-    # Best-effort sweep of staging/backup litter from interrupted runs; a
-    # locked file simply stays for the next attempt.  Only dirs older than
-    # 10 minutes are removed so a concurrent heal's in-flight swap (whose
-    # staged/backup dirs are seconds old) is never disturbed.
-    cutoff = time.time() - 600
-    for stale in home.glob("node.old-*"):
-        try:
-            if stale.stat().st_mtime < cutoff:
-                shutil.rmtree(stale, ignore_errors=True)
-        except OSError:
-            continue
-    for stale in home.glob("node.new-*"):
-        try:
-            if stale.stat().st_mtime < cutoff:
-                shutil.rmtree(stale, ignore_errors=True)
-        except OSError:
-            continue
-
-    index_url = f"https://nodejs.org/dist/latest-v{_HERMES_NODE_TARGET_MAJOR}.x/"
-    try:
-        with urllib.request.urlopen(index_url, timeout=60) as response:
-            index_html = response.read().decode("utf-8", errors="replace")
-    except OSError:
-        return False
-
-    match = re.search(
-        rf"node-v{_HERMES_NODE_TARGET_MAJOR}\.\d+\.\d+-win-{node_arch}\.zip",
-        index_html,
-    )
-    if not match:
-        return False
-
-    zip_name = match.group(0)
-    download_url = f"{index_url}{zip_name}"
-    try:
-        with urllib.request.urlopen(download_url, timeout=300) as response:
-            zip_bytes = response.read()
-    except OSError:
-        return False
-
-    token = uuid.uuid4().hex[:8]
-    staged = home / f"node.new-{token}"
-    backup = home / f"node.old-{token}"
-    try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            zip_path = tmp_path / zip_name
-            zip_path.write_bytes(zip_bytes)
-            extract_dir = tmp_path / "extract"
-            extract_dir.mkdir()
-            with zipfile.ZipFile(zip_path) as archive:
-                archive.extractall(extract_dir)
-            extracted = next(extract_dir.glob("node-v*"), None)
-            if extracted is None or not extracted.is_dir():
-                return False
-            # Move the fully-extracted tree to a sibling staging dir so the
-            # swap below is a same-volume rename.
-            shutil.move(str(extracted), str(staged))
-    except OSError:
-        return False
-
-    if target.exists():
-        try:
-            os.replace(str(target), str(backup))
-        except OSError:
-            # The OS refuses to move the live tree — a running process holds
-            # it.  Defer; the old tree is untouched and the next resolution
-            # (e.g. the next update after the app is closed) retries.
-            _print_managed_node_in_use_notice()
-            shutil.rmtree(staged, ignore_errors=True)
-            return None
-        # A rename preserves the directory's mtime, so a backup renamed from
-        # a long-lived tree would instantly look older than the litter-sweep
-        # cutoff to a concurrent heal.  Touch it (best-effort — a failure
-        # must not abort the swap, which already succeeded) so the in-flight
-        # backup is never swept mid-swap.
-        try:
-            os.utime(backup, None)
-        except OSError:
-            pass
-        try:
-            os.replace(str(staged), str(target))
-        except OSError:
-            # Roll the live tree back and report the failure.
-            try:
-                os.replace(str(backup), str(target))
-            except OSError:
-                pass
-            shutil.rmtree(staged, ignore_errors=True)
-            return False
-        # The old tree is no longer canonical; locked files may keep it on
-        # disk until the next heal attempt, which is safe.
-        shutil.rmtree(backup, ignore_errors=True)
-    else:
-        try:
-            os.replace(str(staged), str(target))
-        except OSError:
-            shutil.rmtree(staged, ignore_errors=True)
-            return False
-
-    return node_tool_runnable(str(target / "node.exe"))
-
-
-def _bootstrap_managed_node_posix() -> bool:
-    """Install a fresh managed Node under ``$HERMES_HOME/node`` on POSIX.
-
-    Shells out to ``_nb_install_bundled_node`` in ``scripts/lib/node-bootstrap.sh``
-    (the same pinned-nodejs.org path ``install.sh`` uses), so the resulting
-    tree matches what a normal install would have produced. Runs with
-    ``HERMES_NODE_SKIP_LINKS=1`` so the user's own node/npm on PATH is not
-    shadowed by ``~/.local/bin`` symlinks.
-    """
-    if not _NODE_BOOTSTRAP_SCRIPT.is_file():
-        return False
-
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f'source "{_NODE_BOOTSTRAP_SCRIPT}" && _nb_install_bundled_node',
-            ],
-            env={
-                **os.environ,
-                "HERMES_HOME": str(get_hermes_home()),
-                # Private provisioning: do not symlink node/npm/npx into
-                # ~/.local/bin — the user has their own toolchain on PATH and
-                # this tree must not shadow it.
-                "HERMES_NODE_SKIP_LINKS": "1",
-            },
-            capture_output=True,
-            timeout=600,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0
-
-
-def bootstrap_hermes_managed_node() -> str | None:
-    """Install a Hermes-managed Node tree and return its npm path.
-
-    Used when the only Node/npm on the machine belongs to the user (system,
-    nvm, brew, Nix) and cannot satisfy the repo's ``engines`` requirements —
-    Hermes never modifies a toolchain it does not own, so instead it provisions
-    its own tree under ``$HERMES_HOME/node`` (the same tree a fresh install
-    creates) and works with that.
-
-    Returns the managed npm executable path on success, ``None`` on failure.
-    No-ops (returning the existing npm) when a healthy managed tree is already
-    present.
-    """
-    existing = find_hermes_node_executable("npm")
-    if existing:
-        return existing
-
-    if sys.platform == "win32":
-        ok = _heal_managed_node_windows()
-    else:
-        ok = _bootstrap_managed_node_posix()
-    if not ok:
-        return None
-
-    for directory in iter_hermes_node_dirs():
-        for name in _candidate_node_command_names("npm"):
-            candidate = directory / name
-            if candidate.is_file() and (
-                sys.platform == "win32" or os.access(candidate, os.X_OK)
-            ):
-                resolved = str(candidate)
-                if node_tool_runnable(resolved):
-                    return resolved
-    return None
-
-
-def heal_hermes_managed_node() -> bool:
-    """Redownload Hermes-managed Node when the tree exists but is broken.
-
-    Runs at most once per process. POSIX installs shell out to
-    ``heal_managed_node`` in ``scripts/lib/node-bootstrap.sh``; Windows
-    downloads the portable zip directly (same source as ``install.ps1``).
-    A Windows deferral (the tree is in use by a running app) does NOT record
-    the attempt, so a later call — or the next process — can heal once the
-    tree is free (#80926).
-    """
-    global _managed_node_heal_attempted
-    if _managed_node_heal_attempted:
-        return False
-    if not hermes_managed_node_tree_present():
-        return False
-
-    if sys.platform == "win32":
-        result = _heal_managed_node_windows()
-        if result is None:
-            # In-use deferral: leave the attempt flag clear so a later call
-            # in this process can heal after the app releases the tree.
-            return False
-        _managed_node_heal_attempted = True
-        return bool(result)
-
-    _managed_node_heal_attempted = True
-
-    if not _NODE_BOOTSTRAP_SCRIPT.is_file():
-        return False
-
-    import subprocess
-
-    try:
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f'source "{_NODE_BOOTSTRAP_SCRIPT}" && heal_managed_node',
-            ],
-            env={**os.environ, "HERMES_HOME": str(get_hermes_home())},
-            capture_output=True,
-            timeout=300,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0
-
-
-def _managed_node_tree_outdated(home: Path | None = None) -> bool:
-    """Return True when the managed tree's node runs but is below the target major.
-
-    An outdated managed Node (e.g. a 22 tree from an older install) heals the
-    same way a broken one does: :func:`find_hermes_node_executable` triggers
-    the once-per-process heal, which redownloads
-    ``latest-v{_HERMES_NODE_TARGET_MAJOR}.x`` — so existing users are upgraded
-    on next launch, not just on the next installer re-run. Mirrors
-    ``_nb_managed_node_outdated`` in ``scripts/lib/node-bootstrap.sh``.
-    """
-    import subprocess
-
-    for directory in iter_hermes_node_dirs(home):
-        for name in _candidate_node_command_names("node"):
-            candidate = directory / name
-            if not candidate.is_file() or (
-                sys.platform != "win32" and not os.access(candidate, os.X_OK)
-            ):
-                continue
-            try:
-                from hermes_cli._subprocess_compat import windows_hide_flags
-
-                result = subprocess.run(
-                    [str(candidate), "--version"],
-                    capture_output=True,
-                    timeout=10,
-                    creationflags=windows_hide_flags(),
-                )
-                major = int(result.stdout.decode().strip().lstrip("v").split(".")[0])
-            except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
-                return False  # broken, not outdated — the runnable probe handles it
-            return major < _HERMES_NODE_TARGET_MAJOR
-    return False
-
-
-def find_hermes_node_executable(command: str) -> str | None:
-    """Return a Hermes-managed Node/npm executable path, healing broken trees.
-
-    Outdated trees (node major below ``_HERMES_NODE_TARGET_MAJOR``) heal the
-    same way broken ones do — the once-per-process heal redownloads the target
-    major, upgrading existing users on next launch rather than next reinstall.
-    When the heal fails (offline, download error), an outdated-but-runnable
-    tree is still returned: old Node beats no Node.
-    """
-    names = _candidate_node_command_names(command)
-
-    def _first_runnable() -> tuple[str | None, bool]:
-        broken = False
-        for directory in iter_hermes_node_dirs():
-            for name in names:
-                candidate = directory / name
-                if candidate.is_file() and (
-                    sys.platform == "win32" or os.access(candidate, os.X_OK)
-                ):
-                    resolved = str(candidate)
-                    if node_tool_runnable(resolved):
-                        return resolved, broken
-                    broken = True
-        return None, broken
-
-    resolved, broken_present = _first_runnable()
-    needs_heal = broken_present or (
-        resolved is not None and _managed_node_tree_outdated()
-    )
-    if needs_heal and heal_hermes_managed_node():
-        healed, _ = _first_runnable()
-        if healed:
-            return healed
-    return resolved
-
-
 def find_node_executable_on_path(command: str) -> str | None:
     """Return a Node/npm executable from PATH with Windows shim ordering.
 
@@ -976,33 +504,77 @@ def find_node_executable_on_path(command: str) -> str | None:
     return None
 
 
+def _pm_node_executable(command: str) -> str | None:
+    """The pm store's node/npm/npx binary for *command*, when installed.
+
+    node and npm are pm packages; npx ships inside npm's store entry, so it
+    resolves as a sibling of the npm binary. Returns ``None`` when pm has not
+    installed the package (the caller falls back to PATH).
+    """
+    base = Path(str(command)).name.lower()
+    for suffix in (".cmd", ".exe", ".ps1"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    package_name = {"node": "node", "npm": "npm", "npx": "npm"}.get(base)
+    if package_name is None:
+        return None
+    try:
+        import pm
+
+        if not pm.is_installed(package_name):
+            return None
+        from pm.ensure import _facts, _store
+        from pm.registry import get_package
+        from pm.store import current_target
+
+        fact = _facts().get(package_name)
+        if fact is None:
+            return None
+        binary = get_package(package_name).binary(
+            _store().entry(fact["entry"]), current_target()
+        )
+        if binary is None or not binary.is_file():
+            return None
+        if base == "npx":
+            for name in _candidate_node_command_names("npx"):
+                candidate = binary.parent / name
+                if candidate.is_file():
+                    return str(candidate)
+            return None
+        return str(binary)
+    except Exception:
+        pass
+    return None
+
+
 def find_node_executable(command: str) -> str | None:
-    """Resolve a Node.js command, preferring healthy Hermes-managed installs.
+    """Resolve a Node.js command, preferring the pm store's managed install.
 
     This is for Hermes-owned subprocesses that should not be broken by a bad,
-    missing, or elevation-triggering system Node/npm on PATH. When a managed
-    tree exists but cannot be healed, returns ``None`` instead of falling back
-    to system npm on PATH.
+    missing, or elevation-triggering system Node/npm on PATH: the pm store's
+    pinned node/npm wins whenever it is installed, and PATH (with Windows
+    shim ordering) is the fallback for installs that bring their own Node.
     """
-    managed = find_hermes_node_executable(command)
-    if managed:
-        return managed
-    if hermes_managed_node_tree_present():
-        return None
+    pm_managed = _pm_node_executable(command)
+    if pm_managed:
+        return pm_managed
     return find_node_executable_on_path(command)
 
 
 def with_hermes_node_path(env: dict[str, str] | None = None) -> dict[str, str]:
-    """Return *env* with Hermes-managed Node directories prepended to PATH."""
-    merged = dict(os.environ if env is None else env)
-    existing = merged.get("PATH", "")
-    parts = [p for p in existing.split(os.pathsep) if p]
-    managed = [str(path) for path in iter_hermes_node_dirs() if path.is_dir()]
-    for entry in reversed(managed):
-        if entry not in parts:
-            parts.insert(0, entry)
-    merged["PATH"] = os.pathsep.join(parts)
-    return merged
+    """Return *env* with the pm store's Node/npm directories prepended to PATH.
+
+    Composes through :func:`pm.env_for`, which contributes nothing when the
+    packages are not installed — so on installs that use their own system
+    Node the environment passes through unchanged.
+    """
+    base = dict(os.environ if env is None else env)
+    try:
+        import pm
+
+        return pm.env_for("npm", base_env=base)
+    except Exception:
+        return base
 
 
 def agent_browser_runnable(path: str | None) -> bool:
@@ -1511,16 +1083,6 @@ def resolve_reasoning_config(cfg: dict | None, model: str = "") -> dict | None:
             "Unknown reasoning_effort '%s', using default (medium)", effort
         )
     return result
-
-
-def is_termux() -> bool:
-    """Return True when running inside a Termux (Android) environment.
-
-    Checks ``TERMUX_VERSION`` (set by Termux) or the Termux-specific
-    ``PREFIX`` path.  Import-safe — no heavy deps.
-    """
-    prefix = os.getenv("PREFIX", "")
-    return bool(os.getenv("TERMUX_VERSION") or "com.termux/files/usr" in prefix)
 
 
 _wsl_detected: bool | None = None

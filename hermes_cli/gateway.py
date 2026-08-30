@@ -564,7 +564,7 @@ def probe_gateway_loop_liveness(
 
         path = get_loop_heartbeat_path(home)
         mtime = path.stat().st_mtime
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
         heartbeat_pid = int(payload.get("pid", 0))
     except Exception:
         return GATEWAY_LOOP_UNKNOWN
@@ -1490,7 +1490,7 @@ def _hermes_home_from_systemd_unit_file(system: bool = False) -> str | None:
     if not unit_path.exists():
         return None
     try:
-        text = unit_path.read_text(encoding="utf-8")
+        text = unit_path.read_text(encoding="utf-8-sig")
     except OSError:
         return None
     for line in text.splitlines():
@@ -1941,12 +1941,6 @@ def _probe_launchd_service_running() -> bool:
 def get_gateway_runtime_snapshot(system: bool = False) -> GatewayRuntimeSnapshot:
     """Return a unified view of gateway liveness for the current profile."""
     gateway_pids = tuple(find_gateway_pids())
-    if is_termux():
-        return GatewayRuntimeSnapshot(
-            manager="Termux / manual process",
-            gateway_pids=gateway_pids,
-        )
-
     from hermes_constants import is_container
 
     if is_linux() and is_container():
@@ -2409,7 +2403,7 @@ def is_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
-from hermes_constants import is_container, is_termux, is_wsl
+from hermes_constants import is_container, is_wsl
 
 
 def _wsl_systemd_operational() -> bool:
@@ -2458,7 +2452,7 @@ def _container_systemd_operational() -> bool:
 
 
 def supports_systemd_services() -> bool:
-    if not is_linux() or is_termux():
+    if not is_linux():
         return False
     if shutil.which("systemctl") is None:
         return False
@@ -3037,7 +3031,7 @@ def _find_legacy_hermes_units() -> list[tuple[str, Path, bool]]:
             try:
                 if not unit_path.exists():
                     continue
-                text = unit_path.read_text(encoding="utf-8", errors="ignore")
+                text = unit_path.read_text(encoding="utf-8-sig", errors="ignore")
             except (OSError, PermissionError):
                 continue
             if not any(marker in text for marker in _LEGACY_UNIT_EXECSTART_MARKERS):
@@ -3238,7 +3232,7 @@ def _read_systemd_user_from_unit(unit_path: Path) -> str | None:
     if not unit_path.exists():
         return None
 
-    for line in unit_path.read_text(encoding="utf-8").splitlines():
+    for line in unit_path.read_text(encoding="utf-8-sig").splitlines():
         if line.startswith("User="):
             value = line.split("=", 1)[1].strip()
             return value or None
@@ -3417,8 +3411,6 @@ def get_systemd_linger_status() -> tuple[bool | None, str]:
         (False, "") when linger is disabled.
         (None, detail) when the status could not be determined.
     """
-    if is_termux():
-        return None, "not supported in Termux"
     if not is_linux():
         return None, "not supported on this platform"
 
@@ -3565,11 +3557,13 @@ def get_python_path() -> str:
             from hermes_constants import venv_python_path
         except ImportError:
             # Update-boundary: a gateway restarted mid-update can hold a
-            # hermes_constants cached from before this symbol existed. See
-            # _reload_hermes_constants() in hermes_cli/managed_uv.py.
-            from hermes_cli.managed_uv import _reload_hermes_constants
+            # hermes_constants cached from before this symbol existed.
+            # Reload picks up the definitions actually on disk.
+            import importlib
 
-            venv_python_path = _reload_hermes_constants().venv_python_path
+            import hermes_constants
+
+            venv_python_path = importlib.reload(hermes_constants).venv_python_path
 
         venv_python = venv_python_path(venv, windows=is_windows())
         if venv_python.exists():
@@ -3798,42 +3792,59 @@ def _append_node_dir_for_service(
 ) -> None:
     """Add the Node directory a generated service unit should use to *path_entries*.
 
-    The Hermes-managed Node under ``$HERMES_HOME/node`` goes first when it
-    exists. A bare ``shutil.which("node")`` cannot be trusted on its own here:
-    a service unit is written once and then survives reboots, so resolving a
-    system Node that happens to be ahead on the installing shell's PATH bakes
-    the wrong interpreter in permanently — the exact failure the desktop
-    backend spawn was fixed for. Managed dirs are profile-scoped, so each
-    profile's unit still names its own Node.
+    The pm store's Node/npm dirs go first when installed. A bare
+    ``shutil.which("node")`` cannot be trusted on its own here: a service unit
+    is written once and then survives reboots, so resolving a system Node that
+    happens to be ahead on the installing shell's PATH bakes the wrong
+    interpreter in permanently — the exact failure the desktop backend spawn
+    was fixed for. The store is profile-scoped, so each profile's unit still
+    names its own Node.
 
     *hermes_root* is the Hermes home the unit will run against. System units
     installed via sudo MUST pass the **target user's** home: probing the
     default (the calling user's — root's — tree) would bake root's Node into
-    the target user's unit. The probe swallows OSError: an unreadable
-    candidate dir (hardened home) means "skip the rung", not "crash the
-    generator".
+    the target user's unit; the target user's installed-state file
+    (``<hermes_root>/tools/facts.json``) is read directly for that case.
+    The probe swallows OSError: an unreadable candidate dir (hardened home)
+    means "skip the rung", not "crash the generator".
 
-    PATH lookup remains the fallback rung for installs with no managed Node.
+    PATH lookup remains the fallback rung for installs with no pm-managed Node.
     """
-    from hermes_constants import (
-        hermes_managed_node_tree_present,
-        iter_hermes_node_dirs,
-    )
+    managed_dirs: list[str] = []
+    try:
+        if hermes_root is None:
+            import pm
 
-    managed_node_present = hermes_managed_node_tree_present(hermes_root)
-    for directory in iter_hermes_node_dirs(hermes_root) if managed_node_present else ():
-        entry = str(directory)
+            env = pm.env_for("npm", base_env={"PATH": ""})
+            managed_dirs = [d for d in env.get("PATH", "").split(os.pathsep) if d]
+        else:
+            from pm.lock import Facts
+
+            store_root = Path(hermes_root) / "tools"
+            facts = Facts(store_root / "facts.json")
+            for name in ("npm", "node"):
+                value = facts.env_for(name, store_root).get("PATH") or []
+                for directory in value if isinstance(value, list) else [value]:
+                    if directory and directory not in managed_dirs:
+                        managed_dirs.append(str(directory))
+    except Exception:
+        managed_dirs = []
+
+    managed_appended = False
+    for entry in managed_dirs:
         try:
-            present = directory.is_dir()
+            present = Path(entry).is_dir()
         except OSError:
             present = False
-        if present and entry not in path_entries:
-            path_entries.append(entry)
+        if present:
+            managed_appended = True
+            if entry not in path_entries:
+                path_entries.append(entry)
 
     # Ambient PATH lookup is a fallback, not an additional rung. Once the
     # target Hermes home provides managed Node, consulting the invoker's PATH
     # makes a system unit differ between sudo/root and its service user.
-    if managed_node_present:
+    if managed_appended:
         return
 
     resolved_node = shutil.which("node")
@@ -4058,7 +4069,7 @@ def systemd_unit_is_current(system: bool = False) -> bool:
     if not unit_path.exists():
         return False
 
-    installed = unit_path.read_text(encoding="utf-8")
+    installed = unit_path.read_text(encoding="utf-8-sig")
     expected_user = _read_systemd_user_from_unit(unit_path) if system else None
     expected = generate_systemd_unit(system=system, run_as_user=expected_user)
     # Normalize out directives that older systemd versions silently drop
@@ -4199,7 +4210,7 @@ def _print_linger_enable_warning(username: str, detail: str | None = None) -> No
 
 def _ensure_linger_enabled() -> None:
     """Enable linger when possible so the user gateway survives logout."""
-    if is_termux() or not is_linux():
+    if not is_linux():
         return
 
     import getpass
@@ -5298,7 +5309,7 @@ def launchd_plist_is_current() -> bool:
     if not plist_path.exists():
         return False
 
-    installed = plist_path.read_text(encoding="utf-8")
+    installed = plist_path.read_text(encoding="utf-8-sig")
     expected = generate_launchd_plist()
     return _normalize_launchd_plist_for_comparison(
         installed
@@ -7949,14 +7960,6 @@ def gateway_setup():
                 print_info(
                     "  To enable systemd: add systemd=true to /etc/wsl.conf, then 'wsl --shutdown'"
                 )
-            elif is_termux():
-                from hermes_constants import display_hermes_home as _dhh
-
-                print_info("  Termux does not use systemd/launchd services.")
-                print_info("  Run in foreground: hermes gateway run")
-                print_info(
-                    f"  Or start it manually in the background (best effort): nohup hermes gateway run >{_dhh()}/logs/gateway.log 2>&1 &"
-                )
             else:
                 print_info("  Service install not supported on this platform.")
                 print_info("  Run in foreground: hermes gateway run")
@@ -8238,10 +8241,6 @@ def _gateway_command_inner(args):
         force = getattr(args, "force", False)
         system = getattr(args, "system", False)
         run_as_user = getattr(args, "run_as_user", None)
-        if is_termux():
-            print("Gateway service installation is not supported on Termux.")
-            print("Run manually: hermes gateway")
-            sys.exit(1)
         if supports_systemd_services():
             if is_wsl():
                 print_warning(
@@ -8362,12 +8361,6 @@ def _gateway_command_inner(args):
             managed_error("uninstall gateway service")
             return
         system = getattr(args, "system", False)
-        if is_termux():
-            print(
-                "Gateway service uninstall is not supported on Termux because there is no managed service to remove."
-            )
-            print("Stop manual runs with: hermes gateway stop")
-            sys.exit(1)
         if supports_systemd_services():
             systemd_uninstall(system=system)
         elif is_macos():
@@ -8415,12 +8408,6 @@ def _gateway_command_inner(args):
                 )
                 _wait_for_gateway_exit(timeout=10.0, force_after=5.0)
 
-        if is_termux():
-            print(
-                "Gateway service start is not supported on Termux because there is no system service manager."
-            )
-            print("Run manually: hermes gateway")
-            sys.exit(1)
         if supports_systemd_services():
             systemd_start(system=system)
         elif is_macos():
@@ -8767,10 +8754,7 @@ def _gateway_command_inner(args):
                     for line in runtime_lines:
                         print(f"  {line}")
                 print()
-                if is_termux():
-                    print("Termux note:")
-                    print("  Android may stop background jobs when Termux is suspended")
-                elif is_wsl():
+                if is_wsl():
                     print("WSL note:")
                     print(
                         "  The gateway is running in foreground/manual mode (recommended for WSL)."
@@ -8798,11 +8782,7 @@ def _gateway_command_inner(args):
                 print()
                 print("To start:")
                 print("  hermes gateway run      # Run in foreground")
-                if is_termux():
-                    print(
-                        "  nohup hermes gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # Best-effort background start"
-                    )
-                elif is_wsl():
+                if is_wsl():
                     print(
                         "  tmux new -s hermes 'hermes gateway run'         # persistent via tmux"
                     )

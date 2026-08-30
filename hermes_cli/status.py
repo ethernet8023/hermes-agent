@@ -109,9 +109,6 @@ def _effective_provider_label() -> str:
     return provider_label(effective)
 
 
-from hermes_constants import is_termux as _is_termux
-
-
 def _estop_status_line():
     """One-line pause banner for `hermes status`, or None when not paused.
 
@@ -572,16 +569,10 @@ def show_status(args):
             print(f"  PID(s):       {_format_gateway_pids(snapshot.gateway_pids)}")
         if snapshot.has_process_service_mismatch:
             print("  Service:      installed but not managing the current running gateway")
-        elif _is_termux() and not snapshot.gateway_pids:
-            print("  Start with:   hermes gateway")
-            print("  Note:         Android may stop background jobs when Termux is suspended")
         elif snapshot.service_installed and not snapshot.service_running:
             print("  Service:      installed but stopped")
     except Exception:
-        if _is_termux():
-            print(f"  Status:       {color('unknown', Colors.DIM)}")
-            print("  Manager:      Termux / manual process")
-        elif sys.platform.startswith('linux'):
+        if sys.platform.startswith('linux'):
             print(f"  Status:       {color('unknown', Colors.DIM)}")
             print("  Manager:      systemd/manual")
         elif sys.platform == 'darwin':
@@ -650,7 +641,7 @@ def show_status(args):
         if sessions_file.exists():
             import json
             try:
-                with open(sessions_file, encoding="utf-8") as f:
+                with open(sessions_file, encoding="utf-8-sig") as f:
                     data = json.load(f)
                     _entries = {
                         k: v for k, v in data.items()

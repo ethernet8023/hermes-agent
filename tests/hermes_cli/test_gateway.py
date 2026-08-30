@@ -291,7 +291,6 @@ def test_s6_runtime_snapshot_reports_supervised_service(monkeypatch, tmp_path):
 class TestSystemdLingerStatus:
     def test_reports_enabled(self, monkeypatch):
         monkeypatch.setattr(gateway, "is_linux", lambda: True)
-        monkeypatch.setattr(gateway, "is_termux", lambda: False)
         monkeypatch.setenv("USER", "alice")
         monkeypatch.setattr(
             gateway.subprocess,
@@ -303,16 +302,9 @@ class TestSystemdLingerStatus:
         assert gateway.get_systemd_linger_status() == (True, "")
 
 
-    def test_reports_termux_as_not_supported(self, monkeypatch):
-        monkeypatch.setattr(gateway, "is_termux", lambda: True)
-
-        assert gateway.get_systemd_linger_status() == (None, "not supported in Termux")
-
-
 class TestContainerSystemdSupport:
     def test_supports_systemd_services_in_container_with_user_manager(self, monkeypatch):
         monkeypatch.setattr(gateway, "is_linux", lambda: True)
-        monkeypatch.setattr(gateway, "is_termux", lambda: False)
         monkeypatch.setattr(gateway, "is_wsl", lambda: False)
         monkeypatch.setattr(gateway, "is_container", lambda: True)
         monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/systemctl")

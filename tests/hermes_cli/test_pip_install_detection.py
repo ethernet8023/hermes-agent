@@ -34,6 +34,18 @@ def test_code_scoped_stamp_wins_over_home_stamp(tmp_path):
 
 
 
+def test_legacy_apt_stamp_resolves_to_unknown(tmp_path):
+    """The removed Termux 'apt' lane: a legacy stamp falls through to 'unknown'.
+
+    'unknown' routes the user to the generic "hermes update" path — the same
+    treatment as any other unidentifiable install — instead of refusing.
+    """
+    (tmp_path / ".install_method").write_text("apt\n", encoding="utf-8")
+    with patch("hermes_cli.config.get_managed_system", return_value=None):
+        from hermes_cli.config import detect_install_method
+        assert detect_install_method(project_root=tmp_path) == "unknown"
+
+
 def test_stamp_install_method_writes_code_scoped(tmp_path):
     """stamp_install_method writes next to the code, not into $HERMES_HOME."""
     code = tmp_path / "code"

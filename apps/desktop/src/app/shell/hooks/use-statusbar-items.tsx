@@ -8,6 +8,7 @@ import { useApprovalModeStatusbarItem } from '@/app/shell/approval-mode-menu'
 import { ContextUsagePanel } from '@/app/shell/context-usage-panel'
 import { GatewayMenuPanel } from '@/app/shell/gateway-menu-panel'
 import { useContextBreakdown } from '@/app/shell/hooks/use-context-breakdown'
+import { useSystemResourcesStatusbarItem } from '@/app/shell/system-resources-statusbar'
 import { $paneVisible, togglePaneVisible } from '@/components/pane-shell/tree/store'
 import { Codicon } from '@/components/ui/codicon'
 import { GlyphSpinner } from '@/components/ui/glyph-spinner'
@@ -268,6 +269,7 @@ export function useStatusbarItems({
   const contextBar = useMemo(() => contextBarLabel(gaugeUsage), [gaugeUsage])
 
   const approvalModeItem = useApprovalModeStatusbarItem(activeGatewayProfile, requestGateway)
+  const systemResourcesItem = useSystemResourcesStatusbarItem()
 
   const gatewayMenuContent = useMemo(
     () => (close: () => void) => (
@@ -312,11 +314,15 @@ export function useStatusbarItems({
       applying,
       applyMessage: updateApply.message,
       behind: updateStatus?.behind ?? 0,
-      branch: updateStatus?.branch,
+      // The build stamp is the authority for what this binary IS; updateStatus
+      // knows what git says about the checkout. Prefer the stamp, fall back.
+      branch: desktopVersion?.branch ?? updateStatus?.branch ?? undefined,
+      channel: updateStatus?.channel === 'stable' ? 'stable' : 'main',
       copy,
+      latestTag: updateStatus?.latestTag ?? null,
       remote: connection?.mode === 'remote',
       restarting: updateApply.stage === 'restart',
-      sha: updateStatus?.currentSha?.slice(0, 7) ?? null,
+      sha: desktopVersion?.commit?.slice(0, 7) ?? updateStatus?.currentSha?.slice(0, 7) ?? null,
       target: 'client',
       updateAvailable: updateStatus?.updateAvailable,
       version: desktopVersion?.appVersion
@@ -339,6 +345,8 @@ export function useStatusbarItems({
     }
   }, [
     desktopVersion?.appVersion,
+    desktopVersion?.branch,
+    desktopVersion?.commit,
     connection?.mode,
     copy,
     updateApply.applying,
@@ -346,7 +354,9 @@ export function useStatusbarItems({
     updateApply.stage,
     updateStatus?.behind,
     updateStatus?.branch,
+    updateStatus?.channel,
     updateStatus?.currentSha,
+    updateStatus?.latestTag,
     updateStatus?.updateAvailable
   ])
 
@@ -361,7 +371,9 @@ export function useStatusbarItems({
       applying,
       applyMessage: backendUpdateApply.message,
       behind: backendUpdateStatus?.behind ?? 0,
+      channel: backendUpdateStatus?.channel === 'stable' ? 'stable' : 'main',
       copy,
+      latestTag: backendUpdateStatus?.latestTag ?? null,
       remote: true,
       restarting: backendUpdateApply.stage === 'restart',
       target: 'backend',
@@ -385,6 +397,8 @@ export function useStatusbarItems({
     connection?.mode,
     statusSnapshot?.version,
     backendUpdateStatus?.behind,
+    backendUpdateStatus?.channel,
+    backendUpdateStatus?.latestTag,
     backendUpdateStatus?.updateAvailable,
     backendUpdateApply.applying,
     backendUpdateApply.message,
@@ -546,9 +560,12 @@ export function useStatusbarItems({
       },
       {
         detail: contextBar || undefined,
-        hidden: !contextUsage,
+        // Never self-hide: the user opted this item in (it's hidden-by-
+        // default), so an empty label must render as a waiting placeholder,
+        // not a vanished item — an enabled-but-invisible toggle reads as
+        // "another item took its spot".
         id: 'context-usage',
-        label: contextUsage,
+        label: contextUsage || '—',
         menuAlign: 'end',
         menuClassName: 'w-auto border-(--ui-stroke-secondary) p-0',
         menuContent: (
@@ -565,6 +582,7 @@ export function useStatusbarItems({
         toggleLabel: copy.toggleSessionTimer,
         variant: 'text'
       },
+      systemResourcesItem,
       {
         ...approvalModeItem,
         hidden: gatewayState !== 'open',
@@ -598,6 +616,7 @@ export function useStatusbarItems({
       gaugeUsage,
       sessionStartedAt,
       gatewayState,
+      systemResourcesItem,
       terminalShowing,
       turnStartedAt
     ]

@@ -145,6 +145,8 @@ export interface Translations {
       back: string
       openLogs: string
       repairHint: string
+      reinstallApp: string
+      bundledReinstallHint: string
       remoteSignInHint: (signInLabel: string) => string
       signOutAndSignIn: string
       remoteFailureHint: string
@@ -253,6 +255,13 @@ export interface Translations {
     dismiss: string
   }
 
+  externalOpenFailed: {
+    title: string
+    message: string
+    copyUrl: string
+    close: string
+  }
+
   sendDiagnostics: {
     title: string
     privacyNotice: string
@@ -337,6 +346,7 @@ export interface Translations {
       providerAccounts: string
       providerApiKeys: string
       providerCustomEndpoints: string
+      providerLocalModels: string
       gateway: string
       apiKeys: string
       keybinds: string
@@ -551,37 +561,6 @@ export interface Translations {
     }
     fieldLabels: Record<string, string>
     fieldDescriptions: Record<string, string>
-    about: {
-      heading: string
-      version: (value: string) => string
-      versionUnavailable: string
-      bundleOutOfSync: string
-      bundleOutOfSyncDesc: string
-      bundleOutOfSyncAction: string
-      updates: string
-      checkNow: string
-      checking: string
-      seeWhatsNew: string
-      updateNow: string
-      releaseNotes: string
-      onLatest: string
-      installing: string
-      cantUpdate: string
-      cantReach: string
-      tapCheck: string
-      updateReady: (count: number) => string
-      updateReadyUnknown: string
-      lastChecked: (age: string) => string
-      justNowSuffix: string
-      automaticUpdates: string
-      automaticUpdatesDesc: string
-      branchCommit: (branch: string, commit: string) => string
-      never: string
-      justNow: string
-      minAgo: (count: number) => string
-      hoursAgo: (count: number) => string
-      daysAgo: (count: number) => string
-    }
     config: {
       none: string
       noneParen: string
@@ -959,6 +938,104 @@ export interface Translations {
       fallbackEmpty: string
       notInCatalog: string
       tasks: Record<string, AuxTaskCopy>
+    }
+    localModels: {
+      title: string
+      runtimeTitle: string
+      runtimeReady: (backend: string) => string
+      serverRunning: string
+      runtimeInstalled: string
+      runtimeInstalledDetail: (tag: string, backend: string) => string
+      installTitle: string
+      installDetail: string
+      installAction: string
+      installing: string
+      installFailed: string
+      hardwareTitle: string
+      hardwareLoading: string
+      vram: (label: string) => string
+      ram: (label: string) => string
+      unifiedMemory: string
+      modelsTitle: string
+      recommended: string
+      downloaded: string
+      downloadAction: (size: string) => string
+      downloadProgress: (done: string, total: string) => string
+      downloadDoneToast: (model: string) => string
+      installDoneToast: string
+      quickstartTitle: string
+      quickstartDetail: (model: string, size: string) => string
+      quickstartDetailReady: (model: string) => string
+      quickstartAction: string
+      quickstartConfigure: string
+      quickstartDoneToast: (model: string) => string
+      quickstartFailed: string
+      quickstartStageEngine: string
+      quickstartStageModel: string
+      quickstartStageFinish: string
+      useAction: string
+      activePill: string
+      updateTitle: string
+      updateDetail: (next: string, current: string) => string
+      updateAction: string
+      updating: string
+      upToDateTitle: string
+      upToDateDetail: (tag: string, backend: string) => string
+      updateToast: (next: string) => string
+      activeDetail: string
+      activeNotLoaded: string
+      loadedPill: string
+      placementResident: string
+      placementSpilled: string
+      placementResidentTip: string
+      placementSpilledTip: string
+      loadingPill: string
+      ejectTip: string
+      ejected: string
+      ejectFailed: string
+      stopServer: string
+      startServer: string
+      runtimeRunningDetail: string
+      serverStopped: string
+      serverStarted: string
+      serverStopFailed: string
+      serverStartFailed: string
+      activating: string
+      activateFailed: (model: string) => string
+      activateDoneToast: (model: string) => string
+      downloadFailed: (model: string) => string
+      pillFitsGpu: string
+      pillUsesRam: string
+      pillTooBig: string
+      browseTitle: string
+      browseHint: string
+      browsePlaceholder: string
+      browseSearching: string
+      browseListing: string
+      browseShowFiles: string
+      browseRefresh: string
+      browseDownloads: string
+      browseLikes: string
+      browseGated: string
+      browseNoGguf: string
+      browseFitUnknown: string
+      browseAlreadyDownloaded: string
+      addedByYou: string
+      browseDownloadStarted: string
+      browseDownloadAria: string
+      sideloadButton: string
+      sideloadTitle: string
+      sideloadDone: string
+      sideloadAlreadyPresent: string
+      pillFullContext: (max: string) => string
+      pillFullContextTip: string
+      pillUpTo: (max: string) => string
+      pillGrowsTip: string
+      pillVision: string
+      deleteAction: string
+      deleteConfirm: (model: string) => string
+      deleted: (model: string) => string
+      deleteFailed: string
     }
     providers: {
       connectAccount: string
@@ -2180,6 +2257,41 @@ export interface Translations {
 
   updates: {
     stages: Record<string, string>
+    appName: string
+    version: (value: string) => string
+    versionUnavailable: string
+    bundleOutOfSync: string
+    bundleOutOfSyncDesc: string
+    bundleOutOfSyncAction: string
+    updatesSection: string
+    checkNow: string
+    checkingShort: string
+    seeWhatsNew: string
+    releaseNotes: string
+    installing: string
+    cantReach: string
+    tapCheck: string
+    updateReady: (count: number) => string
+    updateReadyUnknown: string
+    lastChecked: (age: string) => string
+    justNowSuffix: string
+    never: string
+    justNow: string
+    minAgo: (count: number) => string
+    hoursAgo: (count: number) => string
+    daysAgo: (count: number) => string
+    versionDetailsTitle: string
+    versionDetailsBody: string
+    versionDetailsVersion: string
+    versionDetailsCommit: string
+    versionDetailsBuildOrigin: string
+    versionDetailsDistribution: string
+    versionDetailsDistributionDesktop: string
+    versionDetailsRuntimeEmbedded: string
+    versionDetailsRuntimeExternal: string
+    versionDetailsRuntime: string
+    versionDetailsInstallId: string
+    versionDetailsUncommittedChanges: string
     checking: string
     checkFailedTitle: string
     tryAgain: string
@@ -2194,6 +2306,7 @@ export interface Translations {
     availableTitleBackend: string
     availableBodyBackend: string
     availableBodyNoChangelog: string
+    availableBodyRelease: (tag: string) => string
     updateNow: string
     maybeLater: string
     moreChanges: (count: number) => string
@@ -2254,11 +2367,18 @@ export interface Translations {
     retryAfterRun: string
     setupChoiceTitle: string
     setupChoiceDesc: string
+    setupChoiceDescLocal: string
     connectExistingTitle: string
     connectExistingShort: string
     connectExistingDesc: string
     installLocalTitle: string
     installLocalDesc: string
+    useLocalTitle: string
+    useLocalDesc: string
+    bundledLocalDesc: string
+    bundledDamagedTitle: string
+    bundledDamagedDesc: string
+    reinstallApp: string
     localStartUnavailable: string
     remoteSetupTitle: string
     remoteSetupDesc: string
@@ -2320,6 +2440,8 @@ export interface Translations {
     connected: string
     featuredPitch: string
     fireworksPitch: string
+    localModelsTitle: string
+    localModelsPitch: string
     openRouterPitch: string
     apiKeyOptions: Record<string, { short: string; description: string }>
     backToSignIn: string
@@ -2369,6 +2491,9 @@ export interface Translations {
     noModels: string
     addProvider: string
     loadFailed: string
+    loadingIntoMemory: string
+    downloading: string
+    localDownloadsHeading: string
     noAuthenticatedProviders: string
     pro: string
     proNeedsSubscription: string
@@ -2444,6 +2569,7 @@ export interface Translations {
       update: string
       updateInProgress: string
       commitsBehind: (count: number, branch: string) => string
+      releaseAvailable: (tag: string) => string
       desktopVersion: (version: string) => string
       backendVersion: (version: string) => string
       clientLabel: (version: string) => string
@@ -2495,6 +2621,15 @@ export interface Translations {
       openStarmap: string
       turnRunning: string
       contextUsage: string
+      systemResources: {
+        title: string
+        loading: string
+        gpuUtilization: string
+        gpuMemory: string
+        ram: string
+        unifiedNote: string
+        toggle: string
+      }
       contextUsagePanel: {
         categories: {
           conversation: string
@@ -2736,6 +2871,8 @@ export interface Translations {
       loadingSession: string
       showEarlier: string
       loadingResponse: string
+      loadingLocalModel: (model: string) => string
+      processingPrompt: string
       resumeWhenBackgroundDone: (count: number) => string
       thinking: string
       thought: string

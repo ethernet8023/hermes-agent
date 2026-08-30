@@ -3897,6 +3897,30 @@ DEFAULT_CONFIG = {
         "region": "global",
     },
 
+    # Managed llama.cpp local runtime (see docs: user-guide/local-models).
+    # Hermes downloads official llama.cpp release binaries, then spawns and
+    # supervises one llama-server in router mode. Context sizing is policy,
+    # not preference: there are deliberately no context/VRAM knobs here.
+    "local_runtime": {
+        # Master switch for the managed runtime. Off = detection-only
+        # (Hermes still finds an external llama-server you run yourself).
+        "enabled": False,
+        # The llama.cpp build is pinned in pm/lock.json (url + sha256 per
+        # platform), not here: bumping it is a release-time pin refresh,
+        # which is what makes the download verifiable instead of resolved
+        # at runtime. `hermes pm doctor` reports what is installed.
+        # Inference backend: auto = CUDA on NVIDIA, Metal on macOS, Vulkan on
+        # other GPUs, else CPU. Explicit values: cuda|metal|vulkan|hip|cpu.
+        "backend": "auto",
+        # Router process: how many models may be resident at once.
+        "models_max": 4,
+        # Port for the managed server. 0 = pick a free port at spawn.
+        "port": 0,
+        # Extra ports detection probes for an external llama-server, in
+        # addition to the default 8080.
+        "detect_ports": [],
+    },
+
     # Config schema version - bump this when adding new required fields
     "_config_version": 39,
 }

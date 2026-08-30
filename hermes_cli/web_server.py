@@ -122,8 +122,8 @@ except ImportError:
     # running `hermes dashboard` needs fastapi+uvicorn; lazy install keeps
     # them out of every other install path. After install, re-import.
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("tool.dashboard", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("web")
         from fastapi import (
             FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
             WebSocket, WebSocketDisconnect,
@@ -151,7 +151,7 @@ def _process_start_marker(pid: int) -> str:
     """
     if sys.platform == "linux":
         try:
-            stat_line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            stat_line = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8-sig")
         except FileNotFoundError as exc:
             raise ProcessLookupError(pid) from exc
 
@@ -469,6 +469,28 @@ async def _lifespan(app: "FastAPI"):
     # sweeping stale sessions on schedule, independent of list requests.
     auto_archive_task = asyncio.create_task(_auto_archive_ticker_loop())
 
+    # Managed local runtime: when the user opted in (local_runtime.enabled,
+    # set by the Local Models 'Use' action), bring the llama-server back up
+    # so a restart doesn't strand a llamacpp main model without a backend.
+    # Off-thread and best-effort: binary check + spawn + health poll must
+    # not delay the server socket, and failure falls back to configured
+    # cloud providers exactly like a cold start.
+    def _boot_local_runtime():
+        try:
+            from hermes_cli.config import load_config
+            from hermes_cli.local_runtime.bootstrap import ensure_local_runtime
+
+            # Server only — models load on first inference, always (residency
+            # design: downloaded = available; demand loads; idleness
+            # evicts). An empty router holds no VRAM; warming a model at
+            # boot would reload gigabytes nobody asked for yet.
+            ensure_local_runtime(load_config())
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("local runtime boot failed: %s", exc)
+
+    threading.Thread(target=_boot_local_runtime, daemon=True,
+                     name="local-runtime-boot").start()
+
     try:
         yield
     finally:
@@ -478,6 +500,14 @@ async def _lifespan(app: "FastAPI"):
         selftest_task.cancel()
         auto_archive_task.cancel()
         await PTY_REGISTRY.close_all()
+        # Stop the managed llama-server with its parent — a supervisor-less
+        # orphan would keep VRAM pinned after the app closes.
+        try:
+            from hermes_cli.local_runtime.bootstrap import shutdown_local_runtime
+
+            shutdown_local_runtime()
+        except Exception:  # noqa: BLE001
+            pass
         if os.getenv("HERMES_DESKTOP") == "1":
             _terminate_desktop_managed_gateway()
 
@@ -3207,6 +3237,10 @@ def _git_path(path: str) -> str:
 from hermes_cli.web_routers import git as _git_routes  # noqa: E402
 
 app.include_router(_git_routes.router)
+
+from hermes_cli.web_routers import local_models as _local_models_routes  # noqa: E402
+
+app.include_router(_local_models_routes.router)
 from hermes_cli.web_routers.git import (  # noqa: E402,F401 — legacy re-exports; tests call these via web_server.<name>
     git_status_route,
     git_worktrees_route,
@@ -3543,7 +3577,7 @@ def _read_or_create_install_id() -> Optional[str]:
     root = get_default_hermes_root()
     path = root / _INSTALL_ID_FILENAME
     try:
-        existing = path.read_text(encoding="utf-8").strip().lower()
+        existing = path.read_text(encoding="utf-8-sig").strip().lower()
         if _INSTALL_ID_RE.match(existing):
             return existing
     except FileNotFoundError:
@@ -5083,7 +5117,6 @@ async def update_hermes():
             "docker": "docker_update_unsupported",
             "image-marker": "docker_update_unsupported",
             "image-marker-invalid": "docker_update_unsupported",
-            "apt": "apt_update_required",
             "nix": "nix_update_unsupported",
         }.get(refusal.code, "update_not_in_place")
         return {
@@ -5189,7 +5222,7 @@ async def check_hermes_update(force: bool = False):
     ``POST /api/hermes/update`` actually runs ``hermes update``.
 
     Returns:
-        install_method: 'apt' | 'git' | 'docker' | 'nix' | 'nixos' | 'unknown'
+        install_method: 'git' | 'docker' | 'nix' | 'nixos' | 'unknown'
         current_version: installed Hermes version string
         behind: commits behind upstream (>=1), 0 if up to date,
                 -1 if behind by an unknown count, or null if the
@@ -5235,11 +5268,6 @@ async def check_hermes_update(force: bool = False):
 
     if install_method == "docker":
         payload["message"] = format_docker_update_message()
-        return payload
-    if install_method == "apt":
-        payload["message"] = (
-            "Hermes is managed by Termux APT; run `pkg upgrade hermes-agent`."
-        )
         return payload
 
     # banner.check_for_updates() handles git / nix-revision paths and
@@ -6091,7 +6119,7 @@ def _read_flat_json(provider: ProviderConfigSchema) -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         _log.warning("Failed to read memory provider config from %s", path, exc_info=True)
         return {}
@@ -6143,7 +6171,7 @@ def _honcho_read_sources() -> tuple[Dict[str, Any], str, Dict[str, Any]]:
     raw: Dict[str, Any] = {}
     if path.exists():
         try:
-            loaded = json.loads(path.read_text(encoding="utf-8"))
+            loaded = json.loads(path.read_text(encoding="utf-8-sig"))
             raw = loaded if isinstance(loaded, dict) else {}
         except Exception:
             _log.warning("Failed to read Honcho config from %s", path, exc_info=True)
@@ -6253,7 +6281,7 @@ def _write_provider_honcho(provider: ProviderConfigSchema, values: Dict[str, str
         cfg: Dict[str, Any] = {}
         if path.exists():
             try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
+                loaded = json.loads(path.read_text(encoding="utf-8-sig"))
                 cfg = loaded if isinstance(loaded, dict) else {}
             except Exception:
                 _log.warning("Failed to read Honcho config from %s", path, exc_info=True)
@@ -6377,8 +6405,9 @@ def _memory_provider_setup_manifest(name: str) -> Dict[str, Any]:
         if dep["name"] or dep["install"] or dep["check"]:
             external_dependencies.append(dep)
 
+    extra = manifest.get("extra")
     return {
-        "pip_dependencies": _string_list(manifest.get("pip_dependencies")),
+        "extras": [extra] if isinstance(extra, str) and extra else [],
         "external_dependencies": external_dependencies,
         "required_env": _string_list(manifest.get("requires_env")),
     }
@@ -6390,31 +6419,12 @@ def _memory_provider_setup_info(name: str) -> Dict[str, Any]:
     return setup
 
 
-_MEMORY_PROVIDER_IMPORT_NAMES = {
-    "honcho-ai": "honcho",
-    "mem0ai": "mem0",
-    "hindsight-client": "hindsight_client",
-    "hindsight-all": "hindsight",
-}
-
-
-def _memory_provider_dependency_package(dep: str) -> str:
-    return re.split(r"[\[<>=!~;]", dep, maxsplit=1)[0].strip()
-
-
-def _memory_provider_import_name(dep: str) -> str:
-    package = _memory_provider_dependency_package(dep)
-    return _MEMORY_PROVIDER_IMPORT_NAMES.get(package, package.replace("-", "_"))
-
-
-def _dependency_importable(dep: str) -> bool:
-    import_name = _memory_provider_import_name(dep)
-    if not import_name:
-        return False
+def _extra_available(extra: str) -> bool:
     try:
-        __import__(import_name)
-        return True
-    except ImportError:
+        import pm
+
+        return pm.available(extra)
+    except Exception:
         return False
 
 
@@ -6488,10 +6498,10 @@ def _run_setup_command(
 
 
 def _memory_provider_dependencies_installed(setup: Dict[str, Any]) -> bool:
-    pip_dependencies = _string_list(setup.get("pip_dependencies"))
+    extras = _string_list(setup.get("extras"))
     external_dependencies = setup.get("external_dependencies") or []
 
-    pip_ok = all(_dependency_importable(dep) for dep in pip_dependencies)
+    pip_ok = all(_extra_available(extra) for extra in extras)
     external_ok = True
     for dep in external_dependencies:
         if not isinstance(dep, dict):
@@ -6517,47 +6527,28 @@ def _memory_provider_dependencies_installed(setup: Dict[str, Any]) -> bool:
     return pip_ok and external_ok
 
 
-def _install_memory_provider_pip_dependencies(dependencies: List[str]) -> List[Dict[str, Any]]:
-    missing = [dep for dep in dependencies if not _dependency_importable(dep)]
-    if not dependencies:
+def _install_memory_provider_extras(extras: List[str]) -> List[Dict[str, Any]]:
+    missing = [e for e in extras if not _extra_available(e)]
+    if not extras:
         return []
     if not missing:
         return [
-            _command_result(kind="pip", name=", ".join(dependencies), status="already_installed")
+            _command_result(kind="pip", name=", ".join(extras), status="already_installed")
         ]
 
-    # Route through the lazy-install pipeline (tools.lazy_deps.install_specs)
-    # instead of shelling out to pip against sys.executable directly. That
-    # pipeline is environment-aware: on hosted/immutable images the agent venv
-    # under /opt/hermes is sealed read-only, and installs must be redirected
-    # to the writable durable target on the data volume
-    # (HERMES_LAZY_INSTALL_TARGET, e.g. /opt/data/lazy-packages) — the same
-    # path every lazy backend already uses. A direct `pip install --python
-    # sys.executable` on those images fails with a permission error (NS-605).
-    # install_specs also activates the target on sys.path post-install so the
-    # availability recheck below sees the new packages without a restart.
+    command = "hermes pm install"
     try:
-        from tools.lazy_deps import install_specs
+        import pm
 
-        outcome = install_specs(missing, timeout=240)
+        pm.sync_venv(missing, explicit=True)
     except Exception as exc:
         return [
             _command_result(
                 kind="pip",
                 name=", ".join(missing),
                 status="failed",
+                command=command,
                 error=str(exc),
-            )
-        ]
-
-    if outcome.blocked:
-        return [
-            _command_result(
-                kind="pip",
-                name=", ".join(missing),
-                status="failed",
-                command=outcome.command,
-                error=outcome.reason,
             )
         ]
 
@@ -6565,14 +6556,8 @@ def _install_memory_provider_pip_dependencies(dependencies: List[str]) -> List[D
         _command_result(
             kind="pip",
             name=", ".join(missing),
-            status="installed" if outcome.ok else "failed",
-            command=outcome.command,
-            completed=subprocess.CompletedProcess(
-                args=outcome.command,
-                returncode=0 if outcome.ok else 1,
-                stdout=outcome.stdout,
-                stderr=outcome.stderr,
-            ),
+            status="installed",
+            command=command,
         )
     ]
 
@@ -6696,7 +6681,7 @@ def _install_memory_provider_setup(name: str) -> Dict[str, Any]:
 
     setup = _memory_provider_setup_manifest(name)
     results = []
-    results.extend(_install_memory_provider_pip_dependencies(setup["pip_dependencies"]))
+    results.extend(_install_memory_provider_extras(setup["extras"]))
     results.extend(
         _install_memory_provider_external_dependencies(setup["external_dependencies"])
     )
@@ -6786,7 +6771,7 @@ def _read_json_file(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         _log.debug("Failed to read JSON config from %s", path, exc_info=True)
         return {}
@@ -9749,7 +9734,7 @@ def _whatsapp_phone_from_identifier(value: Any) -> str | None:
 def _whatsapp_linked_account_from_session(session_path: Path) -> tuple[str | None, str | None, str | None]:
     creds_path = session_path / "creds.json"
     try:
-        payload = json.loads(creds_path.read_text(encoding="utf-8"))
+        payload = json.loads(creds_path.read_text(encoding="utf-8-sig"))
     except Exception:
         return None, None, None
 
@@ -13464,7 +13449,7 @@ def _profile_env_value(home: Path, key: str) -> str:
         env_path = home / ".env"
         if not env_path.is_file():
             return ""
-        for line in env_path.read_text(encoding="utf-8").splitlines():
+        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -13628,7 +13613,7 @@ def _gateway_intentionally_stopped(profile: Optional[str]) -> bool:
         state_file = home / "gateway_state.json"
         if not state_file.exists():
             return False
-        data = _json.loads(state_file.read_text(encoding="utf-8"))
+        data = _json.loads(state_file.read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict):
             return False
         return data.get("desired_state") == "stopped"
@@ -15740,7 +15725,7 @@ async def get_config_raw(profile: Optional[str] = None):
             path = get_config_path()
         if not path.exists():
             return {"yaml": "", "path": str(path)}
-        return {"yaml": path.read_text(encoding="utf-8"), "path": str(path)}
+        return {"yaml": path.read_text(encoding="utf-8-sig"), "path": str(path)}
 
     return await asyncio.to_thread(_run)
 
@@ -16901,7 +16886,7 @@ def _active_session_file_for_channel(app: "FastAPI", channel: str) -> Path:
 
 def _read_active_session_file(path: Path) -> Optional[str]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -17974,7 +17959,7 @@ def mount_spa(application: FastAPI):
         auth scheme for /api/pty and /api/ws (ticket vs token).
         """
         try:
-            html = _index_path.read_text(encoding="utf-8")
+            html = _index_path.read_text(encoding="utf-8-sig")
         except OSError:
             # The dist dir existed at mount time but index.html is missing or
             # unreadable now (partial build, wiped dist, permissions). Without
@@ -18044,7 +18029,7 @@ def mount_spa(application: FastAPI):
         ):
             return JSONResponse({"error": "not found"}, status_code=404)
         prefix = _normalise_prefix(request.headers.get("x-forwarded-prefix"))
-        css = css_path.read_text(encoding="utf-8")
+        css = css_path.read_text(encoding="utf-8-sig")
         if prefix:
             for asset_dir in ("/fonts/", "/fonts-terminal/", "/ds-assets/", "/assets/"):
                 css = css.replace(f"url({asset_dir}", f"url({prefix}{asset_dir}")
@@ -18357,7 +18342,7 @@ def _discover_user_themes() -> list:
     result = []
     for f in sorted(themes_dir.glob("*.yaml")):
         try:
-            data = yaml.safe_load(f.read_text(encoding="utf-8"))
+            data = yaml.safe_load(f.read_text(encoding="utf-8-sig"))
         except Exception:
             continue
         normalised = _normalise_theme_definition(data)
@@ -18569,7 +18554,7 @@ def _discover_dashboard_plugins() -> list:
             if not manifest_file.exists():
                 continue
             try:
-                data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                data = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
                 name = data.get("name", child.name)
                 if name in seen_names:
                     continue
@@ -19659,6 +19644,19 @@ def start_server(
     from hermes_cli.resource_limits import apply_nofile_soft_limit
 
     apply_nofile_soft_limit()
+
+    # Post-update boot bootstrap. This is the rung that covers desktop
+    # bundled installs: after an app-updater swap, the first `hermes serve`
+    # boot sees the new stamp commit and runs config migration / skills
+    # sync / state.db guard for this home. Two file reads when the code
+    # didn't change; never raises.
+    try:
+        from hermes_cli.boot_bootstrap import maybe_run_boot_bootstrap
+        from hermes_cli.main import PROJECT_ROOT as _boot_root
+
+        maybe_run_boot_bootstrap(Path(_boot_root))
+    except Exception as exc:
+        _log.debug("boot bootstrap skipped: %s", exc)
 
     import uvicorn
 

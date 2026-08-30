@@ -101,7 +101,7 @@ def _load_config() -> dict:
     config_path = get_hermes_home() / "mem0.json"
     if config_path.exists():
         try:
-            file_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            file_cfg = json.loads(config_path.read_text(encoding="utf-8-sig"))
             config.update({k: v for k, v in file_cfg.items()
                            if v is not None and v != ""})
         except Exception:
@@ -241,7 +241,7 @@ class Mem0MemoryProvider(MemoryProvider):
         existing = {}
         if config_path.exists():
             try:
-                existing = json.loads(config_path.read_text(encoding="utf-8"))
+                existing = json.loads(config_path.read_text(encoding="utf-8-sig"))
             except Exception:
                 pass
         existing.update(values)
@@ -271,8 +271,8 @@ class Mem0MemoryProvider(MemoryProvider):
         # target. On failure we fall through so the import inside the backend
         # produces the canonical error, captured below.
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("memory.mem0", prompt=False)
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("mem0")
         except ImportError:
             pass
         except Exception:

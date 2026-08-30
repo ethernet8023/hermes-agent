@@ -3,18 +3,17 @@
 # Hermes Agent Setup Script
 # ============================================================================
 # Quick setup for developers who cloned the repo manually.
-# Uses uv for desktop/server setup and Python's stdlib venv + pip on Termux.
+# Uses uv for desktop/server setup.
 #
 # Usage:
 #   ./setup-hermes.sh
 #
 # This script:
-# 1. Detects desktop/server vs Android/Termux setup path
-# 2. Creates a Python 3.11 virtual environment
-# 3. Installs the appropriate dependency set for the platform
-# 4. Creates .env from template (if not exists)
-# 5. Symlinks the 'hermes' CLI command into a user-facing bin dir
-# 6. Runs the setup wizard (optional)
+# 1. Creates a Python 3.11 virtual environment
+# 2. Installs the appropriate dependency set for the platform
+# 3. Creates .env from template (if not exists)
+# 4. Symlinks the 'hermes' CLI command into a user-facing bin dir
+# 5. Runs the setup wizard (optional)
 # ============================================================================
 
 set -e
@@ -35,24 +34,12 @@ export UV_NO_CONFIG=1
 
 PYTHON_VERSION="3.11"
 
-is_termux() {
-    [ -n "${TERMUX_VERSION:-}" ] || [[ "${PREFIX:-}" == *"com.termux/files/usr"* ]]
-}
-
 get_command_link_dir() {
-    if is_termux && [ -n "${PREFIX:-}" ]; then
-        echo "$PREFIX/bin"
-    else
-        echo "$HOME/.local/bin"
-    fi
+    echo "$HOME/.local/bin"
 }
 
 get_command_link_display_dir() {
-    if is_termux && [ -n "${PREFIX:-}" ]; then
-        echo '$PREFIX/bin'
-    else
-        echo '~/.local/bin'
-    fi
+    echo '~/.local/bin'
 }
 
 echo ""
@@ -65,64 +52,139 @@ echo ""
 
 echo -e "${CYAN}→${NC} Checking for uv..."
 
-UV_CMD=""
-if is_termux; then
-    echo -e "${CYAN}→${NC} Termux detected — using Python's stdlib venv + pip instead of uv"
-else
-    if command -v uv &> /dev/null; then
-        UV_CMD="uv"
-    elif [ -x "$HOME/.local/bin/uv" ]; then
-        UV_CMD="$HOME/.local/bin/uv"
-    elif [ -x "$HOME/.cargo/bin/uv" ]; then
-        UV_CMD="$HOME/.cargo/bin/uv"
+# --- BEGIN GENERATED: bootstrap pins (scripts/gen-bootstrap-pins.py) ---
+# Derived from pm/lock.json. DO NOT EDIT BY HAND:
+# run scripts/gen-bootstrap-pins.py after a pin bump.
+UV_PIN_VERSION="0.12.3"
+
+# Sets UV_PIN_URL + UV_PIN_SHA256 for a <os>-<arch> target key.
+uv_bootstrap_pin() {
+    case "$1" in
+        linux-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101"
+            ;;
+        linux-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-unknown-linux-gnu.tar.gz"
+            UV_PIN_SHA256="bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2"
+            ;;
+        darwin-x64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="4c9f52262a14da336e4a42ed24992d12d0c956acde87619e4611d321dffa602b"
+            ;;
+        darwin-arm64)
+            UV_PIN_URL="https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-apple-darwin.tar.gz"
+            UV_PIN_SHA256="546f7f8a6c70ff13a3a9d2bc958db3427298cebf3e0cb756f9177133b7068843"
+            ;;
+        *)
+            UV_PIN_URL=""
+            UV_PIN_SHA256=""
+            return 1
+            ;;
+    esac
+}
+# --- END GENERATED: bootstrap pins ---
+
+uv_bootstrap_target() {
+    # Map this host to a pm/lock.json target key (<os>-<arch>).
+    local _arch
+    case "$(uname -m)" in
+        arm64|aarch64) _arch="arm64" ;;
+        x86_64|amd64)  _arch="x64" ;;
+        *) return 1 ;;
+    esac
+    case "$(uname -s)" in
+        Linux)  echo "linux-$_arch" ;;
+        Darwin) echo "darwin-$_arch" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Stage the pinned uv from pm/lock.json into the pm store slot
+# (~/.hermes/tools/uv-<version>-<target>/), sha256-verified, so pm adopts
+# the same bytes. No astral-latest, no curl|sh. Sets _PINNED_UV on success.
+_PINNED_UV=""
+ensure_pinned_uv() {
+    local _target
+    if ! _target="$(uv_bootstrap_target)"; then
+        echo -e "${RED}✗${NC} No pinned uv build for this platform ($(uname -s) $(uname -m))."
+        echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
+        return 1
     fi
+    if ! uv_bootstrap_pin "$_target"; then
+        echo -e "${RED}✗${NC} No pinned uv artifact for $_target."
+        echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
+        return 1
+    fi
+    local _store="${HERMES_RUNTIME_DIR:-$HOME/.hermes/tools}"
+    local _entry="$_store/uv-$UV_PIN_VERSION-$_target"
+    _PINNED_UV="$_entry/uv"
+    [ -x "$_PINNED_UV" ] && return 0
 
-    if [ -n "$UV_CMD" ]; then
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        echo -e "${GREEN}✓${NC} uv found ($UV_VERSION)"
+    echo -e "${CYAN}→${NC} Staging pinned uv $UV_PIN_VERSION ($_target) into the pm store..."
+    local _tmp
+    _tmp="$(mktemp -d 2>/dev/null || echo "/tmp/hermes-uv-bootstrap.$$")"
+    mkdir -p "$_tmp"
+    if ! curl -LsSf "$UV_PIN_URL" -o "$_tmp/uv.tar.gz" 2>"$_tmp/log"; then
+        echo -e "${RED}✗${NC} Failed to download pinned uv from $UV_PIN_URL."
+        sed 's/^/    /' "$_tmp/log" >&2 2>/dev/null || true
+        echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
+        rm -rf "$_tmp"
+        return 1
+    fi
+    local _digest
+    if command -v sha256sum >/dev/null 2>&1; then
+        _digest="$(sha256sum "$_tmp/uv.tar.gz" | cut -d' ' -f1)"
     else
-        echo -e "${CYAN}→${NC} Installing uv..."
-        # Capture installer output so a failure shows the user WHY
-        # (network, glibc mismatch on old distros, missing curl, disk
-        # full, etc.) instead of "✗ Failed to install uv" with zero
-        # diagnostic.  Two-stage to avoid `curl | sh` masking curl
-        # failures (sh exits 0 on empty stdin under no pipefail).
-        _uv_log="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-install.$$.log")"
-        _uv_installer="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-installer.$$.sh")"
-        if ! curl -LsSf https://astral.sh/uv/install.sh -o "$_uv_installer" 2>"$_uv_log"; then
-            echo -e "${RED}✗${NC} Failed to download uv installer."
-            sed 's/^/    /' "$_uv_log" >&2
-            echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
-            rm -f "$_uv_log" "$_uv_installer"
-            exit 1
-        fi
-        if sh "$_uv_installer" >>"$_uv_log" 2>&1; then
-            rm -f "$_uv_installer"
-            if [ -x "$HOME/.local/bin/uv" ]; then
-                UV_CMD="$HOME/.local/bin/uv"
-            elif [ -x "$HOME/.cargo/bin/uv" ]; then
-                UV_CMD="$HOME/.cargo/bin/uv"
-            fi
+        _digest="$(shasum -a 256 "$_tmp/uv.tar.gz" | cut -d' ' -f1)"
+    fi
+    if [ "$_digest" != "$UV_PIN_SHA256" ]; then
+        echo -e "${RED}✗${NC} uv download digest mismatch (expected $UV_PIN_SHA256, got $_digest)."
+        echo -e "${CYAN}→${NC} The download may be corrupted or tampered with. Re-run setup."
+        rm -rf "$_tmp"
+        return 1
+    fi
+    if ! tar -xzf "$_tmp/uv.tar.gz" -C "$_tmp"; then
+        echo -e "${RED}✗${NC} Failed to extract pinned uv archive."
+        rm -rf "$_tmp"
+        return 1
+    fi
+    local _unpacked
+    _unpacked="$(find "$_tmp" -mindepth 1 -maxdepth 2 -name uv -type f | head -n1)"
+    if [ -z "$_unpacked" ]; then
+        echo -e "${RED}✗${NC} uv binary not found in the downloaded archive."
+        rm -rf "$_tmp"
+        return 1
+    fi
+    mkdir -p "$_entry"
+    mv "$_unpacked" "$_PINNED_UV"
+    [ -f "$(dirname "$_unpacked")/uvx" ] && mv "$(dirname "$_unpacked")/uvx" "$_entry/uvx"
+    chmod +x "$_PINNED_UV"
+    chmod +x "$_entry/uvx" 2>/dev/null || true
+    rm -rf "$_tmp"
+    return 0
+}
 
-            if [ -n "$UV_CMD" ]; then
-                rm -f "$_uv_log"
-                UV_VERSION=$($UV_CMD --version 2>/dev/null)
-                echo -e "${GREEN}✓${NC} uv installed ($UV_VERSION)"
-            else
-                echo -e "${RED}✗${NC} uv installer reported success but binary not found. Add ~/.local/bin to PATH and retry."
-                echo -e "${CYAN}→${NC} Installer output:"
-                sed 's/^/    /' "$_uv_log" >&2
-                rm -f "$_uv_log"
-                exit 1
-            fi
-        else
-            echo -e "${RED}✗${NC} Failed to install uv."
-            echo -e "${CYAN}→${NC} Installer output:"
-            sed 's/^/    /' "$_uv_log" >&2
-            echo -e "${CYAN}→${NC} Install manually: https://docs.astral.sh/uv/"
-            rm -f "$_uv_log" "$_uv_installer"
-            exit 1
-        fi
+UV_CMD=""
+if command -v uv &> /dev/null; then
+    UV_CMD="uv"
+elif [ -x "$HOME/.local/bin/uv" ]; then
+    UV_CMD="$HOME/.local/bin/uv"
+elif [ -x "$HOME/.cargo/bin/uv" ]; then
+    UV_CMD="$HOME/.cargo/bin/uv"
+fi
+
+if [ -n "$UV_CMD" ]; then
+    UV_VERSION=$($UV_CMD --version 2>/dev/null)
+    echo -e "${GREEN}✓${NC} uv found ($UV_VERSION)"
+else
+    echo -e "${CYAN}→${NC} Installing uv (pinned from pm/lock.json)..."
+    if ensure_pinned_uv; then
+        UV_CMD="$_PINNED_UV"
+        UV_VERSION=$("$UV_CMD" --version 2>/dev/null)
+        echo -e "${GREEN}✓${NC} uv installed ($UV_VERSION)"
+    else
+        exit 1
     fi
 fi
 
@@ -132,34 +194,16 @@ fi
 
 echo -e "${CYAN}→${NC} Checking Python $PYTHON_VERSION..."
 
-if is_termux; then
-    if command -v python >/dev/null 2>&1; then
-        PYTHON_PATH="$(command -v python)"
-        if "$PYTHON_PATH" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
-            PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
-            echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION found"
-        else
-            echo -e "${RED}✗${NC} Termux Python must be 3.11+"
-            echo "    Run: pkg install python"
-            exit 1
-        fi
-    else
-        echo -e "${RED}✗${NC} Python not found in Termux"
-        echo "    Run: pkg install python"
-        exit 1
-    fi
+if $UV_CMD python find "$PYTHON_VERSION" &> /dev/null; then
+    PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
+    PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
+    echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION found"
 else
-    if $UV_CMD python find "$PYTHON_VERSION" &> /dev/null; then
-        PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
-        PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
-        echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION found"
-    else
-        echo -e "${CYAN}→${NC} Python $PYTHON_VERSION not found, installing via uv..."
-        $UV_CMD python install "$PYTHON_VERSION"
-        PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
-        PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
-        echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION installed"
-    fi
+    echo -e "${CYAN}→${NC} Python $PYTHON_VERSION not found, installing via uv..."
+    $UV_CMD python install "$PYTHON_VERSION"
+    PYTHON_PATH=$($UV_CMD python find "$PYTHON_VERSION")
+    PYTHON_FOUND_VERSION=$($PYTHON_PATH --version 2>/dev/null)
+    echo -e "${GREEN}✓${NC} $PYTHON_FOUND_VERSION installed"
 fi
 
 # ============================================================================
@@ -173,13 +217,8 @@ if [ -d "venv" ]; then
     rm -rf venv
 fi
 
-if is_termux; then
-    "$PYTHON_PATH" -m venv venv
-    echo -e "${GREEN}✓${NC} venv created with stdlib venv"
-else
-    $UV_CMD venv venv --python "$PYTHON_VERSION"
-    echo -e "${GREEN}✓${NC} venv created (Python $PYTHON_VERSION)"
-fi
+$UV_CMD venv venv --python "$PYTHON_VERSION"
+echo -e "${GREEN}✓${NC} venv created (Python $PYTHON_VERSION)"
 
 export VIRTUAL_ENV="$SCRIPT_DIR/venv"
 SETUP_PYTHON="$SCRIPT_DIR/venv/bin/python"
@@ -214,21 +253,7 @@ run_locked_uv_sync() {
 
 echo -e "${CYAN}→${NC} Installing dependencies..."
 
-if is_termux; then
-    export ANDROID_API_LEVEL="$(getprop ro.build.version.sdk 2>/dev/null || printf '%s' "${ANDROID_API_LEVEL:-}")"
-    echo -e "${CYAN}→${NC} Termux detected — installing the tested Android bundle"
-    "$SETUP_PYTHON" -m pip install --upgrade pip setuptools wheel
-    if [ -f "constraints-termux.txt" ]; then
-        "$SETUP_PYTHON" -m pip install -e ".[termux]" -c constraints-termux.txt || {
-            echo -e "${YELLOW}⚠${NC} Termux bundle install failed, falling back to base install..."
-            "$SETUP_PYTHON" -m pip install -e "." -c constraints-termux.txt
-        }
-    else
-        "$SETUP_PYTHON" -m pip install -e ".[termux]" || "$SETUP_PYTHON" -m pip install -e "."
-    fi
-    echo -e "${GREEN}✓${NC} Dependencies installed"
-else
-    # Prefer uv sync with lockfile (hash-verified installs) when available,
+# Prefer uv sync with lockfile (hash-verified installs) when available,
     # fall back to pip install for compatibility or when lockfile is stale.
     #
     # Multi-tier pip fallback. Goal: ONE compromised PyPI package
@@ -288,7 +313,6 @@ else
         _try_install
         echo -e "${GREEN}✓${NC} Dependencies installed (transitives re-resolved, not hash-verified)"
     fi
-fi
 
 # ============================================================================
 # ============================================================================
@@ -306,41 +330,33 @@ else
     if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
         INSTALLED=false
 
-        if is_termux; then
-            pkg install -y ripgrep && INSTALLED=true
-        else
-            # Check if sudo is available
-            if command -v sudo &> /dev/null && sudo -n true 2>/dev/null; then
-                if command -v apt &> /dev/null; then
-                    sudo apt install -y ripgrep && INSTALLED=true
-                elif command -v dnf &> /dev/null; then
-                    sudo dnf install -y ripgrep && INSTALLED=true
-                fi
+        # Check if sudo is available
+        if command -v sudo &> /dev/null && sudo -n true 2>/dev/null; then
+            if command -v apt &> /dev/null; then
+                sudo apt install -y ripgrep && INSTALLED=true
+            elif command -v dnf &> /dev/null; then
+                sudo dnf install -y ripgrep && INSTALLED=true
             fi
+        fi
 
-            # Try brew (no sudo needed)
-            if [ "$INSTALLED" = false ] && command -v brew &> /dev/null; then
-                brew install ripgrep && INSTALLED=true
-            fi
+        # Try brew (no sudo needed)
+        if [ "$INSTALLED" = false ] && command -v brew &> /dev/null; then
+            brew install ripgrep && INSTALLED=true
+        fi
 
-            # Try cargo (no sudo needed)
-            if [ "$INSTALLED" = false ] && command -v cargo &> /dev/null; then
-                echo -e "${CYAN}→${NC} Trying cargo install (no sudo required)..."
-                cargo install ripgrep && INSTALLED=true
-            fi
+        # Try cargo (no sudo needed)
+        if [ "$INSTALLED" = false ] && command -v cargo &> /dev/null; then
+            echo -e "${CYAN}→${NC} Trying cargo install (no sudo required)..."
+            cargo install ripgrep && INSTALLED=true
         fi
 
         if [ "$INSTALLED" = true ]; then
             echo -e "${GREEN}✓${NC} ripgrep installed"
         else
             echo -e "${YELLOW}⚠${NC} Auto-install failed. Install options:"
-            if is_termux; then
-                echo "    pkg install ripgrep          # Termux / Android"
-            else
-                echo "    sudo apt install ripgrep     # Debian/Ubuntu"
-                echo "    brew install ripgrep         # macOS"
-                echo "    cargo install ripgrep        # With Rust (no sudo)"
-            fi
+            echo "    sudo apt install ripgrep     # Debian/Ubuntu"
+            echo "    brew install ripgrep         # macOS"
+            echo "    cargo install ripgrep        # With Rust (no sudo)"
             echo "    https://github.com/BurntSushi/ripgrep#installation"
         fi
     fi
@@ -378,13 +394,9 @@ mkdir -p "$COMMAND_LINK_DIR"
 ln -sf "$HERMES_BIN" "$COMMAND_LINK_DIR/hermes"
 echo -e "${GREEN}✓${NC} Symlinked hermes → $COMMAND_LINK_DISPLAY_DIR/hermes"
 
-if is_termux; then
-    export PATH="$COMMAND_LINK_DIR:$PATH"
-    echo -e "${GREEN}✓${NC} $COMMAND_LINK_DISPLAY_DIR is already on PATH in Termux"
-else
-    # Determine the appropriate shell config file
-    SHELL_CONFIG=""
-    if [[ "$SHELL" == *"zsh"* ]]; then
+# Determine the appropriate shell config file
+SHELL_CONFIG=""
+if [[ "$SHELL" == *"zsh"* ]]; then
         SHELL_CONFIG="$HOME/.zshrc"
     elif [[ "$SHELL" == *"bash"* ]]; then
         SHELL_CONFIG="$HOME/.bashrc"
@@ -417,7 +429,6 @@ else
             echo -e "${GREEN}✓${NC} ~/.local/bin already on PATH"
         fi
     fi
-fi
 
 # ============================================================================
 # Seed bundled skills into ~/.hermes/skills/
@@ -447,31 +458,18 @@ echo -e "${GREEN}✓ Setup complete!${NC}"
 echo ""
 echo "Next steps:"
 echo ""
-if is_termux; then
-    echo "  1. Run the setup wizard to configure API keys:"
-    echo "     hermes setup"
-    echo ""
-    echo "  2. Start chatting:"
-    echo "     hermes"
-    echo ""
-else
-    echo "  1. Reload your shell:"
-    echo "     source $SHELL_CONFIG"
-    echo ""
-    echo "  2. Run the setup wizard to configure API keys:"
-    echo "     hermes setup"
-    echo ""
-    echo "  3. Start chatting:"
-    echo "     hermes"
-    echo ""
-fi
+echo "  1. Reload your shell:"
+echo "     source $SHELL_CONFIG"
+echo ""
+echo "  2. Run the setup wizard to configure API keys:"
+echo "     hermes setup"
+echo ""
+echo "  3. Start chatting:"
+echo "     hermes"
+echo ""
 echo "Other commands:"
 echo "  hermes status        # Check configuration"
-if is_termux; then
-    echo "  hermes gateway       # Run gateway in foreground"
-else
-    echo "  hermes gateway install # Install gateway service (messaging + cron)"
-fi
+echo "  hermes gateway install # Install gateway service (messaging + cron)"
 echo "  hermes cron list     # View scheduled jobs"
 echo "  hermes doctor        # Diagnose issues"
 echo ""

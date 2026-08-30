@@ -264,7 +264,7 @@ def _read_config() -> dict:
     path = _config_path()
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
     return {}
@@ -516,20 +516,15 @@ def _ensure_sdk_installed() -> bool:
         return False
 
     print("  Installing honcho-ai...", flush=True)
-    # Environment-aware install: sealed hosted venvs redirect to the durable
-    # data-volume target instead of writing to /opt/hermes (NS-605).
-    from tools.lazy_deps import install_specs
+    import pm
 
-    result = install_specs(["honcho-ai==2.2.0"])
-    if result.ok:
+    try:
+        pm.sync_venv(["honcho"], explicit=True)
         print("  Installed.\n")
         return True
-    elif result.blocked:
-        print(f"  Cannot install: {result.reason}\n")
-        return False
-    else:
-        print(f"  Install failed:\n{(result.stderr or '').strip()}")
-        print("  Run manually: uv pip install 'honcho-ai==2.2.0'\n")
+    except Exception as exc:
+        print(f"  Install failed: {exc}")
+        print("  Run manually: hermes pm install\n")
         return False
 
 
@@ -1587,7 +1582,7 @@ def cmd_identity(args) -> None:
         print(f"  File not found: {p}\n")
         return
 
-    content = p.read_text(encoding="utf-8").strip()
+    content = p.read_text(encoding="utf-8-sig").strip()
     if not content:
         print(f"  File is empty: {p}\n")
         return
@@ -1767,7 +1762,7 @@ def cmd_migrate(args) -> None:
                     session_key = hcfg.resolve_session_name()
                     mgr.get_or_create(session_key)
                     for f in agent_files:
-                        content = f.read_text(encoding="utf-8").strip()
+                        content = f.read_text(encoding="utf-8-sig").strip()
                         if content:
                             ok = mgr.seed_ai_identity(session_key, content, source=f.name)
                             status = "seeded" if ok else "failed"

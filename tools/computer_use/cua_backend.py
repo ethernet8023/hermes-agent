@@ -18,13 +18,14 @@ etc.) surface as specific blocked checks via `hermes computer-use doctor`
 rather than failing silently.
 
 Install:
-  - **macOS**:
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh)"
-  - **Windows** (PowerShell):
-      irm https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1 | iex
+  cua-driver is a pinned pm package — pm/lock.json carries the release and
+  the per-platform sha256, and the pm store is the canonical install:
+    hermes pm install        (or `hermes tools` → Computer Use toolset)
+  Resolution below prefers the pm store's copy, then PATH and the canonical
+  user-local locations the upstream installer uses.
 
-After install, `cua-driver` is on $PATH and supports `cua-driver mcp` (stdio
-transport) which is what we invoke.
+After install, `cua-driver` supports `cua-driver mcp` (stdio transport)
+which is what we invoke.
 
 The macOS path uses private SkyLight SPIs (SLEventPostToPid,
 SLPSPostEventRecordTo, _AXObserverAddNotificationAndCheckRemote) that aren't
@@ -254,7 +255,7 @@ def _cua_no_overlay() -> bool:
     if not os.environ.get("DISPLAY"):
         return True
     try:
-        with open("/proc/version", encoding="utf-8") as f:
+        with open("/proc/version", encoding="utf-8-sig") as f:
             if "microsoft" in f.read().lower():
                 return True
     except Exception:
@@ -349,7 +350,7 @@ def _manifest_is_mode_independent(path: str) -> bool:
     try:
         import yaml
 
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, "r", encoding="utf-8-sig") as handle:
             parsed = yaml.safe_load(handle)
     except Exception:
         logger.debug("could not read capability manifest %s", path, exc_info=True)
@@ -374,8 +375,16 @@ def _standard_runtime_launch_args(
     a grant must therefore launch a fresh app daemon on a private socket
     instead of trying to reconfigure the default daemon.
 
-    ``platform`` is explicit so this policy can be tested as a pure function
-    on every CI host.
+    macOS TCC attribution: because the runtime runs inside CuaDriver.app,
+    Accessibility and Screen Recording grants attribute to the
+    ``com.trycua.driver`` bundle — never to the host Hermes process. That
+    is the accepted trade for one pinned binary and one launch path on
+    every platform; the in-process ``--direct`` runtime (restack-era) is
+    deliberately not ported — it is mutually exclusive with ``--socket``,
+    which the embedded private-daemon path here requires.
+
+    ``platform`` is explicit so this policy can be tested as a pure
+    function on every CI host.
     """
     result = list(args)
     if not grant_existing_profile:
@@ -1105,6 +1114,29 @@ def _has_path_separator(value: str) -> bool:
     return os.sep in value or (os.altsep is not None and os.altsep in value)
 
 
+def _pm_cua_driver_cmd() -> Optional[str]:
+    """The pm store's pinned cua-driver binary, realized on demand.
+
+    cua-driver is a pm package: pm/lock.json pins the release and the
+    per-platform sha256, and ``pm.ensure`` stages it into the store. The
+    store's copy is canonical — it wins over PATH and user-local install
+    locations so every surface drives the same pinned binary. Returns
+    None when pm cannot provide it (not pinned, lazy installs disabled,
+    sealed bundle) so the caller falls back to PATH.
+    """
+    try:
+        import pm
+
+        runner = pm.ensure("cua-driver")
+        for candidate in ("cua-driver.exe", "cua-driver"):
+            resolved = shutil.which(candidate, path=runner.env.get("PATH"))
+            if resolved:
+                return resolved
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug("pm cua-driver unavailable: %s", e)
+    return None
+
+
 def _candidate_cua_driver_commands(override: Optional[str] = None) -> List[str]:
     """Return candidate cua-driver commands in resolution order.
 
@@ -1154,10 +1186,27 @@ def resolve_cua_driver_cmd(override: Optional[str] = None) -> Optional[str]:
     """Resolve the cua-driver executable for every runtime/status surface.
 
     A supplied override (or ``HERMES_CUA_DRIVER_CMD``) is never silently
-    replaced by another binary. Otherwise resolve PATH first, then canonical
-    user-local installation locations used by the official installer.
+    replaced by another binary. Otherwise the pm store's pinned copy wins
+    (``_pm_cua_driver_cmd``), then PATH, then canonical user-local
+    installation locations used by the official installer.
     """
-    for candidate in _candidate_cua_driver_commands(override):
+    configured = (
+        override if override is not None else os.environ.get(_CUA_DRIVER_CMD_ENV, "")
+    ).strip()
+    if configured:
+        # An explicit override is authoritative: if it is wrong, report the
+        # driver missing instead of silently picking a different binary.
+        expanded = os.path.expanduser(configured)
+        if _has_path_separator(expanded):
+            return expanded if shutil.which(expanded) else None
+        return shutil.which(expanded)
+
+    # Managed-first: the pm store's pinned copy is canonical.
+    managed = _pm_cua_driver_cmd()
+    if managed:
+        return managed
+
+    for candidate in _candidate_cua_driver_commands(None):
         expanded = os.path.expanduser(candidate)
         if _has_path_separator(expanded):
             if shutil.which(expanded):
@@ -1442,22 +1491,10 @@ def _maybe_nudge_update() -> None:
 
 
 def cua_driver_install_hint() -> str:
-    if sys.platform == "win32":
-        installer = (
-            '  irm https://raw.githubusercontent.com/trycua/cua/main/'
-            'libs/cua-driver/scripts/install.ps1 | iex'
-        )
-    else:
-        installer = (
-            '  /bin/bash -c "$(curl -fsSL '
-            'https://raw.githubusercontent.com/trycua/cua/main/'
-            'libs/cua-driver/scripts/install.sh)"'
-        )
     return (
         "cua-driver is not installed. Install with one of:\n"
+        "  hermes pm install\n"
         "  hermes computer-use install\n"
-        "Or run the upstream installer directly:\n"
-        f"{installer}\n"
         "Or run `hermes tools` and enable the Computer Use toolset to install it automatically."
     )
 
@@ -2822,10 +2859,10 @@ class CuaDriverBackend(ComputerUseBackend):
         # backend uses — so users never hit an opaque `No module named 'mcp'`
         # at invoke time. Auto-install is gated by `security.allow_lazy_installs`
         # (default on); when it's disabled or fails, ensure() raises
-        # FeatureUnavailable carrying an actionable `uv pip install mcp==…`
+        # InstallError carrying an actionable `uv pip install mcp==…`
         # hint, which surfaces via the backend-unavailable path in tool.py.
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("tool.computer_use", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("computer-use")
         # A just-installed package may not be importable until the import
         # machinery's caches are refreshed within this process.
         import importlib

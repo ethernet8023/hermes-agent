@@ -244,11 +244,25 @@ class TestFindCli:
         assert bu_cli._find_cli_unpatched() == ["/usr/local/bin/browser-use"]
 
     def test_falls_back_to_uvx(self, monkeypatch):
+        """The zero-install fallback resolves pm's PINNED uvx — never a
+        bare PATH probe (pm names the binary; a PATH uvx is an unknown
+        version)."""
+        monkeypatch.setattr(bu_cli, "_pinned_uvx", lambda: "/store/uvx")
+        monkeypatch.setattr(
+            bu_cli.shutil, "which",
+            lambda name, path=None: None,
+        )
+        assert bu_cli._find_cli_unpatched() == ["/store/uvx", "browser-use"]
+
+    def test_bare_path_uvx_not_consulted(self, monkeypatch):
+        """Kill the PATH probe: a uvx reachable only via bare PATH is not
+        used — without the pinned pm uvx there is no zero-install rung."""
+        monkeypatch.setattr(bu_cli, "_pinned_uvx", lambda: None)
         monkeypatch.setattr(
             bu_cli.shutil, "which",
             lambda name, path=None: "/usr/local/bin/uvx" if name == "uvx" and path is None else None,
         )
-        assert bu_cli._find_cli_unpatched() == ["/usr/local/bin/uvx", "browser-use"]
+        assert bu_cli._find_cli_unpatched() is None
 
     def test_none_when_neither_available(self, monkeypatch):
         monkeypatch.setattr(bu_cli.shutil, "which", lambda name, path=None: None)
@@ -983,9 +997,8 @@ class TestInstallCli:
         monkeypatch.setattr(bu_cli.shutil, "which", lambda name, path=None: cli if name == "browser-use" and path is None else None)
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: None
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (None, {}))
         ok, msg = bu_cli.install_cli()
         # No uv available in this fixture, so the attempted managed install
         # fails — the point is that the PATH copy did not short-circuit.
@@ -1009,9 +1022,8 @@ class TestInstallCli:
         monkeypatch.setenv("PATH", str(tmp_path / "empty"))
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: None
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (None, {}))
         ok, msg = bu_cli.install_cli()
         assert ok is False
         assert "uv" in msg
@@ -1037,9 +1049,8 @@ class TestInstallCli:
         uv.chmod(uv.stat().st_mode | stat.S_IXUSR)
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: str(uv)
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (str(uv), dict(os.environ)))
         ok, msg = bu_cli.install_cli()
         assert ok is True, msg
         assert (bin_dir / "browser-use").exists()
@@ -1053,9 +1064,8 @@ class TestInstallCli:
         uv.chmod(uv.stat().st_mode | stat.S_IXUSR)
         import sys as _sys
         import types as _types
-        fake = _types.ModuleType("hermes_cli.managed_uv")
-        fake.ensure_uv = lambda **kw: str(uv)
-        monkeypatch.setitem(_sys.modules, "hermes_cli.managed_uv", fake)
+        import pm
+        monkeypatch.setattr(pm, "uv", lambda **kw: (str(uv), dict(os.environ)))
         ok, msg = bu_cli.install_cli()
         assert ok is False
         assert "no network" in msg

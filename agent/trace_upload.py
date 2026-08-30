@@ -277,11 +277,11 @@ def _do_upload(
     Returns a user-facing status string. Never raises.
     """
     try:
-        from tools import lazy_deps
-        lazy_deps.ensure("tool.trace_upload", prompt=False)
+        import pm
+        pm.ensure_import("trace-upload")
     except Exception:
-        # lazy-install unavailable/declined — fall through to the import,
-        # which surfaces the install hint below if the package is missing.
+        # lazy-install unavailable — fall through to the import, which
+        # surfaces the install hint below if the package is missing.
         pass
     try:
         from huggingface_hub import HfApi

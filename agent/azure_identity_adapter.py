@@ -54,7 +54,7 @@ SCOPE_AI_AZURE_DEFAULT = "https://ai.azure.com/.default"
 # Lazy SDK import — only loaded when the Entra path is actually used.
 # ---------------------------------------------------------------------------
 
-_AZURE_IDENTITY_FEATURE = "provider.azure_identity"
+_AZURE_IDENTITY_FEATURE = "azure-identity"
 
 
 def has_azure_identity_installed() -> bool:
@@ -80,7 +80,7 @@ def _require_azure_identity():
         return _ai
     except ImportError:
         try:
-            from tools.lazy_deps import ensure, FeatureUnavailable
+            from pm import InstallError, ensure_import
         except ImportError as exc:
             raise ImportError(
                 "The 'azure-identity' package is required for Azure AI "
@@ -89,8 +89,8 @@ def _require_azure_identity():
             ) from exc
 
         try:
-            ensure(_AZURE_IDENTITY_FEATURE, prompt=False)
-        except FeatureUnavailable as exc:
+            ensure_import(_AZURE_IDENTITY_FEATURE)
+        except InstallError as exc:
             raise ImportError(
                 "The 'azure-identity' package is required for Azure AI "
                 "Foundry Entra ID authentication. " + str(exc)

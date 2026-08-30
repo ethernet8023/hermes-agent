@@ -71,7 +71,7 @@ class _RecallResult:
 
 _DEFAULT_API_URL = "https://api.hindsight.vectorize.io"
 _DEFAULT_LOCAL_URL = "http://localhost:8888"
-# Keep in sync with tools/lazy_deps.py ("memory.hindsight") and plugin.yaml.
+# Keep in sync with the pyproject "hindsight" extra and plugin.yaml.
 _MIN_CLIENT_VERSION = "0.6.1"
 _DEFAULT_TIMEOUT = 120  # seconds — cloud API can take 30-40s per request
 _DEFAULT_IDLE_TIMEOUT = 300  # seconds — Hindsight embedded daemon default
@@ -204,8 +204,8 @@ def _local_runtime_hint(reason: str | None) -> str:
 def _ensure_cloud_client_dependency() -> None:
     """Install the Hindsight cloud client lazily before importing it."""
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("memory.hindsight", prompt=False)
+        from pm import ensure_import as _lazy_ensure
+        _lazy_ensure("hindsight")
     except ImportError:
         pass
     except Exception as exc:
@@ -431,7 +431,7 @@ def _load_config() -> dict:
     profile_path = get_hermes_home() / "hindsight" / "config.json"
     if profile_path.exists():
         try:
-            return json.loads(profile_path.read_text(encoding="utf-8"))
+            return json.loads(profile_path.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
 
@@ -439,7 +439,7 @@ def _load_config() -> dict:
     legacy_path = Path.home() / ".hindsight" / "config.json"
     if legacy_path.exists():
         try:
-            return json.loads(legacy_path.read_text(encoding="utf-8"))
+            return json.loads(legacy_path.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
 
@@ -937,7 +937,7 @@ class HindsightMemoryProvider(MemoryProvider):
         existing = {}
         if config_path.exists():
             try:
-                existing = json.loads(config_path.read_text(encoding="utf-8"))
+                existing = json.loads(config_path.read_text(encoding="utf-8-sig"))
             except Exception:
                 pass
         existing.update(values)
@@ -981,15 +981,10 @@ class HindsightMemoryProvider(MemoryProvider):
         provider_config["mode"] = mode
         env_writes: dict = {}
 
-        # Step 2: Install/upgrade deps for selected mode
-        cloud_dep = f"hindsight-client>={_MIN_CLIENT_VERSION}"
-        local_dep = "hindsight-all"
-        if mode == "local_embedded":
-            deps_to_install = [local_dep]
-        elif mode == "local_external":
-            deps_to_install = [cloud_dep]
-        else:
-            deps_to_install = [cloud_dep]
+        # Step 2: Install/upgrade deps for selected mode. local_embedded
+        # installs hindsight-all itself (protobuf conflict bars it from the
+        # venv extras; side-venv treatment is planned).
+        extras_needed = [] if mode == "local_embedded" else ["hindsight"]
 
         llm_provider = ""
         if mode == "local_embedded":
@@ -1013,18 +1008,41 @@ class HindsightMemoryProvider(MemoryProvider):
             provider_config["llm_provider"] = llm_provider
 
         print("\n  Checking dependencies...")
-        # Environment-aware install: sealed hosted venvs redirect to the durable
-        # data-volume target instead of writing to /opt/hermes (NS-605).
-        from tools.lazy_deps import install_specs
+        if mode == "local_embedded":
+            # hindsight-all cannot live in the hermes venv (its protobuf
+            # floor conflicts with mem0/modal; side-venv treatment is
+            # planned). Keep the direct install for this mode only.
+            import subprocess as _sp
 
-        outcome = install_specs(deps_to_install, timeout=120)
-        if outcome.ok:
-            print("  ✓ Dependencies up to date")
-        elif outcome.blocked:
-            print(f"  ⚠ Cannot install dependencies: {outcome.reason}")
+            import pm as _pm
+
+            uv_bin, uv_env = _pm.uv(venv=Path(sys.prefix))
+            cmd = (
+                [uv_bin, "pip", "install"]
+                if uv_bin
+                else [sys.executable, "-m", "pip", "install"]
+            )
+            proc = _sp.run(
+                [*cmd, "hindsight-all"],
+                env=uv_env if uv_bin else None,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if proc.returncode == 0:
+                print("  ✓ Dependencies up to date")
+            else:
+                print(f"  ⚠ Install failed:\n{(proc.stderr or '').strip()[:400]}")
+                print("  Run manually: uv pip install hindsight-all")
         else:
-            print(f"  ⚠ Install failed:\n{(outcome.stderr or '').strip()}")
-            print(f"  Run manually: uv pip install --python {sys.executable} {' '.join(deps_to_install)}")
+            import pm
+
+            try:
+                pm.sync_venv(extras_needed, explicit=True)
+                print("  ✓ Dependencies up to date")
+            except Exception as exc:
+                print(f"  ⚠ Install failed: {exc}")
+                print("  Run manually: hermes pm install")
 
         # Step 3: Mode-specific config
         if mode == "cloud":
@@ -1142,7 +1160,7 @@ class HindsightMemoryProvider(MemoryProvider):
             materialized_config = dict(provider_config)
             config_path = Path(hermes_home) / "hindsight" / "config.json"
             try:
-                materialized_config = json.loads(config_path.read_text(encoding="utf-8"))
+                materialized_config = json.loads(config_path.read_text(encoding="utf-8-sig"))
             except Exception:
                 pass
 
@@ -1241,8 +1259,8 @@ class HindsightMemoryProvider(MemoryProvider):
                         + (f": {reason}" if reason else "")
                     )
                 try:
-                    from tools.lazy_deps import ensure as _lazy_ensure
-                    _lazy_ensure("memory.hindsight", prompt=False)
+                    from pm import ensure_import as _lazy_ensure
+                    _lazy_ensure("hindsight")
                 except ImportError:
                     pass
                 except Exception as _e:
@@ -1608,18 +1626,14 @@ class HindsightMemoryProvider(MemoryProvider):
             if Version(installed) < Version(_MIN_CLIENT_VERSION):
                 logger.warning("hindsight-client %s is outdated (need >=%s), attempting upgrade...",
                                installed, _MIN_CLIENT_VERSION)
-                # Environment-aware install: sealed hosted venvs redirect to the
-                # durable data-volume target instead of /opt/hermes (NS-605).
-                from tools.lazy_deps import install_specs
-                outcome = install_specs([f"hindsight-client>={_MIN_CLIENT_VERSION}"], timeout=120)
-                if outcome.ok:
-                    logger.info("hindsight-client upgraded to >=%s", _MIN_CLIENT_VERSION)
-                elif outcome.blocked:
-                    logger.warning("Auto-upgrade unavailable: %s. Run: uv pip install 'hindsight-client>=%s'",
-                                   outcome.reason, _MIN_CLIENT_VERSION)
-                else:
-                    logger.warning("Auto-upgrade failed: %s. Run: uv pip install 'hindsight-client>=%s'",
-                                   (outcome.stderr or "").strip() or "install error", _MIN_CLIENT_VERSION)
+                # uv.lock owns the pin; an upgrade is a resync of the extra.
+                import pm
+
+                try:
+                    pm.sync_venv(["hindsight"])
+                    logger.info("hindsight-client resynced against uv.lock")
+                except Exception as exc:
+                    logger.warning("Auto-upgrade unavailable: %s. Run: hermes pm install", exc)
         except Exception:
             pass  # packaging not available or other issue — proceed anyway
 

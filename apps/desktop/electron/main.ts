@@ -47,7 +47,7 @@ import {
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
 import { BackendDialClaims } from './backend-dial-claim'
-import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
+import { buildDesktopBackendEnv, normalizeHermesHomeRoot } from './backend-env'
 import {
   isReauthRequiredError,
   makeNousCloudBackendDownError,
@@ -168,6 +168,7 @@ import {
 import { describeDevCdpDecision, resolveDevCdpPort } from './dev-cdp'
 import { installEmbedReferer } from './embed-referer'
 import { createEventDeduper } from './event-dedupe'
+import { openExternalUrl as externalOpen, type ExternalOpenDeps } from './external-open'
 import {
   buildTerminalScript,
   resolveTerminalLaunch,
@@ -176,7 +177,6 @@ import {
   tuiResumeArgs
 } from './external-terminal'
 import { type FaviconIo, resolveFavicon } from './favicon'
-import { findGitBash as _findGitBash } from './find-git-bash'
 import {
   installFindShortcut,
   installFoundInPageForwarder,
@@ -225,6 +225,8 @@ import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
+import { INSTALL_STAMP as BAKED_INSTALL_STAMP } from './install-stamp'
+import type { InstallStamp } from './install-stamp'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
@@ -266,6 +268,8 @@ import { loadNativeTokenSet, type NativeTokenStoreIo, persistNativeTokenSet } fr
 import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
 import { LEGACY_OAUTH_PARTITION, resolveOauthPartition } from './oauth-partition'
 import { createParentStartMarkerResolver, parentWatchdogEnv } from './parent-process-identity'
+import { adoptPayloadVenv, installIdForRoot, isBundledInstall, resolvePayload } from './payload-backend'
+import { checkAppInstallerUpdate, PLACEHOLDER_FEED_BASE_URL, triggerAppInstallerUpdate } from './app-updater'
 import { registerPetOverlayIpc } from './pet-overlay-ipc'
 import {
   buildRegistryProfileRoutes,
@@ -406,7 +410,6 @@ import { hiddenWindowsChildOptions } from './windows-child-options'
 import {
   buildPathExtCandidates,
   chooseUpdaterArgs,
-  getVenvSitePackagesEntries,
   resolveVenvHermesCommand
 } from './windows-hermes-path'
 import {
@@ -709,7 +712,12 @@ function loadInstallStamp() {
           builtAt: parsed.builtAt || null,
           dirty: Boolean(parsed.dirty),
           source: parsed.source || null,
-          path: p
+          path: p,
+          // Bundled/light artifacts carry these; mirror them so the union
+          // with the baked stamp stays typed (tag/payload drive the App
+          // Installer channel + variant).
+          tag: typeof parsed.tag === 'string' ? parsed.tag : null,
+          payload: parsed.payload === 'light' || parsed.payload === 'bundled' ? parsed.payload : 'bootstrap'
         })
       }
     } catch (e) {
@@ -721,11 +729,13 @@ function loadInstallStamp() {
   return null
 }
 
-const INSTALL_STAMP = loadInstallStamp()
+// The baked build-time constant (production bundles) wins; loadInstallStamp()
+// remains as the dev/extraResources fallback when nothing was baked.
+const INSTALL_STAMP = BAKED_INSTALL_STAMP ?? loadInstallStamp()
 
 if (INSTALL_STAMP) {
   console.log(
-    `[hermes] install stamp: ${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ''}${INSTALL_STAMP.dirty ? ' [DIRTY]' : ''} from ${INSTALL_STAMP.source || 'unknown'}`
+    `[hermes] install stamp: ${INSTALL_STAMP.commit ? INSTALL_STAMP.commit.slice(0, 12) : 'no-commit'}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ''}${INSTALL_STAMP.dirty ? ' [DIRTY]' : ''} from ${INSTALL_STAMP.source || 'unknown'}`
   )
 } else if (IS_PACKAGED) {
   // Dev builds without a stamp are normal; packaged builds without one
@@ -791,10 +801,11 @@ function resolveHermesHome() {
 
 const HERMES_HOME = resolveHermesHome()
 
-function pathWithHermesManagedNode(...entries) {
-  const managed = hermesManagedNodePathEntries(HERMES_HOME).filter(directoryExists)
-
-  return [...managed, ...entries, process.env.PATH].filter(Boolean).join(path.delimiter)
+// The spawned `hermes update` / updater children compose managed-tool env
+// (node, git, uv) in-process via pm. Electron only prepends the explicit
+// entries the caller names (the venv bin for the hermes shim itself).
+function pathWithVenvBin(...entries) {
+  return [...entries, process.env.PATH].filter(Boolean).join(path.delimiter)
 }
 
 // ACTIVE_HERMES_ROOT — the canonical mutable Hermes install. Same path
@@ -1660,114 +1671,65 @@ function loadWindowUrl(win, url, label) {
   win.loadURL(url).catch(error => rememberLog(`${label} failed to load: ${describeCrashReason(error)}`))
 }
 
-function openExternalUrl(rawUrl) {
-  const raw = String(rawUrl || '').trim()
-
-  if (!raw) {
-    return false
-  }
-
-  let parsed
-
-  try {
-    parsed = new URL(raw)
-  } catch {
-    return false
-  }
-
-  // `file://` URLs come from the artifacts panel (the renderer can't open
-  // them itself because Chromium blocks file:// navigation from the app
-  // origin). Hand them to `shell.openPath`, which dispatches to the OS
-  // file association. If the OS can't open it (`error` is a non-empty
-  // string), fall back to revealing the file in the system file manager.
-  if (parsed.protocol === 'file:') {
-    let localPath
-
-    try {
-      localPath = resolveRequestedPathForIpc(parsed.toString(), { purpose: 'Open external file' })
-    } catch {
-      return false
-    }
-
-    void shell
-      .openPath(localPath)
-      .then(error => {
-        if (!error) {
-          return
-        }
-
-        rememberLog(`[file] openPath failed: ${error}; revealing in folder instead`)
-
-        try {
-          shell.showItemInFolder(localPath)
-        } catch (revealError) {
-          rememberLog(`[file] showItemInFolder failed: ${revealError.message}`)
-        }
-      })
-      .catch(error => rememberLog(`[file] openPath rejected: ${error.message}`))
-
-    return true
-  }
-
-  if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
-    return false
-  }
-
-  const url = parsed.toString()
-
-  if (IS_WSL) {
-    rememberLog(`[link] opening via WSL→Windows: ${url}`)
-
-    const proc = spawn('cmd.exe', ['/c', 'start', '""', url], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    })
-
-    proc.on('error', error => {
-      rememberLog(`[link] cmd.exe start failed: ${error.message}; falling back to xdg-open`)
-      shell.openExternal(url).catch(fallback => rememberLog(`[link] xdg-open failed: ${fallback.message}`))
-    })
-    proc.unref()
-
-    return true
-  }
-
-  shell.openExternal(url).catch(error => rememberLog(`[link] openExternal failed: ${error.message}`))
-
-  return true
+const EXTERNAL_OPEN_DEPS: ExternalOpenDeps = {
+  isWsl: IS_WSL,
+  spawn: (cmd, args, opts) => spawn(cmd, args, opts),
+  openExternal: url => shell.openExternal(url),
+  openFile: openExternalFile,
+  notifyFailure: broadcastOpenFailed,
+  log: rememberLog
 }
 
-async function openPreviewInBrowser(rawUrl) {
-  const raw = String(rawUrl || '').trim()
+// The single route every external URL open funnels through (external-open.ts).
+// main.ts only binds the electron deps; all open/fallback logic lives in the
+// module so it unit-tests without loading electron.
+function openExternalUrl(rawUrl: string) {
+  return externalOpen(String(rawUrl || '').trim(), EXTERNAL_OPEN_DEPS)
+}
 
-  if (!raw) {
-    return false
-  }
+async function openPreviewInBrowser(rawUrl: string) {
+  const result = await externalOpen(String(rawUrl || '').trim(), EXTERNAL_OPEN_DEPS)
 
-  let parsed
+  // Only an invalid/unsupported URL is a hard "no" for the caller; an open
+  // failure already raised the fallback modal with the URL.
+  return !(result.ok === false && result.reason === 'invalid')
+}
+
+// `file://` URLs come from the artifacts panel (the renderer can't open them
+// itself because Chromium blocks that navigation). Dispatch to the OS file
+// association; if that fails, reveal the file in the system file manager.
+async function openExternalFile(rawUrl: string) {
+  let localPath: string
 
   try {
-    parsed = new URL(raw)
+    localPath = resolveRequestedPathForIpc(rawUrl, { purpose: 'Open external file' })
   } catch {
-    return false
+    return
   }
 
-  if (parsed.protocol === 'file:') {
-    let localPath
+  try {
+    const error = await shell.openPath(localPath)
 
-    try {
-      localPath = resolveRequestedPathForIpc(parsed.toString(), { purpose: 'Open preview in browser' })
-    } catch {
-      return false
+    if (!error) {
+      return
     }
 
-    await shell.openExternal(pathToFileURL(localPath).toString())
-
-    return true
+    rememberLog(`[file] openPath failed: ${error}; revealing in folder instead`)
+    shell.showItemInFolder(localPath)
+  } catch (error) {
+    rememberLog(`[file] openPath rejected: ${error instanceof Error ? error.message : String(error)}`)
   }
+}
 
-  return openExternalUrl(raw)
+// An open failure is surfaced to the renderer as a modal carrying the URL, so
+// a dead system-browser click (e.g. no https handler registered on Linux) is
+// never silent. Broadcast to every window — the trigger has no single sender.
+function broadcastOpenFailed(url: string, message: string) {
+  rememberLog(`[open-failed] ${url}: ${message}`)
+
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('hermes:external-open-failed', { url, message })
+  }
 }
 
 function ensureWslWindowsFonts() {
@@ -1875,7 +1837,8 @@ let bootstrapState = {
   startedAt: null,
   completedAt: null,
   setupChoice: null,
-  unsupportedPlatform: null
+  unsupportedPlatform: null,
+  bundled: false
 }
 
 let firstRunSetupGate = null
@@ -1930,10 +1893,13 @@ function broadcastBootstrapEvent(ev) {
     bootstrapState.setupChoice = ev.active
       ? {
           platform: ev.platform,
-          activeRoot: ev.activeRoot
+          activeRoot: ev.activeRoot,
+          local: ev.local || 'none',
+          bundled: Boolean(ev.bundled)
         }
       : null
     bootstrapState.unsupportedPlatform = null
+    bootstrapState.bundled = Boolean(ev.bundled)
   } else if (ev.type === 'dismissed') {
     resetBootstrapSnapshot()
   }
@@ -1965,7 +1931,8 @@ function resetBootstrapSnapshot() {
     startedAt: null,
     completedAt: null,
     setupChoice: null,
-    unsupportedPlatform: null
+    unsupportedPlatform: null,
+    bundled: false
   }
 }
 
@@ -1974,7 +1941,9 @@ function promptFirstRunSetupChoice(backend) {
     type: 'setup-choice',
     active: true,
     platform: backend.platform || process.platform,
-    activeRoot: backend.activeRoot || ACTIVE_HERMES_ROOT
+    activeRoot: backend.activeRoot || ACTIVE_HERMES_ROOT,
+    local: backend.local || 'none',
+    bundled: isBundledInstall(process.resourcesPath, { fileExists })
   })
 }
 
@@ -2275,9 +2244,7 @@ function unwrapWindowsVenvHermesCommand(command, backendArgs) {
     directoryExists,
     canImportHermesCli,
     getVenvPython,
-    getVenvSitePackagesEntries,
     buildDesktopBackendEnv,
-    hermesHome: HERMES_HOME,
     resolvePath: (...segments) => path.resolve(...segments),
     dirname: p => path.dirname(p),
     basename: p => path.basename(p),
@@ -2581,18 +2548,6 @@ function findSystemPython() {
   return null
 }
 
-// findGitBash — locate bash.exe on Windows. Resolves HERMES_GIT_BASH_PATH
-// first (mirrors tools/environments/local.py:_find_bash), then PortableGit,
-// standard install locations, and finally PATH.
-function findGitBash() {
-  return _findGitBash({
-    isWindows: IS_WINDOWS,
-    env: process.env,
-    fileExists,
-    findOnPath
-  })
-}
-
 function getVenvPython(venvRoot) {
   return path.join(venvRoot, IS_WINDOWS ? path.join('Scripts', 'python.exe') : path.join('bin', 'python'))
 }
@@ -2657,8 +2612,8 @@ function makeDashboardReadyFile() {
 // resolveGitBinary — locate git.exe on Windows. A fresh installer-driven
 // install only has PortableGit under %LOCALAPPDATA%\hermes\git (never on
 // PATH), so a bare spawn('git') ENOENTs and self-update checks fail with
-// "Couldn't check for updates". Mirror findGitBash: PortableGit first, then
-// standard Git-for-Windows locations, then PATH. Cached after first probe.
+// "Couldn't check for updates". PortableGit first, then standard
+// Git-for-Windows locations, then PATH. Cached after first probe.
 let _gitBinaryCache = null
 
 function resolveGitBinary() {
@@ -2900,6 +2855,51 @@ async function resolveHealedBranch(updateRoot, branch) {
 }
 
 async function checkUpdates() {
+  // A bundled install has no checkout to pull — the OS App Installer owns
+  // the update loop for out-of-store MSIX installs. Ask the OS whether a
+  // newer package is available on the registered .appinstaller source.
+  const bundledPayload = resolvePayload(process.resourcesPath, { fileExists, directoryExists, isWindows: IS_WINDOWS })
+  if (bundledPayload) {
+    if (IS_WINDOWS && !isWindowsStore()) {
+      try {
+        const check = await checkAppInstallerUpdate({
+          python: bundledPayload.storePython,
+          // The checker ships inside the payload's repo snapshot (git archive
+          // of the committed tree): <payload>/<repo>/apps/desktop/scripts/.
+          script: path.join(bundledPayload.repoDir, 'apps', 'desktop', 'scripts', 'check-appinstaller-update.py'),
+          run: runPayloadPython
+        })
+
+        return {
+          supported: true,
+          mechanism: 'app-installer',
+          channel: resolveUpdaterChannelFromStamp(),
+          currentVersion: app.getVersion(),
+          latestVersion: null,
+          updateAvailable: check.available === true,
+          // null = unknown (checker unavailable) — surface honestly.
+          error: check.available === null ? (check.error || 'update check unavailable') : undefined,
+          fetchedAt: Date.now()
+        }
+      } catch (error) {
+        return {
+          supported: true,
+          mechanism: 'app-installer',
+          error: 'check-failed',
+          message: error?.message || String(error),
+          fetchedAt: Date.now()
+        }
+      }
+    }
+
+    return {
+      supported: false,
+      reason: 'bundled-not-appinstaller',
+      message: 'bundled install: updates are applied by the installer (Microsoft Store or App Installer).',
+      fetchedAt: Date.now()
+    }
+  }
+
   const updateRoot = resolveUpdateRoot()
   let { branch } = readDesktopUpdateConfig()
   const gitDir = path.join(updateRoot, '.git')
@@ -3125,6 +3125,99 @@ async function readCommitLog(cwd, branch, isShallow) {
 }
 
 let updateInFlight = false
+
+// ── bundled / App Installer helpers ─────────────────────────────────────────
+
+/** True when this process is a Microsoft Store deployment. */
+function isWindowsStore(): boolean {
+  return Boolean((process as any).windowsStore)
+}
+
+/**
+ * The App Installer feed base URL for a bundled MSIX install: config.yaml's
+ * `updates.desktop_feed_base_url`, then HERMES_DESKTOP_FEED_BASE_URL, then
+ * the documented placeholder. Empty only when nothing configured the feed.
+ */
+function resolveDesktopFeedBaseUrl(): string {
+  const configured = readUpdatesFeedBaseFromConfig()
+  if (configured) return configured
+  const env = process.env.HERMES_DESKTOP_FEED_BASE_URL
+  if (env) return env
+  return PLACEHOLDER_FEED_BASE_URL
+}
+
+/** Read `updates.desktop_feed_base_url` from the user's config.yaml. */
+function readUpdatesFeedBaseFromConfig(): string {
+  try {
+    const configPath = path.join(HERMES_HOME, 'config.yaml')
+    if (!fileExists(configPath)) return ''
+    const raw = fs.readFileSync(configPath, 'utf8')
+    const match = raw.match(/^\s*desktop_feed_base_url\s*:\s*(.+)\s*$/m)
+    if (!match) return ''
+    const value = match[1].trim().replace(/^['"]|['"]$/g, '')
+    return value
+  } catch {
+    return ''
+  }
+}
+
+/** The updater channel from the baked install stamp ('nightly' vs 'stable'). */
+function resolveUpdaterChannelFromStamp(): 'stable' | 'nightly' {
+  const tag = INSTALL_STAMP?.tag || ''
+  return /-nightly\./.test(tag) ? 'nightly' : 'stable'
+}
+
+/** True when this artifact is the light (remote-only) variant. */
+function isLightVariant(): boolean {
+  return INSTALL_STAMP?.payload === 'light'
+}
+
+/**
+ * Run a bundled payload python script. The payload python needs the payload
+ * venv's site-packages on PYTHONPATH to import the winrt module — the same
+ * way the CLI shim sets it (bin/shim-target.txt line 2). Without it the
+ * checker would always fail with "winrt import failed".
+ */
+async function runPayloadPython(python: string, script: string): Promise<{ code: number; stdout: string }> {
+  const payload = resolvePayload(process.resourcesPath, { fileExists, directoryExists, isWindows: IS_WINDOWS })
+  const env = { ...process.env }
+  if (payload?.sitePackages) {
+    env.PYTHONPATH = payload.sitePackages
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn(python, [script], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk.toString() })
+    child.stderr.on('data', chunk => { stderr += chunk.toString() })
+    child.on('error', (error) => resolve({ code: 1, stdout: JSON.stringify({ available: null, error: error.message }) }))
+    child.on('close', (code) => {
+      if (stderr) console.error(`[app-installer] checker stderr: ${stderr.slice(0, 400)}`)
+      resolve({ code: code ?? 1, stdout })
+    })
+  })
+}
+
+/**
+ * Graceful teardown before the OS App Installer swaps the package: stop the
+ * primary backend + all pool backends (tree-kill their children) so no
+ * process keeps files in the install dir locked while Windows replaces it.
+ * Same primitive the update hand-off uses (stopBackendTreesForUpdate).
+ */
+async function teardownBundledBackend(): Promise<void> {
+  const hermesProcess = backendConnectionState.getProcess()
+  if (hermesProcess || backendPool.size > 0) {
+    stopBackendTreesForUpdate(hermesProcess, {
+      forceKillProcessTree,
+      stopAllPoolBackends
+    })
+  }
+}
 
 // Set to true when the desktop is about to quit so a detached swap/install/
 // uninstall script can take over. On macOS, app.quit() closes windows but
@@ -3634,6 +3727,52 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
     throw new Error('An update is already in progress.')
   }
 
+  // A bundled install ships its whole runtime as a sealed payload — there
+  // is no checkout to pull or venv to sync. New app release IS the update.
+  if (resolvePayload(process.resourcesPath, { fileExists, directoryExists, isWindows: IS_WINDOWS })) {
+    // Out-of-store MSIX installs are App Installer owned: the OS registered
+    // the .appinstaller URI as the update source at install, so "apply"
+    // means run the graceful teardown (backend children holding install-dir
+    // locks must die first — the same teardown the old in-app updater ran
+    // between download and install), then hand the process to the OS App
+    // Installer and quit.
+    if (IS_WINDOWS && !isWindowsStore()) {
+      const feedBaseUrl = resolveDesktopFeedBaseUrl()
+
+      if (feedBaseUrl) {
+        emitUpdateProgress({
+          stage: 'restart',
+          message: 'Applying the Hermes update — the window will close and the App Installer will finish.',
+          percent: 100
+        })
+
+        await triggerAppInstallerUpdate(
+          feedBaseUrl,
+          resolveUpdaterChannelFromStamp(),
+          isLightVariant(),
+          { openExternal: url => shell.openExternal(url) },
+          teardownBundledBackend
+        )
+
+        // The OS App Installer now owns the swap. Quit so no process holds
+        // files in the install dir while Windows replaces the package.
+        app.quit()
+
+        return { ok: true, manual: false, bundled: true }
+      }
+    }
+
+    // No App Installer source (a non-MSIX bundled install, or no feed
+    // configured): the manual card remains the fallback.
+    emitUpdateProgress({
+      stage: 'manual',
+      message: 'bundled install: update by installing the new app release',
+      percent: null
+    })
+
+    return { ok: true, manual: true, bundled: true }
+  }
+
   updateInFlight = true
 
   try {
@@ -3858,7 +3997,7 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
           ...process.env,
           HERMES_HOME,
           HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
-          PATH: pathWithHermesManagedNode(venvBin)
+          PATH: pathWithVenvBin(venvBin)
         },
         detached: true,
         stdio: 'ignore'
@@ -3884,7 +4023,7 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
         env: {
           ...process.env,
           HERMES_HOME,
-          PATH: pathWithHermesManagedNode(venvBin)
+          PATH: pathWithVenvBin(venvBin)
         },
         detached: true,
         stdio: 'ignore'
@@ -3962,6 +4101,17 @@ async function handOffWindowsBootstrapRecovery(reason) {
     return false
   }
 
+  // A bundled install does not own %LOCALAPPDATA%\hermes — the updater
+  // would try to heal a tree the app never created. The payload IS the
+  // runtime; recovery means reinstalling the app, not spawning the
+  // updater. (ensureRuntime's bundled guard also short-circuits before
+  // this call; this is the belt-and-suspenders check.)
+  if (isBundledInstall(process.resourcesPath, { fileExists })) {
+    rememberLog('[bootstrap] refusing updater recovery hand-off on a bundled install; reinstall the app')
+
+    return false
+  }
+
   const updater = resolveUpdaterBinary()
 
   if (!updater) {
@@ -4019,7 +4169,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
     env: {
       ...process.env,
       HERMES_HOME,
-      PATH: pathWithHermesManagedNode(venvBin)
+      PATH: pathWithVenvBin(venvBin)
     },
     detached: true,
     stdio: 'ignore'
@@ -4249,7 +4399,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
       ...process.env,
       HERMES_HOME,
       HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
-      PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
+      PATH: pathWithVenvBin(path.join(updateRoot, 'venv', 'bin'))
     },
     detached: true,
     stdio: 'ignore'
@@ -4349,7 +4499,32 @@ function activeRuntimeState() {
   // update`, which moves HEAD legitimately. The marker only attests "a
   // desktop-managed bootstrap ran here at least once"; runtime usability is
   // what decides whether we can actually launch.
-  return classifyActiveRuntime(readBootstrapMarker(), BOOTSTRAP_MARKER_SCHEMA_VERSION, isActiveRuntimeUsable())
+  const state = classifyActiveRuntime(readBootstrapMarker(), BOOTSTRAP_MARKER_SCHEMA_VERSION, isActiveRuntimeUsable())
+
+  // The canonical install stamp (written next to the runtime by the bootstrap)
+  // tells the UI where this runtime came from. Prefer it over the marker so
+  // the Runtime row reflects the actual install provenance.
+  state.canonicalInstallStamp = readCanonicalInstallStamp()
+
+  return state
+}
+
+/** Read the install stamp the bootstrap wrote into the canonical runtime
+ *  root (`ACTIVE_HERMES_ROOT/install-stamp.json`). Returns null when the
+ *  runtime wasn't desktop-bootstrapped (or the file is unreadable). */
+function readCanonicalInstallStamp() {
+  try {
+    const raw = fs.readFileSync(path.join(ACTIVE_HERMES_ROOT, 'install-stamp.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+
+    if (parsed && typeof parsed === 'object' && typeof parsed.source === 'string') {
+      return parsed
+    }
+
+    return null
+  } catch {
+    return null
+  }
 }
 
 function writeBootstrapMarker(payload) {
@@ -4364,6 +4539,36 @@ function writeBootstrapMarker(payload) {
   }
 
   writeFileAtomic(BOOTSTRAP_COMPLETE_MARKER, JSON.stringify(merged, null, 2) + '\n', 'utf8')
+
+  // The canonical runtime this bootstrap created is a desktop-managed install
+  // — write its own install stamp alongside it (the same schema the packagers
+  // produce, so every surface reads provenance the same way). Unlike the
+  // artifact stamp this one records where the install CAME from
+  // (desktop-bootstrap) plus the commit the checkout was pinned to.
+  try {
+    const canonicalStamp = {
+      schemaVersion: 1,
+      commit: payload.pinnedCommit || null,
+      branch: payload.pinnedBranch || null,
+      builtAt: new Date().toISOString(),
+      dirty: false,
+      source: 'desktop-bootstrap',
+      distribution: null,
+      updateMechanism: 'self',
+      baseVersion: null,
+      distance: null,
+      payload: 'bootstrap',
+      tag: null
+    }
+
+    const canonicalStampPath = path.join(ACTIVE_HERMES_ROOT, 'install-stamp.json')
+    writeFileAtomic(canonicalStampPath, JSON.stringify(canonicalStamp, null, 2) + '\n', 'utf8')
+    rememberLog(`[bootstrap] wrote canonical install stamp to ${canonicalStampPath}`)
+  } catch (error) {
+    // The marker is the hard contract; a failed stamp write is log-worthy but
+    // must never fail the bootstrap (the runtime itself is already installed).
+    rememberLog(`[bootstrap] failed to write canonical install stamp: ${error?.message || error}`)
+  }
 
   return merged
 }
@@ -4582,11 +4787,8 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     return null
   }
 
-  // The venv whose interpreter we selected is the venv whose site-packages
-  // belong on PYTHONPATH — findPythonForRoot may have picked `.venv` over
-  // `venv`, and mixing the two crashes the backend on its first native
-  // import (see venvRootForPython). Fall back to root/venv only for a
-  // system python, where the historical layout is the best guess.
+  // The venv interpreter self-locates (pyvenv.cfg) and `cwd: root` puts the
+  // checkout first on sys.path for `-m hermes_cli.main`. No PYTHONPATH.
   const venvRoot = venvRootForPython(python, root) ?? path.join(root, 'venv')
   const venvPython = getVenvPython(venvRoot)
   const command = IS_WINDOWS && fileExists(venvPython) ? venvPython : python
@@ -4596,14 +4798,14 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     label,
     command,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
-    env: buildDesktopBackendEnv({
-      hermesHome: HERMES_HOME,
-      pythonPathEntries: [root, ...getVenvSitePackagesEntries(venvRoot)],
-      venvRoot
-    }),
+    env: buildDesktopBackendEnv(),
     root,
     bootstrap: Boolean(options.bootstrap),
-    shell: false
+    shell: false,
+    // A resolved local runtime — already on this machine (checkout or
+    // installed). The setup choice's local card reads this to offer the
+    // "use existing" variant instead of an install.
+    local: 'installed'
   }
 }
 
@@ -4620,18 +4822,85 @@ function createActiveBackend(backendArgs) {
     label: `Hermes at ${ACTIVE_HERMES_ROOT}`,
     command,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
-    env: buildDesktopBackendEnv({
-      hermesHome: HERMES_HOME,
-      pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(VENV_ROOT)],
-      venvRoot: VENV_ROOT
-    }),
+    env: buildDesktopBackendEnv(),
     root: ACTIVE_HERMES_ROOT,
     bootstrap: true,
-    shell: false
+    shell: false,
+    local: 'installed'
   }
 }
 
 function resolveHermesBackend(backendArgs) {
+  // 0. Shipped payload — a bundled install carries the whole runtime under
+  //    resources/agent-payload (staged by `hermes pm bundle`). The venv's
+  //    interpreter self-locates: adoptPayloadVenv() verifies the store
+  //    python + site-packages resolve (no pyvenv.cfg write — read-only
+  //    MSIX-safe), and HERMES_RUNTIME_DIR aims pm at the payload store.
+  //    Nothing installs on the user machine.
+  const payload = resolvePayload(process.resourcesPath, {
+    fileExists,
+    directoryExists,
+    isWindows: IS_WINDOWS
+  })
+
+  if (payload && adoptPayloadVenv(payload, { isWindows: IS_WINDOWS, log: rememberLog })) {
+    if (bootstrapRepairRequested) {
+      // A bundled payload is immutable — repair means "reinstall the app".
+      rememberLog('[payload] repair requested on a bundled install; the payload is read-only — ignoring')
+    }
+
+    // Bundled builds run the STORE python via the self-relative CLI shim
+    // (bin/hermes.exe — works on read-only MSIX, no pyvenv.cfg write). The
+    // shim reads bin/shim-target.txt and sets PYTHONPATH to the payload's
+    // repo + venv site-packages itself, so the backend needs only the
+    // managed-tools dir from us.
+    return {
+      kind: 'python',
+      label: `bundled payload at ${payload.root}`,
+      command: payload.shim,
+      args: [...backendArgs],
+      env: {
+        ...buildDesktopBackendEnv(),
+        HERMES_RUNTIME_DIR: payload.toolsDir
+      },
+      root: payload.repoDir,
+      bootstrap: false,
+      shell: false,
+      local: 'bundled'
+    }
+  }
+
+  // A bundled artifact that failed to resolve must NEVER fall through the
+  // ladder to bootstrap-needed: the payload IS the local Hermes, it is
+  // immutable (sealed at build time, often read-only MSIX), and running
+  // install.ps1 would download and install a SECOND, separate Hermes into
+  // the user's machine on top of one the app already carries. Skip ALL
+  // remaining local rungs — explicit dev overrides included; a developer
+  // who wants a checkout should run a non-bundled build
+  // (HERMES_DESKTOP_VARIANT unset → external stub → not bundled). The
+  // payload-healthy path above returns before this guard, so a working
+  // bundle is unaffected.
+  if (isBundledInstall(process.resourcesPath, { fileExists })) {
+    rememberLog(
+      '[bootstrap] bundled payload missing or damaged; REFUSING to run the installer — reinstall the app to restore the runtime'
+    )
+
+    return {
+      kind: 'bundled-unusable',
+      label: 'The Hermes runtime bundled with this app is missing or damaged; reinstall the app',
+      command: null,
+      args: backendArgs,
+      bootstrap: false,
+      env: {},
+      shell: false,
+      activeRoot: ACTIVE_HERMES_ROOT,
+      installStamp: INSTALL_STAMP,
+      isPackaged: IS_PACKAGED,
+      platform: process.platform,
+      local: 'bundled-damaged'
+    }
+  }
+
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
@@ -4680,109 +4949,57 @@ function resolveHermesBackend(backendArgs) {
     rememberLog('[bootstrap] repair requested; bypassing the usable active runtime to re-run the installer')
   }
 
-  // 4. Existing `hermes` on PATH -- installed via install.ps1 / install.sh from
-  //    a previous tool-only setup, or pip-installed system-wide. Use it but
-  //    do NOT write a bootstrap marker; the user did this themselves and we
-  //    don't want to take ownership of an install we didn't perform.
-  //    HERMES_DESKTOP_IGNORE_EXISTING=1 forces the bootstrap path for testing.
-  if (process.env.HERMES_DESKTOP_IGNORE_EXISTING !== '1') {
-    let hermesCommand = null
-    const hermesOverride = process.env.HERMES_DESKTOP_HERMES
+  // 4. HERMES_DESKTOP_HERMES — an explicit deployment override (used by the
+  //    Nix wrapper), not a discovered PATH candidate. The pinned backend is
+  //    the only valid runtime there; never fall through to bootstrap for it.
+  const hermesOverride = process.env.HERMES_DESKTOP_HERMES
+  let hermesCommand = null
 
-    if (hermesOverride) {
-      const resolvedOverride = findOnPath(hermesOverride)
+  if (hermesOverride) {
+    const resolvedOverride = findOnPath(hermesOverride)
 
-      if (resolvedOverride) {
-        hermesCommand = resolvedOverride
-      } else if (!isWindowsBinaryPathInWsl(hermesOverride, { isWsl: IS_WSL })) {
-        hermesCommand = hermesOverride
-      } else {
-        rememberLog(`Ignoring Windows Hermes override under WSL: ${hermesOverride}`)
-      }
+    if (resolvedOverride) {
+      hermesCommand = resolvedOverride
+    } else if (!isWindowsBinaryPathInWsl(hermesOverride, { isWsl: IS_WSL })) {
+      hermesCommand = hermesOverride
     } else {
-      hermesCommand = findOnPath('hermes')
+      rememberLog(`Ignoring Windows Hermes override under WSL: ${hermesOverride}`)
     }
 
     if (hermesCommand) {
       if (looksLikeDesktopAppBinary(hermesCommand)) {
         rememberLog(`Ignoring desktop app executable on PATH while resolving Hermes CLI: ${hermesCommand}`)
         hermesCommand = null
-      }
-    }
+      } else {
+        const unwrapped = unwrapWindowsVenvHermesCommand(hermesCommand, backendArgs)
 
-    if (hermesCommand) {
-      const unwrapped = unwrapWindowsVenvHermesCommand(hermesCommand, backendArgs)
-
-      if (unwrapped) {
-        return unwrapped
-      }
-
-      // Smoke-test the candidate before trusting it. A `hermes` shim
-      // left behind by a half-uninstalled pip install (or a venv
-      // entry-point pointing at a deleted interpreter) still resolves
-      // via findOnPath but explodes on spawn -- the user then sees a
-      // dead backend instead of the first-launch installer. The cheap
-      // `--version` probe (see backend-probes.ts) catches that case
-      // and lets the resolver fall through to step 6 / bootstrap.
-      const shellForProbe = isCommandScript(hermesCommand)
-
-      // HERMES_DESKTOP_HERMES is an explicit deployment override (used by
-      // the Nix wrapper), not a discovered PATH candidate. It must not fall
-      // through to the install-script bootstrap if the optional probe times
-      // out under load; the pinned backend is the only valid runtime there.
-      if (shouldTrustHermesOverride(hermesOverride) || verifyHermesCli(hermesCommand, { shell: shellForProbe })) {
-        // `unwrapped` above already answered "is this a Windows venv shim?" —
-        // it was null (not a shim, or its import probe failed). Do NOT re-run
-        // unwrapWindowsVenvHermesCommand here: the second call repeats the
-        // same un-memoized import probe, costing up to another full probe
-        // timeout on the boot path for an answer we already have.
-        return {
-          label: `existing Hermes CLI at ${hermesCommand}`,
-          command: hermesCommand,
-          args: backendArgs,
-          bootstrap: false,
-          env: {},
-          kind: 'command',
-          shell: shellForProbe
+        if (unwrapped) {
+          return unwrapped
         }
-      }
 
-      rememberLog(
-        `Ignoring existing Hermes CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
-      )
+        const shellForProbe = isCommandScript(hermesCommand)
+
+        if (shouldTrustHermesOverride(hermesOverride) || verifyHermesCli(hermesCommand, { shell: shellForProbe })) {
+          return {
+            label: `existing Hermes CLI at ${hermesCommand}`,
+            command: hermesCommand,
+            args: backendArgs,
+            bootstrap: false,
+            env: {},
+            kind: 'command',
+            shell: shellForProbe,
+            local: 'installed'
+          }
+        }
+
+        rememberLog(
+          `Ignoring existing Hermes CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
+        )
+      }
     }
   }
 
-  // 5. Last-ditch: pip-installed hermes_cli module via system Python.
-  //    Same rationale as #4 -- the user installed this; we use it but don't
-  //    take ownership.
-  const python = findSystemPython()
-
-  if (python) {
-    // Same smoke-test rationale as step 4: a system Python in the
-    // SUPPORTED_VERSIONS range can be registered (PEP 514) without
-    // having hermes_cli installed -- common on dev boxes that have
-    // a python.org install from prior unrelated work. Returning that
-    // backend hands the spawn step a guaranteed ModuleNotFoundError.
-    // Verify the import works before trusting the candidate; on
-    // failure, fall through to step 6 so the bootstrap runner pulls
-    // a uv-managed 3.11 into %LOCALAPPDATA%\hermes\hermes-agent\venv.
-    if (canImportHermesCli(python)) {
-      return {
-        kind: 'python',
-        label: `installed hermes_cli module via ${python}`,
-        command: python,
-        args: ['-m', 'hermes_cli.main', ...backendArgs],
-        bootstrap: false,
-        env: {},
-        shell: false
-      }
-    }
-
-    rememberLog(`Ignoring system Python ${python}: hermes_cli is not importable; falling through to bootstrap.`)
-  }
-
-  // 6. Nothing usable yet -- signal the bootstrap runner that we need to
+  // 5. Nothing usable yet -- signal the bootstrap runner that we need to
   //    clone+install. Phase 1D's bootstrap-runner consumes this sentinel
   //    and drives install.ps1 stages with a progress UI. Until 1D lands,
   //    callers see the sentinel and surface it as a user-facing error
@@ -4804,7 +5021,8 @@ function resolveHermesBackend(backendArgs) {
     activeRoot: ACTIVE_HERMES_ROOT,
     installStamp: INSTALL_STAMP, // may be null in dev
     isPackaged: IS_PACKAGED,
-    platform: process.platform
+    platform: process.platform,
+    local: 'none'
   }
 }
 
@@ -4824,6 +5042,39 @@ async function ensureRuntime(backend) {
   // (renderer window isn't created until later in startBackend). Phase 1E
   // will rewire startup to spawn the window first and route bootstrap events
   // to a renderer-side install overlay.
+  //
+  // Defense in depth: a bundled artifact must NEVER reach this branch. The
+  // resolver's bundled-unusable sentinel is the primary guard; this check
+  // covers any future path that produces bootstrap-needed on a bundled
+  // install (e.g. a stale repair flag racing the resolver).
+  if (backend.kind === 'bootstrap-needed' && isBundledInstall(process.resourcesPath, { fileExists })) {
+    rememberLog('[bootstrap] REFUSING installer on a bundled install; payload missing or damaged — reinstall the app')
+
+    const bundledError: Error & { isBootstrapFailure?: boolean } = new Error(
+      'This app bundles its own Hermes runtime, but the runtime files are missing or damaged. Reinstall Hermes Desktop to restore it.'
+    )
+
+    bundledError.isBootstrapFailure = true
+    bootstrapFailure = bundledError
+    throw bundledError
+  }
+
+  // A bundled install whose payload failed to resolve. The payload is the
+  // ONLY local runtime a bundle has (immutable, sealed at build time), so
+  // there is nothing to install or repair here — reinstall the app. The
+  // setup gate still lets the user connect to a REMOTE Hermes.
+  if (backend.kind === 'bundled-unusable') {
+    rememberLog('[bootstrap] bundled payload is unusable; no installer path exists — reinstall the app')
+
+    const bundledError: Error & { isBootstrapFailure?: boolean } = new Error(
+      'This app bundles its own Hermes runtime, but the runtime files are missing or damaged. Reinstall Hermes Desktop to restore it.'
+    )
+
+    bundledError.isBootstrapFailure = true
+    bootstrapFailure = bundledError
+    throw bundledError
+  }
+
   if (backend.kind === 'bootstrap-needed') {
     rememberLog('[bootstrap] no Hermes install found; starting first-launch bootstrap')
 
@@ -4931,21 +5182,6 @@ async function ensureRuntime(backend) {
     throw new Error(
       `Hermes install at ${ACTIVE_HERMES_ROOT} is missing or incomplete. ` +
         'Reinstall via the desktop installer or scripts/install.ps1.'
-    )
-  }
-
-  // On Windows, preflight Git Bash. Hermes' terminal tool calls bash.exe
-  // directly (tools/environments/local.py); without it the agent can't run
-  // terminal commands. install.ps1's Stage-Git puts PortableGit at
-  // %LOCALAPPDATA%\hermes\git\, which findGitBash() picks up, so for any
-  // user who completed the bootstrap this is a no-op. For users who got
-  // here via an external `hermes` on PATH, this check still helps.
-  if (IS_WINDOWS && !findGitBash()) {
-    throw new Error(
-      'Git for Windows is required for Hermes on Windows (provides Git Bash, ' +
-        "which the agent's terminal tool uses). Install it from " +
-        'https://git-scm.com/download/win or run `winget install -e --id Git.Git`, ' +
-        'then relaunch Hermes.'
     )
   }
 
@@ -12726,7 +12962,7 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
 
   installContextMenuBridge(win)
   win.webContents.setWindowOpenHandler(details => {
-    openExternalUrl(details.url)
+    void openExternalUrl(details.url)
 
     return { action: 'deny' }
   })
@@ -12736,7 +12972,7 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
     }
 
     event.preventDefault()
-    openExternalUrl(url)
+    void openExternalUrl(url)
   })
 }
 
@@ -14491,6 +14727,17 @@ ipcMain.handle('hermes:bootstrap:reset', async () => {
   return { ok: true }
 })
 ipcMain.handle('hermes:bootstrap:repair', async () => {
+  // A bundled install's payload is immutable and sealed at build time —
+  // "repair" would re-run the installer against a separate
+  // %LOCALAPPDATA%\hermes tree the app doesn't own. The only repair for a
+  // damaged bundle is reinstalling the app itself. Refuse without touching
+  // bootstrapRepairRequested so a stale renderer can't drive an install.
+  if (isBundledInstall(process.resourcesPath, { fileExists })) {
+    rememberLog('[bootstrap] repair refused on a bundled install; repair means reinstalling the app')
+
+    return { ok: false, error: 'bundled-immutable' }
+  }
+
   // Forceful repair: force the next startHermes() through the full installer
   // (refreshing a broken/partial venv) and clear any latched failure + live
   // connection. The renderer reloads afterwards to re-drive the boot flow.
@@ -15336,7 +15583,21 @@ ipcMain.handle('hermes:connection-config:oauth-login', async (_event, rawUrl) =>
   if (strategy === 'native') {
     try {
       const tokens = await runNativeLogin(baseUrl, {
-        openExternal: url => shell.openExternal(url),
+        // Route the browser-open through the single external-open path so it
+        // gets the WSL handling and the open-failure modal. Fail fast (throw)
+        // so runNativeLogin reports the real reason instead of waiting out the
+        // loopback timeout.
+        openExternal: async url => {
+          const result = await openExternalUrl(url)
+
+          if (result.ok === false) {
+            throw new Error(
+              result.reason === 'failed' && result.message
+                ? result.message
+                : 'Could not open the system browser for native sign-in'
+            )
+          }
+        },
         postJson: (url, body, opts) => postJsonNoAuth(url, body, opts),
         rememberLog
       })
@@ -16017,6 +16278,20 @@ async function handleHermesApiRequest(request) {
   return response
 }
 
+// Format an api-request failure for desktop.log. The renderer only ever sees
+// the invoke rejection; the real stack lives here in main, so persist it
+// before rethrowing. Clamp: paths and error detail must not bloat the log.
+function formatApiRequestFailure(
+  request: { method?: string; path?: string } | null | undefined,
+  error: unknown
+): string {
+  const method = String(request?.method ?? 'GET').toUpperCase()
+  const path = String(request?.path ?? '(no path)').slice(0, 500)
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
+
+  return `[hermes:api ${method} ${path}] ${detail}`.slice(0, 6000)
+}
+
 ipcMain.handle('hermes:api', async (_event, request) => {
   // Hold the deletion gate for BOTH profile deletes and renames: a concurrent
   // renderer reconnect entering ensureBackend() mid-mutation would otherwise
@@ -16025,26 +16300,34 @@ ipcMain.handle('hermes:api', async (_event, request) => {
   const mutatingProfile = deletingProfile || profileRenameFromRequest(request)?.oldName || null
   const registryConnectionId = apiRequestRegistryConnectionId(request)
 
-  if (deletingProfile && registryConnectionId) {
-    return dispatchConnectionScopedProfileDelete(request, {
-      acquire: profile => profileDeletionGate.acquire(profile),
-      connectionKind: connectionId => registryConnectionKind(connectionId),
-      dispatch: routeProfile =>
-        dispatchRegistryApiRequest(request, registryConnectionId, routeProfile, deletingProfile),
-      isDefaultProfile: profile => profile === 'default',
-      isValidProfileName: profile => PROFILE_NAME_RE.test(profile),
-      prepareLocal: localRequest => prepareProfileDeleteRequest(localRequest).then(() => undefined),
-      teardownConnection: (connectionId, profile) => teardownConnectionScopedProfileBackend(connectionId, profile)
-    })
+  try {
+    if (deletingProfile && registryConnectionId) {
+      return await dispatchConnectionScopedProfileDelete(request, {
+        acquire: profile => profileDeletionGate.acquire(profile),
+        connectionKind: connectionId => registryConnectionKind(connectionId),
+        dispatch: routeProfile =>
+          dispatchRegistryApiRequest(request, registryConnectionId, routeProfile, deletingProfile),
+        isDefaultProfile: profile => profile === 'default',
+        isValidProfileName: profile => PROFILE_NAME_RE.test(profile),
+        prepareLocal: localRequest => prepareProfileDeleteRequest(localRequest).then(() => undefined),
+        teardownConnection: (connectionId, profile) => teardownConnectionScopedProfileBackend(connectionId, profile)
+      })
+    }
+
+    if (!mutatingProfile) {
+      return await handleHermesApiRequest(request)
+    }
+
+    const releaseProfileDeletion = profileDeletionGate.acquire(mutatingProfile)
+
+    return await handleHermesApiRequest(request).finally(releaseProfileDeletion)
+  } catch (error) {
+    // Persist the failure (full stack) before the rejection crosses to the
+    // renderer, where the invoke wrapper strips it to a one-line message.
+    rememberLog(formatApiRequestFailure(request, error))
+    flushDesktopLogBufferSync()
+    throw error
   }
-
-  if (!mutatingProfile) {
-    return handleHermesApiRequest(request)
-  }
-
-  const releaseProfileDeletion = profileDeletionGate.acquire(mutatingProfile)
-
-  return handleHermesApiRequest(request).finally(releaseProfileDeletion)
 })
 
 // One deduper per cross-window cue — the choke point every window shares. Main
@@ -16680,8 +16963,10 @@ ipcMain.on('hermes:devtools:disable-f12', (_event, on) => {
   }
 })
 
-ipcMain.handle('hermes:openExternal', (_event, url) => {
-  if (!openExternalUrl(url)) {
+ipcMain.handle('hermes:openExternal', async (_event, url) => {
+  const result = await openExternalUrl(url)
+
+  if (result.ok === false && result.reason === 'invalid') {
     throw new Error('Invalid external URL')
   }
 })
@@ -16825,6 +17110,21 @@ ipcMain.on('hermes:logs:renderer-error', (_event, report) => {
   flushDesktopLogBufferSync()
 })
 
+// Renderer error toasts (notifyError): the toast shows the summarized copy,
+// so the caller posts the full error here for desktop.log. Fire-and-forget,
+// like renderer-error — the toast must never depend on this round-trip.
+// Clamp: the line is renderer-supplied.
+ipcMain.on('hermes:logs:renderer-line', (_event, line) => {
+  const text = typeof line === 'string' ? line.slice(0, 6000) : ''
+
+  if (!text) {
+    return
+  }
+
+  rememberLog(text)
+  flushDesktopLogBufferSync()
+})
+
 // Local filesystem + plugin-root IPC (readDir/reveal/rename/trash/…) — see fs-ipc.ts.
 registerFsIpc({
   hermesHome: HERMES_HOME,
@@ -16936,15 +17236,101 @@ ipcMain.handle('hermes:version', async () => {
   const skew = await detectRendererSkew()
 
   return {
-    appVersion: resolveHermesVersion(),
+    ...resolveHermesVersionInfo(),
     electronVersion: process.versions.electron,
     nodeVersion: process.versions.node,
     platform: process.platform,
     hermesRoot: resolveUpdateRoot(),
     bundleOutOfSync: skew.outOfSync,
-    bundleCommitsBehind: skew.desktopCommitsBehind
+    bundleCommitsBehind: skew.desktopCommitsBehind,
+    // The install id: sha16 of the canonical install-root path — the key of
+    // this install's per-install channel record and its installs/<sha16>/ state
+    // folder. Same value `hermes update --install-id` prints; About renders it
+    // as `sha16 (path)`.
+    installId: installIdForRoot(resolveUpdateRoot(), canonicalizeInstallPath),
+    // What this build carries and where an external backend runs from.
+    // Bundled artifacts always run their payload; light artifacts have no
+    // runtime and only reach remote backends. External builds classify from
+    // the install stamp (git/docker/nix), 'unknown' when it can't be told.
+    hermesRuntime: resolveHermesRuntime()
   }
 })
+
+/** Build provenance read from the install stamp — the same facts the CLI
+ *  reports. Falls back to the bare app version when there's no stamp. */
+function resolveHermesVersionInfo() {
+  // The baked build-time constant is typed more narrowly than a full stamp
+  // loaded from disk; cast to the full shape so every provenance field is
+  // readable on either source.
+  const stamp = INSTALL_STAMP as InstallStamp | null
+
+  if (stamp) {
+    return {
+      appVersion: resolveHermesVersion(),
+      baseVersion: stamp.baseVersion ?? undefined,
+      distance: stamp.distance ?? undefined,
+      commit: stamp.commit,
+      branch: stamp.branch,
+      source: stamp.source ?? undefined,
+      distribution: stamp.distribution ?? undefined,
+      dirty: stamp.dirty
+    }
+  }
+
+  return { appVersion: app.getVersion(), baseVersion: app.getVersion() }
+}
+
+// Python's Path.resolve() equivalent for install-id derivation: realpath when
+// the path exists, plain resolve otherwise. Must stay byte-compatible with
+// boot_bootstrap._install_key or the CLI and the app would compute two
+// different ids for one install.
+function canonicalizeInstallPath(p: string): string {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return path.resolve(p)
+  }
+}
+
+/** Classify what this build carries (embedded / light / external). The stamp's
+ *  `payload` decides the first two; an external build classifies its root via
+ *  the canonical-root install stamp (desktop-bootstrapped) or the app stamp's
+ *  `source`, so About's Runtime row names git/docker/nix/desktop-bootstrap
+ *  instead of a bare "external". */
+function resolveHermesRuntime() {
+  const stamp = INSTALL_STAMP as InstallStamp | null
+
+  if (stamp?.payload === 'light') {
+    return { type: 'light' }
+  }
+
+  if (stamp?.payload === 'bundled') {
+    return { type: 'embedded' }
+  }
+
+  const root = resolveUpdateRoot()
+  const canonicalStamp = activeRuntimeState().canonicalInstallStamp
+
+  if (canonicalStamp?.source === 'desktop-bootstrap') {
+    return { type: 'desktop-bootstrap', root }
+  }
+
+  const source = stamp?.source
+
+  if (source === 'git') {
+    return { type: 'git', root }
+  }
+
+  if (source === 'nix') {
+    return { type: 'nix', root: null }
+  }
+
+  if (source === 'docker') {
+    return { type: 'docker', root: null }
+  }
+
+  return { type: 'unknown' }
+}
 
 // ===========================================================================
 // Uninstall — remove the Chat GUI (and optionally the agent / user data).
@@ -17225,6 +17611,18 @@ function handleDeepLink(url) {
     params[k] = v
   })
   const payload = { kind, name, params }
+
+  // Route the Windows Copilot hardware key (registered by the MSIX
+  // copilotkeyprovider fragment). quick-entry is the eventual summon; for
+  // now it falls through to the renderer's deep-link listener. stop and
+  // unknown copilot-key paths are activation noise and must not reach the
+  // renderer (a tap fires start+stop nearly together; acting on stop would
+  // undo the summon).
+  if (kind === 'copilot-key' && name !== 'start') {
+    rememberLog(`[deeplink] ignoring copilot-key path: ${name}`)
+
+    return
+  }
 
   if (!_rendererReadyForDeepLink || !mainWindow || mainWindow.isDestroyed()) {
     _pendingDeepLink = payload

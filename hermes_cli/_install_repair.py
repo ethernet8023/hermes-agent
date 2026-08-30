@@ -11,9 +11,9 @@ Both callers need to run the same core ``.[all]`` reinstall:
 
 This module is deliberately **stdlib-only** so importing it can never fail in
 the corrupted-venv state it exists to repair. ``hermes_cli.main`` imports
-``managed_uv``, ``hermes_constants``, and friends only in its late path; the
-early path must not. Where the late path uses ``managed_uv.ensure_uv`` to
-bootstrap uv if missing, the early path uses the stdlib
+``pm``, ``hermes_constants``, and friends only in its late path; the
+early path must not. Where the late path uses ``pm.uv()`` to
+realize uv if missing, the early path uses the stdlib
 :func:`hermes_cli._early_recovery._find_uv_binary` lookup and falls back to
 plain pip when uv is absent — a degraded but working installer (the late
 recovery will bootstrap uv on the next launch if it ever matters).
@@ -39,19 +39,6 @@ def _is_windows() -> bool:
     return sys.platform == "win32"
 
 
-def _is_termux_env(env: dict | None = None) -> bool:
-    """Stdlib Termux probe (hermes_cli.main's version lives behind imports)."""
-    env = env if env is not None else os.environ
-    try:
-        if env.get("TERMUX_VERSION"):
-            return True
-        prefix = env.get("PREFIX", "")
-        return "com.termux" in prefix
-    except Exception:
-        return False
-
-
-@contextlib.contextmanager
 def _stdout_to_stderr():
     """Route fd 1 (and sys.stdout) to stderr for the duration of an install.
 
@@ -85,20 +72,14 @@ def _stdout_to_stderr():
 def _resolve_install_target(root: Path) -> tuple[list[str], dict | None]:
     """(install_cmd_prefix, env) for the project venv — stdlib uv lookup.
 
-    Mirrors ``main.py::_default_venv_install_target`` but without
-    ``managed_uv``. ``VIRTUAL_ENV`` steers ``uv pip`` at the project venv even
+    Mirrors ``main.py::_default_venv_install_target`` but without ``pm``. ``VIRTUAL_ENV`` steers ``uv pip`` at the project venv even
     when invoked from the base interpreter (the early-recovery case).
-    Termux strips leaked interpreter-path env vars so uv resolves the venv
-    correctly.
     """
     uv_bin = _er._find_uv_binary()
     if uv_bin:
         from hermes_constants import project_venv_dir
 
         env = {**os.environ, "VIRTUAL_ENV": str(project_venv_dir(root) or root / "venv")}
-        if _is_termux_env(env):
-            env.pop("PYTHONPATH", None)
-            env.pop("PYTHONHOME", None)
         return [uv_bin, "pip"], env
     return [sys.executable, "-m", "pip"], None
 
@@ -128,9 +109,7 @@ _WINDOWS_BIN_LAUNCHERS = ("hermes", "hermes-acp")
 def _venv_is_relocatable(venv_dir: Path) -> bool:
     """True when the venv's pyvenv.cfg declares ``relocatable = true``.
 
-    uv writes the flag; ``hermes_cli.managed_uv`` builds its replacement
-    venvs with ``--relocatable`` (they are constructed aside and swapped
-    into place). A relocatable venv's console-script trampolines embed a
+    uv writes the flag for venvs built with ``--relocatable``. A relocatable venv's console-script trampolines embed a
     RELATIVE interpreter reference, so a COPY of one placed outside
     ``venv\\Scripts`` fails at run time with ``uv trampoline failed to
     canonicalize script path``. Non-relocatable venvs (fresh installs)
@@ -573,7 +552,7 @@ def _run_install_cmd(cmd: list[str], *, env: dict | None, root: Path) -> None:
 
 
 def _load_installable_optional_extras(root: Path, group: str) -> list[str]:
-    """Optional extras referenced by a dependency group (all / termux-all)."""
+    """Optional extras referenced by a dependency group (all)."""
     try:
         import tomllib
 
@@ -604,17 +583,16 @@ def run_core_install(root: Path) -> None:
       pip module at all)
     - prefer ``uv pip`` with VIRTUAL_ENV pointed at the project venv; fall back
       to ``python -m pip`` when no uv binary is available
-    - target ``.[all]`` (or ``.[termux-all]`` on Termux) with the per-extra
-      fallback ladder when the combined extras resolve fails
+    - target ``.[all]`` with the per-extra fallback ladder when the combined
+      extras resolve fails
     - quarantine live ``hermes*.exe`` shims on Windows so they can be replaced
     - route ALL install output to stderr (acp/JSON-RPC safety)
-    - Termux strips leaked PYTHONPATH/PYTHONHOME from the uv env
 
     Raises ``subprocess.CalledProcessError`` when even the base install fails;
     callers own marker lifecycle (clear on success, keep on failure).
     """
     prefix, env = _resolve_install_target(root)
-    group = "termux-all" if _is_termux_env(env) else "all"
+    group = "all"
 
     with _stdout_to_stderr():
         try:
@@ -676,7 +654,7 @@ def bump_marker_attempts(marker_path: Path) -> int:
     """
     attempts = 0
     try:
-        raw = marker_path.read_text(encoding="utf-8", errors="replace").strip()
+        raw = marker_path.read_text(encoding="utf-8-sig", errors="replace").strip()
         if raw:
             try:
                 attempts = int(json.loads(raw).get("attempts", 0))

@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import importlib
+
+pm_ensure = importlib.import_module("pm.ensure")
 import tools.browser_tool as bt
 
 
@@ -25,7 +28,7 @@ def _no_subprocess(monkeypatch):
 class TestGating:
     def test_disabled_lazy_installs_skips(self, monkeypatch):
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
-        monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: False)
+        monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: False)
         calls = _no_subprocess(monkeypatch)
         assert bt._maybe_autoinstall_chromium() is False
         assert calls == []
@@ -40,7 +43,7 @@ class TestGating:
 class TestInstall:
     def test_success_installs_binary_only_and_rechecks(self, monkeypatch):
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
-        monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
+        monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: True)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "/x/agent-browser")
         monkeypatch.setattr(bt, "_build_browser_env", lambda: {})
         monkeypatch.setattr(bt, "_chromium_installed", lambda: True)
@@ -59,7 +62,7 @@ class TestInstall:
 
     def test_npx_form_is_binary_only(self, monkeypatch):
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
-        monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
+        monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: True)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "npx agent-browser")
         monkeypatch.setattr(bt, "_build_browser_env", lambda: {})
         monkeypatch.setattr(bt, "_chromium_installed", lambda: True)
@@ -80,7 +83,7 @@ class TestInstall:
 
     def test_nonzero_exit_returns_false(self, monkeypatch):
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
-        monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
+        monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: True)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "/x/agent-browser")
         monkeypatch.setattr(bt, "_build_browser_env", lambda: {})
         monkeypatch.setattr(
@@ -93,7 +96,7 @@ class TestInstall:
 class TestOneShot:
     def test_second_call_does_not_reinstall(self, monkeypatch):
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
-        monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
+        monkeypatch.setattr(pm_ensure, "lazy_installs_allowed", lambda: True)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "/x/agent-browser")
         monkeypatch.setattr(bt, "_build_browser_env", lambda: {})
         monkeypatch.setattr(bt, "_chromium_installed", lambda: True)

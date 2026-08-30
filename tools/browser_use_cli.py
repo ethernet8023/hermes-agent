@@ -319,6 +319,31 @@ def _user_local_bin_dir() -> Optional[str]:
         return None
 
 
+def _pinned_uvx() -> Optional[str]:
+    """The pinned uvx from pm's store, or None when pm can't provide it.
+
+    uvx ships inside uv's own store entry, beside the uv binary — the pin
+    that governs uv governs it. Resolved from pm's uv fact rather than by
+    probing directories: pm names the binary, so nobody goes fishing with
+    ``shutil.which`` on a dir (a PATH probe could resolve a system uvx of
+    unknown version). Pure lookup (``realize=False``) — this is a probe,
+    not the converging ``install_cli()`` path.
+    """
+    try:
+        import pm
+
+        uv_bin, _env = pm.uv(realize=False)
+        if not uv_bin:
+            return None
+        uvx = str(Path(uv_bin).with_name("uvx.exe" if os.name == "nt" else "uvx"))
+        if os.path.isfile(uvx) and os.access(uvx, os.X_OK):
+            return uvx
+        return None
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug("Could not resolve pinned uvx: %s", e)
+        return None
+
+
 def _find_cli() -> Optional[List[str]]:
     """Locate the browser-use CLI, or None when it can't be run.
 
@@ -329,7 +354,10 @@ def _find_cli() -> Optional[List[str]]:
     (~/.local/bin / %APPDATA%\\uv\\bin, where a manual ``uv tool install``
     links binaries) are fallbacks for setups that never ran our install,
     and cover Desktop/TUI workers that spawn with a minimal PATH. The uvx
-    zero-install path (same probe order) is the final fallback.
+    zero-install path is the final fallback — the pinned uvx from pm's
+    store first, then the Hermes-owned bin dir and the user-level tool
+    dir. A bare PATH uvx probe is deliberately absent: pm names the
+    pinned binary, and a PATH uvx is an unknown version.
     """
     probe_paths = (_managed_bin_dir(), None, _user_local_bin_dir())
     for probe_path in probe_paths:
@@ -337,8 +365,11 @@ def _find_cli() -> Optional[List[str]]:
             direct = shutil.which("browser-use", path=probe_path)
             if direct:
                 return [direct]
-    for probe_path in probe_paths:
-        if probe_path is None or probe_path:
+    uvx = _pinned_uvx()
+    if uvx is not None:
+        return [uvx, "browser-use"]
+    for probe_path in (_managed_bin_dir(), _user_local_bin_dir()):
+        if probe_path:
             uvx = shutil.which("uvx", path=probe_path)
             if uvx:
                 return [uvx, "browser-use"]
@@ -348,8 +379,8 @@ def _find_cli() -> Optional[List[str]]:
 def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
     """Install the browser-use CLI persistently via ``uv tool install``.
 
-    Resolution order for uv: Hermes' managed uv (bootstrapped on demand via
-    ``hermes_cli.managed_uv.ensure_uv``) → uv on PATH. The binary is linked
+    Resolution order for uv: Hermes' managed uv (realized on demand via
+    ``pm.uv``) → uv on PATH. The binary is linked
     into ``$HERMES_HOME/bin`` (``UV_TOOL_BIN_DIR``) so ``_find_cli()``
     resolves it for every profile without touching the user's PATH.
 
@@ -367,12 +398,15 @@ def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
             return True, f"browser-use CLI already installed ({managed})"
 
     uv_bin: Optional[str] = None
+    env = dict(os.environ)
     try:
-        from hermes_cli.managed_uv import ensure_uv
+        import pm
 
-        uv_bin = str(ensure_uv() or "") or None
+        uv_bin, pm_env = pm.uv()
+        if uv_bin:
+            env = pm_env
     except Exception as e:
-        logger.debug("Managed uv bootstrap unavailable: %s", e)
+        logger.debug("Managed uv unavailable: %s", e)
     if not uv_bin:
         uv_bin = shutil.which("uv")
     if not uv_bin:
@@ -381,7 +415,6 @@ def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
             "(https://docs.astral.sh/uv/) and run `uv tool install browser-use`."
         )
 
-    env = dict(os.environ)
     env["UV_NO_CONFIG"] = "1"
     if bin_dir:
         try:

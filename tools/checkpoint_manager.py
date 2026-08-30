@@ -48,6 +48,7 @@ reclaim object storage.  A size-cap pass drops the oldest checkpoints per
 project until total store size is under ``max_total_size_mb``.
 """
 
+import functools
 import hashlib
 import json
 import logging
@@ -252,7 +253,7 @@ def _load_ledger(store: Path, dir_hash: str) -> Dict[str, Dict]:
     this" apart from "the user hand-edited this afterwards".
     """
     try:
-        raw = _ledger_path(store, dir_hash).read_text(encoding="utf-8")
+        raw = _ledger_path(store, dir_hash).read_text(encoding="utf-8-sig")
         data = json.loads(raw)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
@@ -289,6 +290,33 @@ def _project_meta_path(store: Path, dir_hash: str) -> Path:
 # ---------------------------------------------------------------------------
 # Git env
 # ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=1)
+def _managed_git() -> Optional[Tuple[List[str], List[str]]]:
+    """(git invocation, extra PATH dirs) from pm's pinned Git for Windows.
+
+    pm's git package is the canonical Windows git (Git for Windows,
+    pinned in pm/lock.json); its PATH dirs make the MSYS helpers
+    (sh.exe, git-remote-*) resolvable to the child. Returns None when pm
+    cannot provide git — the deliberate POSIX gap (system git by choice),
+    not installed, or lazy installs disabled — and the caller falls back
+    to bare ``git`` on PATH. Cached: checkpoints fire several git calls
+    per turn, so the store lookup should not repeat.
+    """
+    try:
+        import pm
+
+        runner = pm.ensure("git")
+        for candidate in ("git.exe", "git"):
+            resolved = shutil.which(candidate, path=runner.env.get("PATH"))
+            if resolved:
+                git_dir = str(Path(resolved).resolve().parent)
+                usr_bin = str(Path(resolved).resolve().parent.parent / "usr" / "bin")
+                return [resolved], [git_dir, usr_bin]
+    except Exception:
+        pass
+    return None
+
 
 def _git_env(
     store: Path,
@@ -377,7 +405,15 @@ def _run_git(
         return False, "", msg
 
     env = _git_env(store, str(normalized_working_dir), index_file=index_file)
-    cmd = ["git"] + list(args)
+    managed = _managed_git()
+    if managed:
+        cmd, path_dirs = managed
+        # The store's MSYS dirs must be reachable so git.exe can resolve
+        # its helpers; prepend them to the isolated child env.
+        env["PATH"] = os.pathsep.join(path_dirs) + os.pathsep + env.get("PATH", "")
+    else:
+        cmd = ["git"]
+    cmd = cmd + list(args)
     allowed_returncodes = allowed_returncodes or set()
 
     try:
@@ -509,8 +545,14 @@ def _init_store(store: Path, working_dir: str) -> Optional[str]:
               "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
         init_env.pop(k, None)
     try:
+        managed = _managed_git()
+        git_cmd, path_dirs = managed if managed else (["git"], None)
+        if path_dirs:
+            init_env["PATH"] = (
+                os.pathsep.join(path_dirs) + os.pathsep + init_env.get("PATH", "")
+            )
         result = subprocess.run(
-            ["git", "init", "--bare", str(store)],
+            git_cmd + ["init", "--bare", str(store)],
             capture_output=True, text=True, encoding='utf-8', errors='replace',
             env=init_env, timeout=_GIT_TIMEOUT,
             stdin=subprocess.DEVNULL,
@@ -586,7 +628,7 @@ def _register_project(store: Path, working_dir: str) -> None:
         meta.update(evidence)
     if meta_path.exists():
         try:
-            existing = json.loads(meta_path.read_text(encoding="utf-8"))
+            existing = json.loads(meta_path.read_text(encoding="utf-8-sig"))
             if isinstance(existing, dict):
                 meta["created_at"] = existing.get("created_at", now)
                 if not evidence:
@@ -614,7 +656,7 @@ def _touch_project(store: Path, working_dir: str) -> None:
         _register_project(store, working_dir)
         return
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         meta = {}
     if not isinstance(meta, dict):
@@ -644,7 +686,7 @@ def _list_projects(store: Path) -> List[Dict]:
     for meta_path in projects_dir.glob("*.json"):
         dir_hash = meta_path.stem
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta = json.loads(meta_path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             continue
         if not isinstance(meta, dict):
@@ -677,7 +719,7 @@ def _pre_v2_shadow_repos(base: Path) -> List[Dict]:
         wd_marker = child / "HERMES_WORKDIR"
         if wd_marker.exists():
             try:
-                workdir = wd_marker.read_text(encoding="utf-8").strip()
+                workdir = wd_marker.read_text(encoding="utf-8-sig").strip()
             except (OSError, UnicodeDecodeError):
                 # The marker is there, we just could not read it. That is
                 # not evidence the project is gone — never delete on it.
@@ -2077,7 +2119,7 @@ def maybe_auto_prune_checkpoints(
         now = time.time()
         if marker.exists():
             try:
-                last_ts = float(marker.read_text(encoding="utf-8").strip())
+                last_ts = float(marker.read_text(encoding="utf-8-sig").strip())
                 if now - last_ts < min_interval_hours * 3600:
                     out["skipped"] = True
                     return out

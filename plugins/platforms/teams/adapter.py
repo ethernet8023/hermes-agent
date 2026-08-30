@@ -702,7 +702,7 @@ def check_teams_requirements() -> bool:
     """Ensure the Teams SDK is importable, lazy-installing it on first use.
 
     Lazy-installs ``microsoft-teams-apps`` via
-    ``tools.lazy_deps.ensure("platform.teams")`` if not present, then rebinds
+    ``pm.ensure_import("teams")`` if not present, then rebinds
     all module-level SDK globals on success. Returns True once the SDK (and
     aiohttp) are importable, False if they couldn't be installed/imported.
 
@@ -763,9 +763,9 @@ def check_teams_requirements() -> bool:
             "TEAMS_SDK_AVAILABLE": True,
         }
 
-    from tools.lazy_deps import ensure_and_bind
+    from pm.extras import ensure_and_bind
 
-    return ensure_and_bind("platform.teams", _import, globals(), prompt=False)
+    return ensure_and_bind("teams", _import, globals())
 
 
 class TeamsAdapter(BasePlatformAdapter):
@@ -1500,17 +1500,14 @@ def interactive_setup() -> None:
 # ── Plugin entry point ────────────────────────────────────────────────────────
 
 def _install_hint() -> str:
-    """Build the Teams install hint from the canonical LAZY_DEPS pins.
+    """Build the Teams install hint string.
 
-    Derived (not hardcoded) so a pin bump in ``tools/lazy_deps.py`` — aiohttp
-    is CVE-pinned, so bumps happen — never leaves this string stale.
-    ``feature_install_command(venv_pip=True)`` targets the actual Hermes
-    venv in every layout and sidesteps Ubuntu 24.04's PEP 668 failure that
-    a bare ``pip install`` hint invites.
+    Prefers ``uv sync --frozen --extra teams`` (respects pyproject pinning);
+    falls back to a plain pip install of the two packages if that is
+    unavailable. Restarting the gateway also auto-installs via pm.
     """
     try:
-        from tools.lazy_deps import feature_install_command
-        cmd = feature_install_command("platform.teams", venv_pip=True)
+        cmd = "uv sync --frozen --extra teams"
     except Exception:  # pragma: no cover — defensive
         cmd = None
     if not cmd:

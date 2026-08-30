@@ -55,10 +55,11 @@ def _ensure_vercel_sdk() -> None:
     # user value.
     os.environ.setdefault("VERCEL_TELEMETRY_DISABLED", "1")
     try:
-        from tools.lazy_deps import ensure as _lazy_ensure
-        _lazy_ensure("terminal.vercel", prompt=False)
+        from pm import ensure_import as _lazy_ensure
     except ImportError:
-        pass
+        return  # pm unavailable — vercel's own import sites decide
+    try:
+        _lazy_ensure("vercel")
     except Exception as e:
         raise ImportError(str(e))
 

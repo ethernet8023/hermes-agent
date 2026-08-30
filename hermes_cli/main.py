@@ -273,7 +273,7 @@ def _set_process_title() -> None:
 
 
 # Cheap, dependency-free read of `display.interface` from config.yaml for the
-# earliest hot-path decisions (mouse-residue suppression, Termux fast launch)
+# earliest hot-path decisions (mouse-residue suppression, fast launch)
 # that run *before* hermes_cli.config is importable. Mirrors the explicit
 # precedence used everywhere else: `--cli` always wins, then `--tui`/env, then
 # this config value. Cached so the multiple early callers don't re-parse YAML.
@@ -296,7 +296,7 @@ def _config_default_interface_early() -> str:
         if os.path.exists(cfg_path):
             import yaml as _yaml_iface
 
-            with open(cfg_path, encoding="utf-8") as _f:
+            with open(cfg_path, encoding="utf-8-sig") as _f:
                 raw = _yaml_iface.load(
                     _f, Loader=getattr(_yaml_iface, "CSafeLoader", None) or _yaml_iface.SafeLoader
                 ) or {}
@@ -374,15 +374,6 @@ def _suppress_mouse_residue_early() -> None:
 _suppress_mouse_residue_early()
 
 
-def _is_termux_startup_environment_fast() -> bool:
-    """Tiny Termux check for pre-import startup shortcuts."""
-    return _startup_fast.is_termux_env()
-
-
-def _is_termux_fast_version_argv(argv: list[str]) -> bool:
-    return _startup_fast.is_termux_fast_version_argv(argv)
-
-
 def _is_global_fast_version_argv(argv: list[str]) -> bool:
     return _startup_fast.is_global_fast_version_argv(argv)
 
@@ -411,13 +402,6 @@ def _print_fast_version_info() -> None:
 def _try_ultrafast_version() -> bool:
     """Handle ``hermes --version`` before config/logging imports."""
     return _startup_fast.try_fast_version()
-
-
-def _try_termux_ultrafast_version() -> bool:
-    """Backward-compatible test hook for the Termux startup fast path."""
-    if not _is_termux_startup_environment_fast():
-        return False
-    return _try_ultrafast_version()
 
 
 _ensure_project_root_on_path_fast()
@@ -649,7 +633,7 @@ def _apply_profile_override() -> None:
 
             active_path = get_default_hermes_root() / "active_profile"
             if active_path.exists():
-                name = active_path.read_text(encoding="utf-8").strip()
+                name = active_path.read_text(encoding="utf-8-sig").strip()
                 if name and name != "default":
                     profile_name = name
                     consume = 0  # don't strip anything from argv
@@ -837,17 +821,6 @@ from hermes_cli.model_setup_flows import (
 logger = logging.getLogger(__name__)
 
 
-def _is_termux_startup_environment(env: dict[str, str] | None = None) -> bool:
-    """Import-safe Termux check for cold-start-sensitive CLI paths."""
-    check = env or os.environ
-    prefix = str(check.get("PREFIX", ""))
-    return bool(
-        check.get("TERMUX_VERSION")
-        or "com.termux/files/usr" in prefix
-        or prefix.startswith("/data/data/com.termux/")
-    )
-
-
 def _read_packed_ref(common_dir: Path, ref: str) -> str | None:
     """Look up a ref in .git/packed-refs without spawning git.
 
@@ -855,7 +828,7 @@ def _read_packed_ref(common_dir: Path, ref: str) -> str | None:
     peel lines and ``#``-prefixed comments / ``# pack-refs with:`` header.
     """
     try:
-        text = (common_dir / "packed-refs").read_text(encoding="utf-8", errors="replace")
+        text = (common_dir / "packed-refs").read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
     for line in text.splitlines():
@@ -872,7 +845,7 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
     git_dir = repo_root / ".git"
     try:
         if git_dir.is_file():
-            for line in git_dir.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in git_dir.read_text(encoding="utf-8-sig", errors="replace").splitlines():
                 key, _, value = line.partition(":")
                 if key.strip() == "gitdir" and value.strip():
                     git_dir = (repo_root / value.strip()).resolve()
@@ -884,13 +857,13 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
         commondir_file = git_dir / "commondir"
         if commondir_file.exists():
             try:
-                rel = commondir_file.read_text(encoding="utf-8", errors="replace").strip()
+                rel = commondir_file.read_text(encoding="utf-8-sig", errors="replace").strip()
                 if rel:
                     common_dir = (git_dir / rel).resolve()
             except OSError:
                 pass
         head_file = git_dir / "HEAD"
-        head = head_file.read_text(encoding="utf-8", errors="replace").strip()
+        head = head_file.read_text(encoding="utf-8-sig", errors="replace").strip()
         if head.startswith("ref:"):
             ref = head.split(":", 1)[1].strip()
             # Loose refs may live in the worktree gitdir OR the common dir
@@ -899,7 +872,7 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
             for candidate in (git_dir, common_dir):
                 ref_file = candidate / ref
                 if ref_file.exists():
-                    return f"git:{ref}:{ref_file.read_text(encoding='utf-8', errors='replace').strip()}"
+                    return f"git:{ref}:{ref_file.read_text(encoding='utf-8-sig', errors='replace').strip()}"
             packed_sha = _read_packed_ref(common_dir, ref)
             if packed_sha:
                 return f"git:{ref}:{packed_sha}"
@@ -912,67 +885,12 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
         return None
 
 
-def _termux_bundled_skills_fingerprint() -> str:
-    """Cheap invalidation key for Termux bundled-skill startup sync."""
-    git_fp = _read_git_revision_fingerprint(PROJECT_ROOT)
-    if git_fp:
-        return git_fp
-    skills_dir = PROJECT_ROOT / "skills"
-    try:
-        stat = skills_dir.stat()
-        return f"skills:{__version__}:{__release_date__}:{stat.st_mtime_ns}:{stat.st_size}"
-    except OSError:
-        return f"skills:{__version__}:{__release_date__}:missing"
-
-
-def _termux_bundled_skills_stamp_path() -> Path:
-    return get_hermes_home() / "skills" / ".termux_bundled_sync_stamp"
-
-
-def _termux_bundled_skills_sync_needed() -> bool:
-    if not _is_termux_startup_environment():
-        return True
-    if os.environ.get("HERMES_TERMUX_FORCE_SKILLS_SYNC") == "1":
-        return True
-    try:
-        stamp = _termux_bundled_skills_stamp_path()
-        return stamp.read_text(encoding="utf-8").strip() != _termux_bundled_skills_fingerprint()
-    except OSError:
-        return True
-
-
-def _mark_termux_bundled_skills_synced() -> None:
-    if not _is_termux_startup_environment():
-        return
-    try:
-        stamp = _termux_bundled_skills_stamp_path()
-        stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.write_text(_termux_bundled_skills_fingerprint() + "\n", encoding="utf-8")
-    except OSError:
-        pass
-
-
 def _sync_bundled_skills_for_startup() -> bool:
-    """Sync bundled skills, but skip unchanged Termux checkouts cheaply.
-
-    Hashing every bundled skill is safe but expensive on older Android
-    storage. The git/ref stamp keeps post-update correctness: a changed
-    checkout revision forces one real sync, then later starts skip it.
-    """
-    if _is_termux_startup_environment() and not _termux_bundled_skills_sync_needed():
-        return False
-
+    """Sync the bundled skills into the user skills directory."""
     from tools.skills_sync import sync_skills
 
     sync_skills(quiet=True)
-    _mark_termux_bundled_skills_synced()
     return True
-
-
-def _termux_should_prefetch_update_check() -> bool:
-    if not _is_termux_startup_environment():
-        return True
-    return os.environ.get("HERMES_TERMUX_PREFETCH_UPDATES") == "1"
 
 
 def _relative_time(ts) -> str:
@@ -1038,7 +956,7 @@ def _has_any_provider_configured() -> bool:
     env_file = get_env_path()
     if env_file.exists():
         try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
+            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
                 line = line.strip()
                 if line.startswith("#") or "=" not in line:
                     continue
@@ -1924,7 +1842,7 @@ def _read_tui_active_session_file(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         sid = str(data.get("session_id") or "").strip()
         return sid or None
     except Exception:
@@ -2056,32 +1974,6 @@ def _workspace_root(dir: Path) -> Path:
     return dir
 
 
-def _termux_workspace_install_context(
-    dir: Path, *, include_child_workspaces: bool = False
-) -> tuple[Path, tuple[str, ...]]:
-    """Return Termux-only ``(cwd, npm_args)`` for installing deps for *dir* only."""
-    ws_root = _workspace_root(dir)
-    if ws_root == dir:
-        return dir, ()
-
-    try:
-        workspace = dir.relative_to(ws_root).as_posix()
-    except ValueError:
-        return ws_root, ()
-
-    workspace_args: list[str] = ["--workspace", workspace]
-    if include_child_workspaces:
-        packages_dir = dir / "packages"
-        if packages_dir.is_dir():
-            for child in sorted(packages_dir.iterdir()):
-                if child.is_dir() and (child / "package.json").is_file():
-                    workspace_args.extend(
-                        ["--workspace", child.relative_to(ws_root).as_posix()]
-                    )
-    workspace_args.append("--include-workspace-root=false")
-    return ws_root, tuple(workspace_args)
-
-
 def _npm_lock_workspace_closure(packages: dict, starts) -> Optional[set]:
     """Package-map keys reachable from the selected workspaces via npm resolution.
 
@@ -2094,12 +1986,10 @@ def _npm_lock_workspace_closure(packages: dict, starts) -> Optional[set]:
 
     The launch install is scoped with ``npm install --workspace ui-tui`` (see
     ``_make_tui_argv``), so only the ui-tui workspace's dependency closure is
-    written to the hidden ``.package-lock.json``.  On Termux it additionally
-    selects ui-tui's child ``packages/*`` workspaces, so their devDependencies
-    join the closure too.  The shared root ``package-lock.json`` additionally
-    lists every *other* workspace's deps (``apps/desktop``, ``web``, …);
-    comparing the two in full reports those unrelated packages as "missing" and
-    reinstalls on every launch (#66978).
+    written to the hidden ``.package-lock.json``.  The shared root
+    ``package-lock.json`` additionally lists every *other* workspace's deps
+    (``apps/desktop``, ``web``, …); comparing the two in full reports those
+    unrelated packages as "missing" and reinstalls on every launch (#66978).
 
     Keys follow npm's v3 ``packages`` map (``""`` root, ``ui-tui`` /
     ``apps/desktop`` workspace members, ``node_modules/<name>`` hoisted deps,
@@ -2158,30 +2048,19 @@ def _npm_lock_workspace_closure(packages: dict, starts) -> Optional[set]:
 def _tui_selected_workspace_keys(tui_dir: Path, ws_root: Path) -> set:
     """Lock-map keys for the workspaces the launch install scopes to.
 
-    Mirrors ``_make_tui_argv``: always the ui-tui workspace, plus its child
-    ``packages/*`` workspaces on Termux (where ``include_child_workspaces=True``
-    in ``_termux_workspace_install_context``).  ``npm install`` installs the
-    devDependencies of every workspace it selects, so the freshness closure must
-    treat each as a dev-included root — otherwise a devDependency unique to a
-    selected child is dropped from the closure and a genuine missing package
-    slips past the check.  Returns an empty set when ui-tui can't be located
-    under *ws_root*, so the caller falls back to the full comparison.
+    Mirrors ``_make_tui_argv``: always the ui-tui workspace.  ``npm install``
+    installs the devDependencies of every workspace it selects, so the
+    freshness closure must treat each as a dev-included root — otherwise a
+    devDependency unique to a selected child is dropped from the closure and a
+    genuine missing package slips past the check.  Returns an empty set when
+    ui-tui can't be located under *ws_root*, so the caller falls back to the
+    full comparison.
     """
     try:
         primary = tui_dir.relative_to(ws_root).as_posix()
     except ValueError:
         return set()
-    keys = {primary}
-    if _is_termux_startup_environment():
-        packages_dir = tui_dir / "packages"
-        if packages_dir.is_dir():
-            for child in sorted(packages_dir.iterdir()):
-                if child.is_dir() and (child / "package.json").is_file():
-                    try:
-                        keys.add(child.relative_to(ws_root).as_posix())
-                    except ValueError:
-                        continue
-    return keys
+    return {primary}
 
 
 def _tui_need_npm_install(root: Path) -> bool:
@@ -2242,8 +2121,8 @@ def _tui_need_npm_install(root: Path) -> bool:
     # can bump the root lockfile timestamp even when installed deps already
     # match. Fall back to mtime when either file is unparseable.
     try:
-        wanted = json.loads(lock.read_text(encoding="utf-8")).get("packages") or {}
-        installed = json.loads(marker.read_text(encoding="utf-8")).get("packages") or {}
+        wanted = json.loads(lock.read_text(encoding="utf-8-sig")).get("packages") or {}
+        installed = json.loads(marker.read_text(encoding="utf-8-sig")).get("packages") or {}
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return lock.stat().st_mtime > marker.stat().st_mtime
 
@@ -2271,12 +2150,12 @@ def _tui_need_npm_install(root: Path) -> bool:
         return False
 
     # In a shared workspace checkout the launch install is scoped to the ui-tui
-    # workspace (plus its child packages/* workspaces on Termux), so only that
-    # dependency closure lands in the hidden lock.  Limit the comparison to the
-    # same selected-workspace closure so unrelated workspace deps (apps/desktop,
-    # web, …) don't force a reinstall every launch (#66978).  Standalone /
-    # own-lockfile layouts (ws_root == root) do a full install, so keep the full
-    # comparison; a missing/unlocatable workspace falls back to it too.
+    # workspace, so only that dependency closure lands in the hidden lock.
+    # Limit the comparison to the same selected-workspace closure so unrelated
+    # workspace deps (apps/desktop, web, …) don't force a reinstall every
+    # launch (#66978).  Standalone / own-lockfile layouts (ws_root == root) do
+    # a full install, so keep the full comparison; a missing/unlocatable
+    # workspace falls back to it too.
     closure: Optional[set] = None
     if ws_root != root:
         selected = _tui_selected_workspace_keys(root, ws_root)
@@ -2311,132 +2190,6 @@ def _tui_need_npm_install(root: Path) -> bool:
             return True
 
     return False
-
-
-_TUI_BUILD_INPUT_DIRS = (
-    "src",
-    "packages/hermes-ink/src",
-)
-
-_TUI_BUILD_INPUT_FILES = (
-    "package.json",
-    "package-lock.json",
-    "tsconfig.json",
-    "tsconfig.build.json",
-    "babel.compiler.config.cjs",
-    "scripts/build.mjs",
-    "packages/hermes-ink/package.json",
-    "packages/hermes-ink/index.js",
-    "packages/hermes-ink/text-input.js",
-)
-
-_TUI_BUILD_INPUT_SUFFIXES = frozenset(
-    {".cjs", ".js", ".jsx", ".json", ".mjs", ".ts", ".tsx"}
-)
-
-
-def _iter_tui_build_inputs(root: Path):
-    """Yield source/config files that affect ``ui-tui/dist/entry.js``."""
-    for rel in _TUI_BUILD_INPUT_FILES:
-        path = root / rel
-        if path.is_file():
-            yield path
-
-    for rel in _TUI_BUILD_INPUT_DIRS:
-        base = root / rel
-        if not base.is_dir():
-            continue
-        for path in base.rglob("*"):
-            if path.is_file() and path.suffix in _TUI_BUILD_INPUT_SUFFIXES:
-                yield path
-
-
-def _tui_need_rebuild(root: Path) -> bool:
-    """True when ``dist/entry.js`` is missing or older than TUI inputs.
-
-    The TUI bundle is self-contained. Rebuilding it on every launch adds a
-    visible cold-start tax on slow Termux CPUs, while a simple mtime freshness
-    check still rebuilds immediately after source updates, dependency updates,
-    or local edits. Set ``HERMES_TUI_FORCE_BUILD=1`` to force the old behaviour.
-    """
-    force = (os.environ.get("HERMES_TUI_FORCE_BUILD") or "").strip().lower()
-    if force in {"1", "true", "yes", "on"}:
-        return True
-
-    entry = root / "dist" / "entry.js"
-    try:
-        output_mtime = entry.stat().st_mtime
-    except OSError:
-        return True
-
-    for path in _iter_tui_build_inputs(root):
-        try:
-            if path.stat().st_mtime > output_mtime:
-                return True
-        except OSError:
-            return True
-    return False
-
-
-def _ensure_tui_node() -> None:
-    """Make sure `node` + `npm` are on PATH for the TUI.
-
-    If either is missing and scripts/lib/node-bootstrap.sh is available, source
-    it and call `ensure_node` (fnm/nvm/proto/brew/bundled cascade). After
-    install, capture the resolved node binary path from the bash subprocess
-    and prepend its directory to os.environ["PATH"] so shutil.which finds the
-    new binaries in this Python process — regardless of which version manager
-    was used (nvm, fnm, proto, brew, or the bundled fallback).
-
-    Idempotent no-op when node+npm are already discoverable. Set
-    ``HERMES_SKIP_NODE_BOOTSTRAP=1`` to disable auto-install.
-    """
-    if shutil.which("node") and shutil.which("npm"):
-        return
-    if os.environ.get("HERMES_SKIP_NODE_BOOTSTRAP"):
-        return
-
-    helper = PROJECT_ROOT / "scripts" / "lib" / "node-bootstrap.sh"
-    if not helper.is_file():
-        return
-
-    from hermes_constants import get_hermes_home
-
-    hermes_home = str(get_hermes_home())
-    try:
-        # Helper writes logs to stderr; we ask bash to print `command -v node`
-        # on stdout once ensure_node succeeds. Subshell PATH edits don't leak
-        # back into Python, so the stdout capture is the bridge.
-        result = subprocess.run(
-            [
-                "bash",
-                "-c",
-                f'source "{helper}" >&2 && ensure_node >&2 && command -v node',
-            ],
-            env={**os.environ, "HERMES_HOME": hermes_home},
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return
-
-    parts = os.environ.get("PATH", "").split(os.pathsep)
-    extras: list[Path] = []
-
-    resolved = (result.stdout or "").strip()
-    if resolved:
-        extras.append(Path(resolved).resolve().parent)
-
-    extras.extend([Path(hermes_home) / "node" / "bin", Path.home() / ".local" / "bin"])
-
-    for extra in extras:
-        s = str(extra)
-        if extra.is_dir() and s not in parts:
-            parts.insert(0, s)
-    os.environ["PATH"] = os.pathsep.join(parts)
 
 
 def _find_bundled_tui(hermes_cli_dir: Path | None = None) -> Path | None:
@@ -2516,7 +2269,6 @@ def _npm_lifecycle_env(env: dict[str, str] | None = None) -> dict[str, str]:
 
 def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
     """TUI: --dev → tsx src; else node dist (HERMES_TUI_DIR prebuilt or esbuild)."""
-    _ensure_tui_node()
 
     def _node_bin(bin: str) -> str:
         if bin == "node":
@@ -2582,22 +2334,9 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
 
     # 2. Normal flow: npm install if needed, always esbuild, then node dist/entry.js.
     #    --dev flow: npm install if needed, then tsx src/entry.tsx.
-    #    Existing desktop behaviour runs npm from the workspace root.  Termux
-    #    scopes the install to ui-tui so launch does not pull desktop/web
-    #    dependencies into the hot path.
+    #    Existing desktop behaviour runs npm from the workspace root.
     did_install = False
-    termux_startup = _is_termux_startup_environment()
-    termux_need_rebuild = False
-    if termux_startup and not tui_dev:
-        termux_need_rebuild = _tui_need_rebuild(tui_dir)
-
-    skip_install_for_fresh_termux_bundle = (
-        termux_startup and not tui_dev and not termux_need_rebuild
-    )
-    if (
-        not skip_install_for_fresh_termux_bundle
-        and _tui_need_npm_install(tui_dir)
-    ):
+    if _tui_need_npm_install(tui_dir):
         npm = _node_bin("npm")
         if not os.environ.get("HERMES_QUIET"):
             print("Installing TUI dependencies…")
@@ -2609,11 +2348,6 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         # that case fails because npm cannot find a workspace named "ui-tui"
         # inside ui-tui/.  See #42973.
         npm_workspace_args: tuple[str, ...] = () if npm_cwd == tui_dir else ("--workspace", "ui-tui")
-        if termux_startup:
-            npm_cwd, npm_workspace_args = _termux_workspace_install_context(
-                tui_dir,
-                include_child_workspaces=True,
-            )
         npm_install_cmd = [
             npm,
             "install",
@@ -2700,31 +2434,23 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             return [str(tsx), "src/entry.tsx"], tui_dir
         return [npm, "start"], tui_dir
 
-    # Desktop/dev launches retain the historical "always rebuild" behaviour.
-    # Termux cold starts use the freshness check because esbuild startup is
-    # expensive on old mobile CPUs.
-    should_build = True
-    if termux_startup:
-        should_build = did_install or termux_need_rebuild
-
-    if should_build:
-        npm = _node_bin("npm")
-        result = subprocess.run(
-            [npm, "run", "build"],
-            cwd=str(tui_dir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=_npm_lifecycle_env(),
-        )
-        if result.returncode != 0:
-            combined = f"{result.stdout or ''}{result.stderr or ''}".strip()
-            preview = "\n".join(combined.splitlines()[-30:])
-            print("TUI build failed.")
-            if preview:
-                print(preview)
-            sys.exit(1)
+    npm = _node_bin("npm")
+    result = subprocess.run(
+        [npm, "run", "build"],
+        cwd=str(tui_dir),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_npm_lifecycle_env(),
+    )
+    if result.returncode != 0:
+        combined = f"{result.stdout or ''}{result.stderr or ''}".strip()
+        preview = "\n".join(combined.splitlines()[-30:])
+        print("TUI build failed.")
+        if preview:
+            print(preview)
+        sys.exit(1)
 
     node = _node_bin("node")
     return [node, "--expose-gc", str(tui_dir / "dist" / "entry.js")], tui_dir
@@ -2776,7 +2502,7 @@ def _read_cgroup_memory_limit() -> Optional[int]:
     )
     for path in candidates:
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 raw = f.read().strip()
         except (OSError, ValueError):
             continue
@@ -3293,18 +3019,15 @@ def cmd_chat(args):
         sys.exit(1)
 
     # Start update check in background (runs while other init happens).
-    # On Termux this imports rich/prompt_toolkit in the foreground and then
-    # competes for CPU on single-core devices, so keep it opt-in there.
-    if _termux_should_prefetch_update_check():
-        try:
-            from hermes_cli.banner import prefetch_banner_data, prefetch_update_check
+    try:
+        from hermes_cli.banner import prefetch_banner_data, prefetch_update_check
 
-            prefetch_update_check()
-            # Warm git banner state + skills index off-thread too — their
-            # subprocess/file-I/O waits overlap the CPU-bound cli import.
-            prefetch_banner_data()
-        except Exception:
-            pass
+        prefetch_update_check()
+        # Warm git banner state + skills index off-thread too — their
+        # subprocess/file-I/O waits overlap the CPU-bound cli import.
+        prefetch_banner_data()
+    except Exception:
+        pass
 
     # Sync bundled skills on every CLI launch. Normally runs in a background
     # daemon thread: the sync is idempotent, hash-gated (unchanged skills are
@@ -3418,7 +3141,7 @@ def cmd_chat(args):
             if _qfile == "-":
                 args.query = sys.stdin.read()
             else:
-                with open(_qfile, "r", encoding="utf-8", errors="replace") as _fh:
+                with open(_qfile, "r", encoding="utf-8-sig", errors="replace") as _fh:
                     args.query = _fh.read()
         except OSError as _e:
             print(f"Error: cannot read --query-file {_qfile}: {_e}", file=sys.stderr)
@@ -5026,9 +4749,8 @@ def _remove_custom_provider(config):
 # fast paths like `hermes --version` and slash-command dispatch that never
 # touch the catalog. PEP 562 module-level __getattr__ defers the import
 # until first attribute access, so the cost is only paid by callers that
-# actually look up the catalog. Termux already defers via the same
-# mechanism (its model-selection handlers do their own function-local
-# imports), so the explicit termux branch from before is no longer needed.
+# actually look up the catalog. The model-selection handlers do their own
+# function-local imports, so no eager import survives here.
 _LAZY_MODEL_EXPORTS = ("_PROVIDER_MODELS",)
 
 
@@ -5078,7 +4800,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_park_stashed_changes",
         "_ensure_acp_launcher",
         "_ensure_fhs_path_guard",
-        "_ensure_uv_for_termux",
         "_finish_dashboard_update_cleanup",
         "_fleet_probe_expected_runtimes",
         "_fleet_restart_pending_marker_path",
@@ -5096,9 +4817,7 @@ _LAZY_COMMAND_EXPORTS = {
         "_gateway_prompt",
         "_get_origin_url",
         "_has_upstream_remote",
-        "_install_psutil_android_compat",
         "_invalidate_update_cache",
-        "_is_android_python",
         "_is_fork",
         "_leftover_pausable_gateway_pids",
         "_ledger_manual_serve_holders",
@@ -5146,7 +4865,6 @@ _LAZY_COMMAND_EXPORTS = {
         "_sync_with_upstream_if_needed",
         "_update_node_dependencies",
         "_update_via_zip",
-        "_upgrade_pip_before_lazy_refresh",
         "_validate_critical_files_syntax",
         "_validate_critical_modules_import",
         "_venv_core_imports_healthy",
@@ -5944,13 +5662,23 @@ def cmd_version(args):
 
 
 def cmd_uninstall(args):
-    """Uninstall Hermes Agent (or just the Chat GUI with --gui)."""
+    """Uninstall Hermes Agent (or just the Chat GUI / user data)."""
     # Machine-readable install snapshot for the desktop app's uninstall UI.
     # Must run before any TTY gate — it's called from a non-interactive child.
     if getattr(args, "gui_summary", False):
         from hermes_cli.gui_uninstall import gui_install_summary
 
         print(json.dumps(gui_install_summary()))
+        return
+
+    # Data-only removal. Valid on every install kind (source, bundled
+    # desktop app, Nix, Docker) — it never touches code.
+    if getattr(args, "data", False):
+        if not getattr(args, "yes", False):
+            _require_tty("uninstall --data")
+        from hermes_cli.uninstall import run_data_uninstall
+
+        run_data_uninstall(args)
         return
 
     # GUI-only uninstall. The desktop app shells out to this non-interactively
@@ -6058,7 +5786,7 @@ def _sweep_stale_bytecode_if_checkout_changed() -> None:
             return  # non-git install — the ZIP update path clears explicitly
         stamp_path = PROJECT_ROOT / _BYTECODE_FINGERPRINT_FILE
         try:
-            recorded = stamp_path.read_text(encoding="utf-8").strip()
+            recorded = stamp_path.read_text(encoding="utf-8-sig").strip()
         except OSError:
             recorded = ""
         if recorded == fingerprint:
@@ -6103,7 +5831,7 @@ def _web_ui_build_needed(web_dir: Path) -> bool:
     if not stamp_file.is_file():
         return True
     try:
-        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8"))
+        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return True
     if not isinstance(stamp_data, dict):
@@ -6143,7 +5871,7 @@ def _compute_web_ui_content_hash(project_root: Path, web_dir: Path) -> str:
     gitignore = project_root / ".gitignore"
     lines: list[str] = []
     if gitignore.is_file():
-        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        lines = gitignore.read_text(encoding="utf-8-sig").splitlines()
     spec = PathSpec.from_lines("gitignore", lines)
 
     # Root workspace config (single package-lock.json covers all workspaces).
@@ -6312,7 +6040,7 @@ def _nixos_build_env() -> dict[str, str] | None:
     import re
 
     try:
-        os_release = Path("/etc/os-release").read_text(encoding="utf-8")
+        os_release = Path("/etc/os-release").read_text(encoding="utf-8-sig")
     except OSError:
         return None
     if not re.search(r"^ID=nixos$", os_release, re.M):
@@ -6620,8 +6348,6 @@ def _do_build_web_ui(web_dir: Path, *, fatal: bool = False) -> bool:
         # present (same guard as _update_node_dependencies()).
         if (npm_cwd / "ui-tui" / "package.json").exists():
             npm_workspace_args = ("--workspace", "ui-tui", *npm_workspace_args)
-    if _is_termux_startup_environment():
-        npm_cwd, npm_workspace_args = _termux_workspace_install_context(web_dir)
 
     def _install_web_deps(*, silent: bool) -> "subprocess.CompletedProcess":
         return _run_npm_install_deterministic(
@@ -6757,7 +6483,7 @@ def _compute_desktop_content_hash(project_root: Path) -> str:
     gitignore = project_root / ".gitignore"
     lines: list[str] = []
     if gitignore.is_file():
-        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        lines = gitignore.read_text(encoding="utf-8-sig").splitlines()
     spec = PathSpec.from_lines("gitignore", lines)
 
     # Root workspace config
@@ -6840,7 +6566,7 @@ def _renderer_bundle_torn(dist_dir: Path) -> bool:
     reported as torn — the missing-bundle guards own those cases.
     """
     try:
-        html = (dist_dir / "index.html").read_text(encoding="utf-8", errors="replace")
+        html = (dist_dir / "index.html").read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return False
 
@@ -6884,7 +6610,7 @@ def _desktop_build_needed(desktop_dir: Path, project_root: Path, *, source_mode:
         return True
 
     try:
-        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8"))
+        stamp_data = json.loads(stamp_file.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, KeyError):
         return True
 
@@ -8091,7 +7817,7 @@ def _desktop_linux_needs_no_sandbox() -> bool:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return False
     try:
-        with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", encoding="utf-8") as f:
+        with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", encoding="utf-8-sig") as f:
             return f.read().strip() == "1"
     except OSError:
         return False
@@ -8266,10 +7992,72 @@ def _register_linux_desktop_entry() -> None:
         print(f"⚠ Could not install the desktop launcher entry: {exc}")
 
 
+def _launch_bundled_desktop(
+    args: argparse.Namespace, env: dict, electron_flags: list[str]
+) -> None:
+    """Start the desktop app this CLI ships inside, then exit.
+
+    A bundled install has no source tree to build: the app is a signed,
+    read-only artifact and this Python is a passenger in its resources.
+    So the whole build ladder below is skipped and the launcher is started
+    DETACHED — the user ran a CLI command, and the app must outlive the
+    terminal it was typed into. The app's own single-instance lock turns a
+    second run into "focus the running window".
+
+    Never returns.
+    """
+    from hermes_cli.bundled_app import NotBundledApp, launch_detached, resolve_bundle_layout
+
+    refused = [
+        flag
+        for flag, name in (
+            ("--source", "source"),
+            ("--build-only", "build_only"),
+            ("--force-build", "force_build"),
+        )
+        if getattr(args, name, False)
+    ]
+    if refused:
+        print(f"✗ {', '.join(refused)} cannot apply to a bundled Hermes install.")
+        print("  This app ships prebuilt and has no desktop source tree to build.")
+        sys.exit(2)
+
+    try:
+        layout = resolve_bundle_layout(PROJECT_ROOT)
+    except NotBundledApp as exc:
+        # The stamp says bundled, so a tree that is not one is a damaged or
+        # mispackaged install. Report it — degrading to the build ladder
+        # would run npm inside the app's own resources.
+        print(f"✗ This Hermes is stamped as a bundled desktop install, but {exc}.")
+        print("  The install is damaged — reinstall Hermes from the website.")
+        sys.exit(1)
+
+    if layout.launcher is None:
+        print(f"✗ Found no Hermes Desktop launcher in {layout.app_root}.")
+        print("  The install is damaged — reinstall Hermes from the website.")
+        sys.exit(1)
+
+    launch_command = [str(layout.launcher)]
+    if not _desktop_linux_sandbox_fixup(layout.launcher):
+        if _desktop_linux_needs_no_sandbox() and _desktop_linux_sandbox_helper_is_regular_file(layout.launcher):
+            print("⚠ Falling back to --no-sandbox because this Linux host restricts unprivileged user namespaces and the Electron sandbox helper could not be configured.")
+            launch_command.append("--no-sandbox")
+        else:
+            sys.exit(1)
+
+    launch_command.extend(electron_flags)
+    pid = launch_detached(launch_command, env=env, cwd=layout.app_root)
+    print(f"→ Launched Hermes Desktop: {' '.join(launch_command)} (pid {pid})")
+    sys.exit(0)
+
+
 def cmd_gui(args: argparse.Namespace):
     """Build and launch the native Electron desktop GUI."""
+    from hermes_cli.steward import is_bundled_payload
+
     desktop_dir = PROJECT_ROOT / "apps" / "desktop"
-    if not (desktop_dir / "package.json").exists():
+    bundled = is_bundled_payload(PROJECT_ROOT)
+    if not bundled and not (desktop_dir / "package.json").exists():
         print(f"Desktop GUI source not found at: {desktop_dir}")
         sys.exit(1)
 
@@ -8326,6 +8114,13 @@ def cmd_gui(args: argparse.Namespace):
     source_mode = getattr(args, "source", False)
     skip_build = getattr(args, "skip_build", False)
     force_build = getattr(args, "force_build", False)
+
+    # A bundled install IS the app: no source tree, no build, and the
+    # launcher is a sibling of this payload rather than something we
+    # produce. Every rung below assembles a checkout build, so the sealed
+    # shape leaves here with the env it just built.
+    if bundled:
+        _launch_bundled_desktop(args, env, config_electron_flags)
 
     # macOS-only one-shot: create a self-signed code-signing identity so TCC
     # grants survive rebuilds, then exit without building/launching.
@@ -8734,7 +8529,7 @@ def _get_systemd_service_for_pid(pid: int) -> str | None:
         cgroup_path = Path(f"/proc/{pid}/cgroup")
         if not cgroup_path.is_file():
             return None
-        text = cgroup_path.read_text(encoding="utf-8", errors="replace")
+        text = cgroup_path.read_text(encoding="utf-8-sig", errors="replace")
         for line in text.splitlines():
             line = line.strip()
             # Format: 0::/system.slice/hermes-serve.service
@@ -8775,7 +8570,7 @@ def _get_pid_cgroup_path(pid: int) -> str | None:
         cgroup_path = Path(f"/proc/{pid}/cgroup")
         if not cgroup_path.is_file():
             return None
-        text = cgroup_path.read_text(encoding="utf-8", errors="replace")
+        text = cgroup_path.read_text(encoding="utf-8-sig", errors="replace")
         for line in text.splitlines():
             line = line.strip()
             parts = line.split("::", 1)
@@ -8932,8 +8727,7 @@ def _respawn_dashboard_processes(commands: list[list[str]]) -> list[list[str]]:
 def _load_installable_optional_extras(group: str = "all") -> list[str]:
     """Return optional extras referenced by a dependency group.
 
-    ``group`` is usually ``all`` (desktop/server broad install) or
-    ``termux-all`` (Termux-compatible broad install).
+    ``group`` is usually ``all`` (the broad install profile).
     """
     try:
         import tomllib
@@ -9107,35 +8901,25 @@ def _recover_from_interrupted_install() -> None:
 
 
 def _recover_lazy_refresh_marker_locked() -> None:
-    """Heal ``.lazy-refresh-incomplete`` via confirmed import-probe repair."""
+    """Heal ``.lazy-refresh-incomplete``: the venv stamp is the authority,
+    so recovery is one pm sync against uv.lock + the enabled extras."""
     print(
         "⚠ A previous lazy-backend refresh may have left the venv unhealthy — "
-        "running import-based package repair..."
+        "re-syncing against uv.lock..."
     )
-    install_prefix, install_env = _default_venv_install_target()
-    status = _repair_venv_via_import_probes(install_prefix, env=install_env)
-    if status in ("healthy", "repaired"):
+    try:
+        import pm
+
+        pm.sync_venv(explicit=True)
         _clear_lazy_refresh_incomplete_marker()
-        print("✓ Lazy-refresh venv recovery confirmed — install is healthy again.")
-        return
-    if status == "indeterminate":
+        print("✓ Venv re-synced — install is healthy again.")
+    except Exception as exc:
+        logger.debug("Lazy-refresh recovery failed: %s", exc)
         print(
-            "  ⚠ Import probes unavailable — cannot confirm venv health. "
-            "Leaving `.lazy-refresh-incomplete` for the next launch."
+            "  ⚠ Venv re-sync failed. Leaving `.lazy-refresh-incomplete` "
+            "for the next launch."
         )
-    else:
-        print(
-            "  ⚠ Lazy-refresh package repair incomplete. "
-            "Leaving `.lazy-refresh-incomplete` for the next launch."
-        )
-        print("  Recover manually with:")
-        all_specs = _lazy_refresh_repair_specs(
-            sorted(set(_LAZY_REFRESH_REPAIR_PACKAGES.values()))
-        )
-        print(
-            f"    {' '.join(install_prefix)} install --force-reinstall "
-            + " ".join(shlex.quote(s) for s in all_specs)
-        )
+        print("  Recover manually with: hermes pm install")
 
 
 def _recover_core_update_marker_locked() -> None:
@@ -9155,24 +8939,16 @@ def _recover_core_update_marker_locked() -> None:
     # still be replaced. Package-only import repair may help as first aid but
     # must NEVER clear this core marker on its own (#58004 review).
     self_locked = _windows_running_hermes_launcher_locked()
-    if self_locked:
-        install_prefix, install_env = _default_venv_install_target()
-        print(
-            "  → Running from hermes.exe; applying package-only first aid, "
-            "then quarantined full reinstall (core marker stays until that "
-            "succeeds)..."
-        )
-        _repair_venv_via_import_probes(install_prefix, env=install_env)
 
     try:
         from hermes_cli import _install_repair as _ir
 
-        # ensure_uv bootstraps the installer itself when missing (the early
-        # pass's stdlib-only lookup cannot); keeping it here means the late
-        # path still self-heals a venv whose uv vanished mid-update.
-        from hermes_cli.managed_uv import ensure_uv
+        # pm realizes uv when missing (the early pass's stdlib-only
+        # lookup cannot); keeping it here means the late path still
+        # self-heals a venv whose uv vanished mid-update.
+        import pm
 
-        ensure_uv()
+        pm.uv()
 
         # Delegate the install itself to the shared stdlib executor so both
         # this late path and the pre-import early pass run exactly the same
@@ -9365,20 +9141,15 @@ def _reexec_dependency_sync_off_windows_shim() -> bool:
 def _default_venv_install_target() -> tuple[list[str], dict[str, str] | None]:
     """Return ``(install_cmd_prefix, env)`` for the project venv when possible."""
     try:
-        from hermes_cli.managed_uv import ensure_uv
-
-        uv_bin = ensure_uv()
-    except Exception:
-        uv_bin = None
-    if uv_bin:
+        import pm
         from hermes_constants import project_venv_dir
 
         venv_dir = project_venv_dir(PROJECT_ROOT) or PROJECT_ROOT / "venv"
-        env = {**os.environ, "VIRTUAL_ENV": str(venv_dir)}
-        if _is_termux_env(env):
-            env.pop("PYTHONPATH", None)
-            env.pop("PYTHONHOME", None)
-        return [uv_bin, "pip"], env
+        uv_bin, uv_env = pm.uv(venv=venv_dir)
+    except Exception:
+        uv_bin, uv_env = None, None
+    if uv_bin:
+        return [uv_bin, "pip"], uv_env
     return [sys.executable, "-m", "pip"], None
 
 
@@ -9795,222 +9566,6 @@ def _cleanup_quarantined_exes(scripts_dir: Path | None = None) -> None:
             pass  # still locked or in use — try again next run
 
 
-# Import probes for venv corruption after a failed lazy ``uv pip install``.
-# Metadata can look fine while ``.py`` files were removed mid-install (#57828).
-# Canonical tables live in the stdlib-only ``_early_recovery`` module (which
-# also probes/repairs BEFORE this module's third-party imports can run) so the
-# early and full recovery layers can never drift apart.
-_LAZY_REFRESH_IMPORT_PROBES: tuple[tuple[str, str], ...] = (
-    _early_recovery_mod.LAZY_REFRESH_IMPORT_PROBES
-)
-
-_LAZY_REFRESH_REPAIR_PACKAGES: dict[str, str] = (
-    _early_recovery_mod.LAZY_REFRESH_REPAIR_PACKAGES
-)
-
-
-def _run_package_only_install(
-    cmd: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Run a package-only pip/uv install without quarantining entry-point shims.
-
-    ``pip install --upgrade pip`` and ``--force-reinstall <pkg>`` do not
-    rewrite ``hermes.exe``. The editable-install quarantine path would rename
-    shims without uv recreating them on Windows (#57828).
-    """
-    _run_install_with_heartbeat(cmd, env=env)
-
-
-def _lazy_refresh_repair_specs(packages: list[str]) -> list[str]:
-    """Map repair package names to their declared pin specs in pyproject.toml."""
-    try:
-        import tomllib  # Python 3.11+
-    except ImportError:  # pragma: no cover
-        return packages
-
-    pyproject = PROJECT_ROOT / "pyproject.toml"
-    if not pyproject.is_file():
-        return packages
-
-    try:
-        with open(pyproject, "rb") as f:
-            raw_deps = tomllib.load(f).get("project", {}).get("dependencies", []) or []
-    except Exception as exc:
-        logger.debug("lazy refresh repair spec lookup failed: %s", exc)
-        return packages
-
-    name_to_spec: dict[str, str] = {}
-    try:
-        from packaging.requirements import Requirement  # type: ignore
-
-        for spec in raw_deps:
-            try:
-                req = Requirement(spec)
-                name_to_spec[req.name.lower()] = spec.split(";", 1)[0].strip()
-            except Exception:
-                continue
-    except Exception:
-        for spec in raw_deps:
-            head = spec.split(";", 1)[0].strip()
-            bare = head
-            for op in ("==", ">=", "<=", "~=", ">", "<", "!="):
-                if op in bare:
-                    bare = bare.split(op, 1)[0]
-                    break
-            key = bare.strip().split("[", 1)[0].strip().lower()
-            if key:
-                name_to_spec[key] = head
-
-    return [name_to_spec.get(pkg.lower(), pkg) for pkg in packages]
-
-
-def _detect_broken_lazy_refresh_imports(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> list[str] | None:
-    """Probe lazy-refresh packages via real imports.
-
-    Returns:
-      - ``[]`` when probes ran and every package imported cleanly
-      - ``[dist, ...]`` when probes ran and some packages failed
-      - ``None`` when the probe could not run (missing venv Python, subprocess
-        failure, non-zero probe exit) — this is *indeterminate*, not healthy
-    """
-    venv_python = _resolve_install_target_python(install_cmd_prefix, env)
-    if venv_python is None:
-        return None
-
-    probe_lines = "\n".join(
-        f"    ({mod!r}, {attr!r})," for mod, attr in _LAZY_REFRESH_IMPORT_PROBES
-    )
-    check_script = (
-        "import os\n"
-        "import sys\n"
-        "probes = [\n"
-        f"{probe_lines}\n"
-        "]\n"
-        "broken = []\n"
-        "for mod, attr in probes:\n"
-        "    try:\n"
-        "        imported = __import__(mod)\n"
-        "        if not hasattr(imported, attr):\n"
-        "            broken.append(mod)\n"
-        "        elif mod == 'certifi':\n"
-        "            # The module can import cleanly while cacert.pem is\n"
-        "            # missing/corrupt (brew Python upgrade, interrupted venv\n"
-        "            # rebuild) - every TLS call then fails (#29866).\n"
-        "            bundle = imported.where()\n"
-        "            if not os.path.isfile(bundle) or os.path.getsize(bundle) < 1024:\n"
-        "                broken.append(mod)\n"
-        "    except Exception:\n"
-        "        broken.append(mod)\n"
-        "print('\\n'.join(broken))\n"
-    )
-    try:
-        result = subprocess.run(
-            [str(venv_python), "-c", check_script],
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            check=False,
-            env=env,
-        )
-    except Exception as exc:
-        logger.debug("lazy refresh import probe failed: %s", exc)
-        return None
-
-    if result.returncode != 0:
-        logger.debug(
-            "lazy refresh import probe exited %s: %s",
-            result.returncode,
-            (result.stderr or "")[:200],
-        )
-        return None
-
-    broken_modules = [
-        line.strip() for line in result.stdout.splitlines() if line.strip()
-    ]
-    packages: list[str] = []
-    seen: set[str] = set()
-    for mod in broken_modules:
-        pkg = _LAZY_REFRESH_REPAIR_PACKAGES.get(mod)
-        if pkg and pkg not in seen:
-            seen.add(pkg)
-            packages.append(pkg)
-    return packages
-
-
-def _repair_broken_lazy_refresh_imports(
-    install_cmd_prefix: list[str],
-    packages: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> bool:
-    """Force-reinstall ``packages`` and re-probe imports. Never raises."""
-    if not packages:
-        return True
-
-    specs = _lazy_refresh_repair_specs(packages)
-    try:
-        _run_package_only_install(
-            install_cmd_prefix + ["install", "--force-reinstall", *specs],
-            env=env,
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.warning("lazy refresh venv repair failed: %s", exc)
-        return False
-
-    after = _detect_broken_lazy_refresh_imports(install_cmd_prefix, env=env)
-    # Indeterminate re-probe is not confirmed success.
-    return after == []
-
-
-def _repair_venv_via_import_probes(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> str:
-    """Probe imports and force-reinstall any broken lazy-refresh packages.
-
-    Uses real ``import`` checks (not distribution metadata) so a venv where
-    METADATA remains but ``.py`` files were wiped mid-install is still
-    detected (#57828). Package-only reinstall — never rewrites ``hermes.exe``.
-
-    Never raises. Returns one of:
-      - ``"healthy"`` — probes ran and found nothing broken
-      - ``"repaired"`` — probes found breakage and force-reinstall confirmed clean
-      - ``"failed"`` — probes found breakage and repair did not confirm clean
-      - ``"indeterminate"`` — probes could not run; do NOT treat as healthy
-    """
-    broken = _detect_broken_lazy_refresh_imports(install_cmd_prefix, env=env)
-    if broken is None:
-        print(
-            "  ⚠ Import probes unavailable — cannot confirm venv package health."
-        )
-        return "indeterminate"
-    if not broken:
-        return "healthy"
-    print(
-        "  → Detected corrupted venv packages via import probes: "
-        f"{', '.join(broken)}; repairing..."
-    )
-    if _repair_broken_lazy_refresh_imports(
-        install_cmd_prefix, broken, env=env
-    ):
-        print("  ✓ Venv repair succeeded")
-        return "repaired"
-    manual = " ".join(
-        shlex.quote(s) for s in _lazy_refresh_repair_specs(broken)
-    )
-    print("  ⚠ Venv repair incomplete. Run manually, then `hermes update`:")
-    print(
-        f"    {' '.join(install_cmd_prefix)} install --force-reinstall {manual}"
-    )
-    return "failed"
-
-
 def _is_uv_command(install_cmd_prefix: list[str]) -> bool:
     """True when the install command is a uv/uvx invocation.
 
@@ -10073,8 +9628,7 @@ def _install_python_dependencies_with_optional_fallback(
 ) -> None:
     """Install base deps plus as many optional extras as the environment supports.
 
-    By default this targets ``.[all]``; Termux callers can pass
-    ``group='termux-all'`` to use the curated Android-compatible profile.
+    By default this targets ``.[all]``.
 
     On Windows, pre-renames live ``hermes.exe`` / ``hermes-gateway.exe`` shims
     in the venv Scripts dir before each install attempt so uv can write fresh
@@ -10477,10 +10031,6 @@ def _resolve_install_target_python(
     return None
 
 
-def _is_termux_env(env: dict[str, str] | None = None) -> bool:
-    return _is_termux_startup_environment(env)
-
-
 def _is_windows_npm_path(npm_path: str) -> bool:
     """Return True if ``npm_path`` points at a Windows npm shim.
 
@@ -10769,6 +10319,53 @@ def cmd_update(args):
 
         print_update_plan(collect_runtime_inventory())
         return
+
+    # --install-id / --set-channel work on any non-external install and
+    # never touch the tree — handle them before the admission gate so the
+    # desktop About page and channel switching work from a bundled CLI.
+    if getattr(args, "install_id", False):
+        from hermes_cli.update_channel import install_id
+
+        print(f"{install_id(PROJECT_ROOT)} ({PROJECT_ROOT})")
+        sys.exit(0)
+
+    if getattr(args, "set_channel", None):
+        from hermes_cli.config import detect_install_method
+        from hermes_cli.update_channel import (
+            CHANNEL_NIGHTLY,
+            CHANNEL_STABLE,
+            nightly_normalized_note,
+            set_install_channel,
+        )
+
+        try:
+            sha16 = set_install_channel(args.set_channel, PROJECT_ROOT)
+        except ValueError as exc:
+            print(f"✗ {exc}")
+            sys.exit(1)
+        print(f"✓ Channel '{args.set_channel}' recorded for install {sha16}.")
+        install_method = detect_install_method(PROJECT_ROOT)
+        if args.set_channel == CHANNEL_NIGHTLY:
+            if install_method == "git":
+                print(nightly_normalized_note())
+            else:
+                print("⚠ Nightly builds move fast: expect forward-incompatible")
+                print("  state — data written by newer code may not load in stable.")
+        elif args.set_channel == CHANNEL_STABLE:
+            # Honest wait: a nightly build outversions today's stable, and
+            # the updater never downgrades. Say when the switch takes
+            # effect, and where the impatient path is.
+            from hermes_cli.steward import read_install_stamp
+
+            version = read_install_stamp(Path(PROJECT_ROOT)).get("displayVersion") or ""
+            if "-nightly." in version:
+                base = version.split("-nightly.")[0]
+                print(f"→ You are on {version}. Stable updates resume once a")
+                print(f"  stable release reaches v{base} — until then this install")
+                print("  stays where it is. To switch now, reinstall stable:")
+                print("  https://hermes-agent.nousresearch.com/")
+                print("  (Nightly state may not load in older stable builds.)")
+        sys.exit(0)
 
     # Image-managed / package-managed admission gate (#91277 Phase 3): one
     # shared decision for every mutation surface. Consults the baked image
@@ -11908,7 +11505,7 @@ def _read_ssh_session_token_file(path: str) -> str:
         if hasattr(os, "getuid") and (file_stat.st_mode & 0o777) & ~0o600:
             raise SystemExit("--ssh-session-token-file has unsafe permissions")
 
-        with os.fdopen(file_fd, "r", encoding="utf-8") as token_stream:
+        with os.fdopen(file_fd, "r", encoding="utf-8-sig") as token_stream:
             file_fd = -1
             token = token_stream.read(65)
 
@@ -12361,7 +11958,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "pm", "portal", "profile",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -12501,7 +12098,7 @@ def _prepare_agent_startup(args) -> None:
     # plugin/tool discovery below imports tools.approval, which freezes
     # _YOLO_MODE_FROZEN at import time (PR #7994 security design).  main()'s
     # dispatch path also sets this earlier, but _prepare_agent_startup() is
-    # reachable from other launchers too (e.g. the Termux fast-CLI path),
+    # reachable from other launchers too,
     # so the guarantee lives here where the import is actually triggered
     # (#60328).
     if getattr(args, "yolo", False):
@@ -12624,9 +12221,7 @@ def _try_fast_chat_launch() -> bool:
 
     Bails out (returns False) whenever the invocation is not certainly a
     chat launch — a subcommand positional, ``--help``, unknown flags — so
-    every other path still goes through the full parser unchanged. Mirrors
-    ``_try_termux_fast_cli_launch`` minus the Termux-specific deferred
-    startup; kept separate so phone-tuned behavior doesn't leak to desktops.
+    every other path still goes through the full parser unchanged.
     """
     if os.environ.get("HERMES_DISABLE_FAST_CHAT_LAUNCH") == "1":
         return False
@@ -12642,7 +12237,7 @@ def _try_fast_chat_launch() -> bool:
     except Exception:
         return False
     # TUI launches have their own startup path (bounded MCP joins etc.) —
-    # keep them on full dispatch outside Termux.
+    # keep them on full dispatch.
     if _wants_tui_early(argv):
         return False
     if _first_positional_argv() not in {None, "chat"}:
@@ -12684,119 +12279,6 @@ def _try_fast_chat_launch() -> bool:
         args.command = "chat"
 
     _set_chat_arg_defaults(args)
-    cmd_chat(args)
-    return True
-
-
-def _try_termux_fast_cli_launch() -> bool:
-    """Run obvious Termux non-TUI chat/oneshot/version paths on a light parser."""
-    if not _is_termux_startup_environment():
-        return False
-    if os.environ.get("HERMES_TERMUX_DISABLE_FAST_CLI") == "1":
-        return False
-
-    argv = sys.argv[1:]
-    if "-h" in argv or "--help" in argv:
-        return False
-    # Let the TUI fast path (or full dispatch) handle anything that resolves to
-    # the TUI — explicit --tui/env or display.interface=tui. `--cli` forces this
-    # to stay False so the classic fast path still runs.
-    if _wants_tui_early(argv):
-        return False
-
-    if _is_termux_fast_version_argv(argv):
-        _print_version_info(check_updates=True)
-        return True
-
-    first = _first_positional_argv()
-    has_oneshot = any(
-        arg == "-z" or arg == "--oneshot" or arg.startswith("--oneshot=")
-        for arg in argv
-    )
-    if not has_oneshot and first not in {None, "chat"}:
-        return False
-
-    from hermes_cli._parser import build_top_level_parser
-
-    parser, _subparsers, chat_parser = build_top_level_parser()
-    chat_parser.set_defaults(func=cmd_chat)
-    args = parser.parse_args(_coalesce_session_name_args(argv))
-
-    if getattr(args, "version", False):
-        _print_version_info(check_updates=True)
-        return True
-
-    if getattr(args, "oneshot", None):
-        _prepare_agent_startup(args)
-        _confirm_startup_expensive_model_override(args)
-        _run_and_exit_oneshot(
-            args.oneshot,
-            model=getattr(args, "model", None),
-            provider=getattr(args, "provider", None),
-            toolsets=getattr(args, "toolsets", None),
-            skills=getattr(args, "skills", None),
-            usage_file=getattr(args, "usage_file", None),
-        )
-
-    if (args.resume or args.continue_last) and args.command is None:
-        args.command = "chat"
-
-    if args.command in {None, "chat"}:
-        _set_chat_arg_defaults(args)
-        interactive_prompt = not getattr(args, "query", None) and not getattr(args, "image", None)
-        if interactive_prompt:
-            # Bare Termux CLI should reach the prompt first and do agent-only
-            # discovery on the first submitted turn instead of before input.
-            setattr(args, "compact", True)
-            os.environ["HERMES_DEFER_AGENT_STARTUP"] = "1"
-            os.environ["HERMES_FAST_STARTUP_BANNER"] = "1"
-            if getattr(args, "accept_hooks", False):
-                os.environ["HERMES_ACCEPT_HOOKS"] = "1"
-        else:
-            _prepare_agent_startup(args)
-        cmd_chat(args)
-        return True
-
-    return False
-
-
-def _try_termux_fast_tui_launch() -> bool:
-    """Launch obvious Termux TUI invocations before building every subparser.
-
-    `hermes --tui` is the hot path on phones. The full parser setup imports
-    command modules for model, fallback, migrate, kanban, bundles, plugins,
-    etc. even though the TUI immediately execs Node. On Termux only, parse the
-    lightweight top-level/chat parser and hand off to ``cmd_chat`` when the
-    invocation is unambiguously the built-in TUI/chat path.
-    """
-    if not _is_termux_startup_environment():
-        return False
-
-    if "-h" in sys.argv[1:] or "--help" in sys.argv[1:]:
-        return False
-
-    wants_tui = _wants_tui_early(sys.argv[1:])
-    if not wants_tui:
-        return False
-
-    first = _first_positional_argv()
-    if first not in {None, "chat"}:
-        return False
-
-    from hermes_cli._parser import build_top_level_parser
-
-    parser, _subparsers, chat_parser = build_top_level_parser()
-    chat_parser.set_defaults(func=cmd_chat)
-    args = parser.parse_args(_coalesce_session_name_args(sys.argv[1:]))
-
-    # Preserve top-level behaviours whose semantics are not "launch chat/TUI".
-    if getattr(args, "version", False) or getattr(args, "oneshot", None):
-        return False
-    if getattr(args, "command", None) not in {None, "chat"}:
-        return False
-    if not _resolve_use_tui(args):
-        return False
-
     cmd_chat(args)
     return True
 
@@ -13156,12 +12638,35 @@ def main():
     except Exception:
         pass
 
-    if _try_termux_fast_tui_launch():
-        return
-    if _try_termux_fast_cli_launch():
-        return
     if _try_fast_chat_launch():
         return
+
+    # pm owns its own tiny argparse tree; dispatch before the heavy parser.
+    if sys.argv[1:2] == ["pm"]:
+        from pm.cli import main as pm_main
+
+        sys.exit(pm_main(sys.argv[2:]))
+
+    # The startup check: O(1) stamp comparisons, no network, no installs.
+    # One loud line when the install is damaged; never blocks the command.
+    # Then provision: prepend the store's tool dirs to PATH so reactive
+    # which('git'|'bash'|'ffmpeg'|...) resolves the bundled binaries.
+    try:
+        import pm
+
+        pm.adopt()
+        problems = pm.check()
+        if problems:
+            print(
+                f"⚠ install out of sync ({'; '.join(problems)}) — run `hermes pm install`",
+                file=sys.stderr,
+            )
+        else:
+            pm.activate()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug("pm startup check failed", exc_info=True)
 
     from hermes_cli._parser import build_top_level_parser
 

@@ -54,3 +54,21 @@ def _suppress_concurrent_hermes_gate(request, monkeypatch):
         lambda *_a, **_k: [],
         raising=False,
     )
+
+
+@pytest.fixture
+def patch_pm_uv_to_shutil_which():
+    """Make pm.uv follow shutil.which mocking; update-flow test modules that
+    stub uv availability via shutil.which patches apply this autouse=True."""
+    import os
+    import shutil
+    from unittest.mock import patch
+
+    def _fake_pm_uv(*, venv=None, realize=True):
+        env = dict(os.environ)
+        if venv is not None:
+            env["VIRTUAL_ENV"] = str(venv)
+        return shutil.which("uv"), env
+
+    with patch("pm.uv", side_effect=_fake_pm_uv):
+        yield

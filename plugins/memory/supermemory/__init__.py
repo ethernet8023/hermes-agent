@@ -115,7 +115,7 @@ def _load_supermemory_config(hermes_home: str) -> dict:
     config_path = Path(hermes_home) / "supermemory.json"
     if config_path.exists():
         try:
-            raw = json.loads(config_path.read_text(encoding="utf-8"))
+            raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
             if isinstance(raw, dict):
                 config.update({k: v for k, v in raw.items() if v is not None})
         except Exception:
@@ -162,7 +162,7 @@ def _save_supermemory_config(values: dict, hermes_home: str) -> None:
     existing = {}
     if config_path.exists():
         try:
-            raw = json.loads(config_path.read_text(encoding="utf-8"))
+            raw = json.loads(config_path.read_text(encoding="utf-8-sig"))
             if isinstance(raw, dict):
                 existing = raw
         except Exception:
@@ -286,8 +286,8 @@ class _SupermemoryClient:
         # fall through so the raw import below produces the canonical
         # ImportError message.
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("memory.supermemory", prompt=False)
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("supermemory")
         except ImportError:
             pass
         except Exception:

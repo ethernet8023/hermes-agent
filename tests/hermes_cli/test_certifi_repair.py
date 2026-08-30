@@ -69,65 +69,6 @@ class TestEarlyRecoveryCertifiBundleProbe:
         assert "certifi" in broken
 
 
-class TestUpdateProbeScriptChecksBundle:
-    """The subprocess probe used by `hermes update`'s venv repair must apply
-    the same bundle-file check inside the target venv's interpreter."""
-
-    def _run_probe_script(self, monkeypatch, tmp_path, bundle_path):
-        """Extract the generated probe script and run it in-process against a
-        fake certifi that points at bundle_path."""
-        from hermes_cli import main as main_mod
-
-        captured = {}
-
-        def fake_run(cmd, **kwargs):
-            captured["script"] = cmd[-1]
-
-            class _R:
-                returncode = 0
-                stdout = ""
-                stderr = ""
-
-            return _R()
-
-        monkeypatch.setattr(main_mod.subprocess, "run", fake_run)
-        monkeypatch.setattr(
-            main_mod, "_resolve_install_target_python", lambda *a, **k: sys.executable
-        )
-        main_mod._detect_broken_lazy_refresh_imports(["pip"])
-        script = captured["script"]
-
-        # Execute the probe script with a fake certifi installed.
-        _fake_certifi(monkeypatch, bundle_path)
-        printed = []
-        namespace = {"__builtins__": __builtins__}
-        import builtins as _b
-
-        real_print = _b.print
-        monkeypatch.setattr(
-            _b, "print", lambda *a, **k: printed.append(" ".join(map(str, a)))
-        )
-        try:
-            exec(script, namespace)
-        finally:
-            monkeypatch.setattr(_b, "print", real_print)
-        return "\n".join(printed)
-
-
-    def test_probe_script_quiet_when_bundle_healthy(self, monkeypatch, tmp_path):
-        import certifi as real_certifi
-
-        out = self._run_probe_script(
-            monkeypatch, tmp_path, Path(real_certifi.where())
-        )
-        assert "certifi" not in out.splitlines()
-
-
-# =========================================================================
-# 2. hermes doctor: detection and --fix repair
-# =========================================================================
-
-
 class TestDoctorCertificates:
     def test_broken_bundle_fails_without_fix(self, monkeypatch, capsys, tmp_path):
         from hermes_cli import doctor as doctor_mod

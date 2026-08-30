@@ -58,12 +58,13 @@ def _get_anthropic_sdk():
     global _anthropic_sdk
     if _anthropic_sdk is ...:
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("provider.anthropic", prompt=False)
+            from pm import ensure_import as _ensure_import
+            _ensure_import("anthropic")
         except ImportError:
             pass
         except Exception:
-            # FeatureUnavailable — fall through to ImportError handling below
+            # InstallError (lazy install disabled/declined/failed) — fall
+            # through to ImportError handling below
             pass
         try:
             import anthropic as _sdk
@@ -1089,7 +1090,7 @@ def _read_claude_code_credentials_from_file() -> Optional[Dict[str, Any]]:
     if not cred_path.exists():
         return None
     try:
-        data = json.loads(cred_path.read_text(encoding="utf-8"))
+        data = json.loads(cred_path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError, IOError) as e:
         logger.debug("Failed to read ~/.claude/.credentials.json: %s", e)
         return None
@@ -1299,7 +1300,7 @@ def _write_claude_code_credentials(
         # Read existing file to preserve other fields
         existing = {}
         if cred_path.exists():
-            existing = json.loads(cred_path.read_text(encoding="utf-8"))
+            existing = json.loads(cred_path.read_text(encoding="utf-8-sig"))
 
         oauth_data: Dict[str, Any] = {
             "accessToken": access_token,
@@ -1704,7 +1705,7 @@ def read_hermes_oauth_credentials() -> Optional[Dict[str, Any]]:
     oauth_file = _get_hermes_oauth_file()
     if oauth_file.exists():
         try:
-            data = json.loads(oauth_file.read_text(encoding="utf-8"))
+            data = json.loads(oauth_file.read_text(encoding="utf-8-sig"))
             if data.get("accessToken"):
                 return data
         except (json.JSONDecodeError, OSError, IOError) as e:

@@ -8,9 +8,9 @@ the provider's config schema. Writes config to config.yaml + .env.
 from __future__ import annotations
 
 import os
-import re
 import sys
 import shlex
+from pathlib import Path
 
 from hermes_constants import get_hermes_home
 from hermes_cli.secret_prompt import masked_secret_prompt
@@ -18,30 +18,21 @@ from hermes_cli.secret_prompt import masked_secret_prompt
 _CANCELLED = -1
 
 
-def _provider_pip_dependencies(provider_name: str, declared: list) -> list:
-    """Return the pip deps a provider actually needs on THIS install.
+def _provider_extras(provider_name: str, manifest: dict) -> list[str]:
+    """The pyproject extras a provider needs on THIS install.
 
-    ``plugin.yaml`` declares the provider's baseline bridge packages, but
-    some providers install mode-dependent extras at setup time that the
-    manifest can't express. Hindsight's ``local_embedded`` mode installs
-    ``hindsight-all`` (daemon + embedder + client) during
-    ``hermes memory setup`` — if the update-time refresh only reinstalled
-    the declared ``hindsight-client``, the embedded daemon would stay
-    broken after a venv rebuild stripped ``hindsight-embed`` (#70636).
-    """
-    deps = list(declared or [])
-    if provider_name == "hindsight":
-        try:
-            import json
-            cfg_path = get_hermes_home() / "hindsight" / "config.json"
-            cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
-            mode = cfg.get("mode", "")
-            # "local" is a legacy alias for "local_embedded"
-            if mode in {"local", "local_embedded"}:
-                deps.append("hindsight-all")
-        except Exception:
-            pass
-    return deps
+    ``plugin.yaml``'s ``extra:`` names the baseline. Hindsight's
+    ``local_embedded`` mode needs the daemon+embedder wheel on top
+    (hindsight-local, #70636) — mode lives in its config file, which the
+    manifest can't express."""
+    extras = []
+    declared = manifest.get("extra")
+    if isinstance(declared, str) and declared:
+        extras.append(declared)
+    # hindsight local_embedded needs hindsight-all, whose protobuf floor
+    # conflicts with mem0/modal — it cannot be a venv extra. It stays a
+    # provider-owned install until plugin side-venvs land (plan step 5).
+    return extras
 
 
 # ---------------------------------------------------------------------------
@@ -125,64 +116,28 @@ def _install_dependencies(provider_name: str, *, force: bool = False) -> None:
 
     try:
         import yaml
-        with open(yaml_path, encoding="utf-8") as f:
+        with open(yaml_path, encoding="utf-8-sig") as f:
             meta = yaml.safe_load(f) or {}
     except Exception:
         return
 
-    pip_deps = _provider_pip_dependencies(provider_name, meta.get("pip_dependencies", []))
-    if not pip_deps:
+    extras = _provider_extras(provider_name, meta)
+    if not extras:
         return
 
-    # pip name → import name mapping for packages where they differ
-    _IMPORT_NAMES = {
-        "honcho-ai": "honcho",
-        "mem0ai": "mem0",
-        "hindsight-client": "hindsight_client",
-        "hindsight-all": "hindsight",
-    }
+    import pm
 
-    # Check which packages need installation.
-    missing = []
-    for dep in pip_deps:
-        if force:
-            missing.append(dep)
-            continue
-        dep_name = re.match(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*", dep)
-        base = dep_name.group(0) if dep_name else dep
-        import_name = _IMPORT_NAMES.get(base, base.replace("-", "_").split("[")[0])
-        try:
-            __import__(import_name)
-        except ImportError:
-            missing.append(dep)
-
+    missing = [e for e in extras if force or not pm.available(e)]
     if not missing:
         return
 
     print(f"\n  Installing dependencies: {', '.join(missing)}")
-
-    # Environment-aware install: on immutable hosted images the agent venv
-    # is sealed read-only and installs must go to the durable target on the
-    # data volume (HERMES_LAZY_INSTALL_TARGET). install_specs handles the
-    # routing/gating; on normal installs it is venv-scoped as before (NS-605).
-    from tools.lazy_deps import install_specs
-
-    manual_cmd = f"uv pip install {' '.join(missing)}"
     try:
-        outcome = install_specs(missing, timeout=120)
-        if outcome.ok:
-            print(f"  ✓ Installed {', '.join(missing)}")
-        elif outcome.blocked:
-            print(f"  ⚠ Cannot install {', '.join(missing)}: {outcome.reason}")
-        else:
-            print(f"  ⚠ Failed to install {', '.join(missing)}")
-            stderr = (outcome.stderr or "")[:200]
-            if stderr:
-                print(f"    {stderr}")
-            print(f"  Run manually: {manual_cmd}")
+        pm.sync_venv(missing, explicit=True)
+        print(f"  ✓ Installed {', '.join(missing)}")
     except Exception as e:
         print(f"  ⚠ Install failed: {e}")
-        print(f"  Run manually: {manual_cmd}")
+        print("  Run manually: hermes pm install")
 
     # Also show external dependencies (non-pip) if any
     ext_deps = meta.get("external_dependencies", [])
@@ -334,6 +289,7 @@ def cmd_setup(args) -> None:
     if not isinstance(provider_config, dict):
         provider_config = {}
 
+    env_path = get_hermes_home() / ".env"
     env_writes = {}
 
     if schema:
@@ -434,13 +390,7 @@ def _write_env_vars(
     the ``_ENV_VAR_NAME_RE`` regex (no malformed identifiers), the
     ``_ENV_VAR_NAME_DENYLIST`` (no ``LD_PRELOAD`` / ``PYTHONPATH`` /
     ``HERMES_HOME`` / etc.), CR/LF stripping on the value, and the atomic
-    0o600-from-creation write (no TOCTOU permission window). This function
-    previously wrote via ``Path.write_text`` directly, bypassing all of
-    that: a memory-provider plugin schema declaring ``env_var: "LD_PRELOAD"``
-    would land in ``.env`` verbatim and load via the ``env_loader.py``
-    ``.env`` -> ``os.environ`` chain on the next Hermes startup, and the
-    file existed at the default umask between the write and the later
-    ``chmod`` regardless of key legitimacy.
+    0o600-from-creation write (no TOCTOU permission window).
 
     Validation failures (``ValueError`` from ``save_env_value`` — a
     denylisted name or an identifier rejected by ``_ENV_VAR_NAME_RE``) are

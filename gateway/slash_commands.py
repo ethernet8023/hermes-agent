@@ -6089,6 +6089,25 @@ class GatewaySlashCommandsMixin:
             return f"✗ {format_managed_message('update Hermes Agent')}"
 
         project_root = Path(__file__).parent.parent.resolve()
+
+        # Not a git-managed install (docker/nix/desktop-app/source): refuse
+        # with the steward's own update mechanism instead of git-pulling a
+        # tree `hermes update` does not own.
+        try:
+            from hermes_cli.config import (
+                detect_install_method,
+                recommended_update_command_for_method,
+            )
+
+            method = detect_install_method(project_root)
+            if method not in {"git", "unknown"}:
+                return (
+                    f"✗ `hermes update` does not apply to this install ({method}).\n"
+                    f"Update with: {recommended_update_command_for_method(method)}"
+                )
+        except Exception:
+            pass  # config unreadable — fall through to the .git check below
+
         git_dir = project_root / '.git'
 
         if not git_dir.exists():

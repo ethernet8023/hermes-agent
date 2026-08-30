@@ -115,6 +115,7 @@ USER_OWNED_EXCLUDE: frozenset = frozenset({
     "backups", "cache",
     # Infrastructure
     "hermes-agent", ".worktrees", "profiles", "bin", "node_modules",
+    ".hermes-runtime", "node",  # managed runtime trees (install artifacts)
     # User customization namespace
     "local",
 })
@@ -257,7 +258,7 @@ def read_manifest(profile_dir: Path) -> Optional[DistributionManifest]:
     if not mf_path.is_file():
         return None
     try:
-        data = _load_yaml(mf_path.read_text(encoding="utf-8"))
+        data = _load_yaml(mf_path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         raise DistributionError(f"Failed to parse {mf_path}: {exc}") from exc
     return DistributionManifest.from_dict(data or {})

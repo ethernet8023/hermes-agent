@@ -108,6 +108,10 @@ _CLONE_ALL_DEFAULT_EXCLUDE_ROOT: frozenset[str] = frozenset({
     "profiles",
     "bin",
     "node_modules",
+    # Managed runtime trees — install artifacts, never profile state
+    # (install/profile bucket split; see test_install_bucket_separation).
+    ".hermes-runtime",
+    "node",
 })
 
 # Per-profile history artifacts excluded from --clone-all regardless of the
@@ -216,6 +220,8 @@ _DEFAULT_EXPORT_EXCLUDE_ROOT = frozenset({
     "profiles",             # other profiles — never recursive-export
     "bin",                  # installed binaries (tirith, etc.)
     "node_modules",         # npm packages
+    ".hermes-runtime",      # managed runtime tree (install artifact)
+    "node",                 # legacy pre-split managed Node tree
     # Databases & runtime state
     "state.db", "state.db-shm", "state.db-wal",
     "hermes_state.db",
@@ -478,7 +484,7 @@ def check_alias_collision(name: str) -> Optional[str]:
             expected = wrapper_dir / (f"{canon}.bat" if is_windows else canon)
             if existing_path == str(expected):
                 try:
-                    content = expected.read_text(encoding="utf-8")
+                    content = expected.read_text(encoding="utf-8-sig")
                     if "hermes -p" in content:
                         return None  # it's our wrapper, safe to overwrite
                 except Exception:
@@ -560,7 +566,7 @@ def remove_wrapper_script(name: str) -> bool:
         if wrapper_path.exists():
             try:
                 # Verify it's our wrapper before removing
-                content = wrapper_path.read_text(encoding="utf-8")
+                content = wrapper_path.read_text(encoding="utf-8-sig")
                 if "hermes -p" in content:
                     wrapper_path.unlink()
                     return True
@@ -655,7 +661,7 @@ def build_alias_map() -> dict[str, str]:
         if not is_windows and entry.suffix:
             continue
         try:
-            with open(entry, "r", encoding="utf-8", errors="strict") as f:
+            with open(entry, "r", encoding="utf-8-sig", errors="strict") as f:
                 content = f.read(_WRAPPER_READ_LIMIT)
         except (OSError, UnicodeDecodeError):
             # UnicodeDecodeError = a binary on PATH (ffmpeg etc.) — not a wrapper.
@@ -731,7 +737,7 @@ def _read_distribution_meta(profile_dir: Path) -> tuple:
         return None, None, None
     try:
         import yaml
-        with open(mf_path, "r", encoding="utf-8") as f:
+        with open(mf_path, "r", encoding="utf-8-sig") as f:
             data = yaml.safe_load(f) or {}
         if not isinstance(data, dict):
             return None, None, None
@@ -929,7 +935,7 @@ def read_profile_meta(profile_dir: Path) -> dict:
         return empty
     try:
         import yaml
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             data = yaml.safe_load(f) or {}
     except Exception:
         return empty
@@ -962,7 +968,7 @@ def write_profile_meta(
     existing: dict = {}
     if path.is_file():
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 loaded = yaml.safe_load(f) or {}
             if isinstance(loaded, dict):
                 existing = loaded
@@ -1991,7 +1997,7 @@ def _stop_gateway_process(profile_dir: Path) -> None:
         return
 
     try:
-        raw = pid_file.read_text(encoding="utf-8").strip()
+        raw = pid_file.read_text(encoding="utf-8-sig").strip()
         data = json.loads(raw) if raw.startswith("{") else {"pid": int(raw)}
         pid = int(data["pid"])
         # Route through terminate_pid so Windows uses the appropriate
@@ -2032,7 +2038,7 @@ def get_active_profile() -> str:
     """
     path = _get_active_profile_path()
     try:
-        name = path.read_text(encoding="utf-8").strip()
+        name = path.read_text(encoding="utf-8-sig").strip()
         if not name:
             return "default"
         return name
@@ -2211,7 +2217,7 @@ def _scrub_export_secrets(staged: Path) -> None:
             continue
 
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8-sig")
         except (UnicodeDecodeError, OSError):
             continue
 
@@ -2454,7 +2460,7 @@ def _migrate_honcho_profile_host(old_name: str, new_name: str, new_dir: Path) ->
         seen.add(resolved)
 
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             continue
 

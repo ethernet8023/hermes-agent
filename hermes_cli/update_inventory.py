@@ -185,7 +185,7 @@ def collect_runtime_inventory() -> UpdatePlan:
 
     # --- expected code identity (pre-pull) --------------------------------
     try:
-        from hermes_cli.build_info import get_code_identity
+        from hermes_cli.version_info import get_code_identity
 
         identity = get_code_identity(refresh=True)
         plan.expected_sha = identity.get("sha")

@@ -135,7 +135,7 @@ done
 #     the build step just loaded; stripping it made every per-file pytest
 #     subprocess rebuild the 5GB image from a cold builder cache instead
 #     (~4 min per worker per run, and the rebuilt image lacked the
-#     HERMES_GIT_SHA build-arg the workflow bakes in).
+#     install stamp the workflow bakes in).
 #
 # These are test-infrastructure knobs, not credentials — same class as the
 # HERMES_RUN_SLOW_PET_TESTS / HERMES_E2E_BROWSER opt-ins already forwarded.
@@ -152,6 +152,17 @@ done
 # ── Run in hermetic env ──────────────────────────────────────────────────────
 # env -i: start with empty environment, opt-in only what we need.
 # No credential var can leak — you'd have to explicitly add it here.
+#
+# __NIXOS_SET_ENVIRONMENT_DONE is a NixOS platform guard, not a credential:
+# without it, every login shell (bash -l) that a test spawns re-runs
+# /etc/set-environment and rebuilds PATH from the system profile — which
+# evicts the dev shell's python3/rg and makes terminal, process-registry,
+# and ripgrep-backed search tests fail with exit 127 on NixOS hosts.
+#
+# HERMES_PYTHON_SRC_ROOT is the Nix dev shell's editable-install root: the
+# venv's editable finder reads it at runtime to locate first-party modules.
+# Stripping it breaks "import tools" in every test subprocess whose cwd is
+# not the repo root (the import-guard probe runs from a tempdir).
 echo "▶ running per-file parallel test suite via run_tests_parallel.py"
 echo "  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)"
 
@@ -178,6 +189,8 @@ exec env -i \
   PYTHONUTF8=1 \
   ${HERMES_RUN_SLOW_PET_TESTS:+HERMES_RUN_SLOW_PET_TESTS="$HERMES_RUN_SLOW_PET_TESTS"} \
   ${HERMES_E2E_BROWSER:+HERMES_E2E_BROWSER="$HERMES_E2E_BROWSER"} \
+  ${__NIXOS_SET_ENVIRONMENT_DONE:+__NIXOS_SET_ENVIRONMENT_DONE="$__NIXOS_SET_ENVIRONMENT_DONE"} \
+  ${HERMES_PYTHON_SRC_ROOT:+HERMES_PYTHON_SRC_ROOT="$HERMES_PYTHON_SRC_ROOT"} \
   ${EXTRA_PYTHONPATH:+PYTHONPATH="$EXTRA_PYTHONPATH"} \
   ${EXTRA_PYTEST_PLUGINS:+PYTEST_PLUGINS="$EXTRA_PYTEST_PLUGINS"} \
   "$PYTHON" "$SCRIPT_DIR/run_tests_parallel.py" "$@"

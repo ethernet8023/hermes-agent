@@ -94,6 +94,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Write install stamp
+        run: python3 scripts/write_install_stamp.py --output install-stamp.json --distribution docker --update-mechanism external --source ci
+
       # Retry once on transient Docker Hub / buildkit pull failures
       # (connection reset, auth token timeout, rate limiting). The action
       # generates a unique builder name per invocation so the retry doesn't
@@ -119,8 +122,6 @@ jobs:
           load: true
           platforms: ${{ matrix.platform }}
           tags: ${{ env.IMAGE_NAME }}:test
-          build-args: |
-            HERMES_GIT_SHA=${{ github.sha }}
           cache-from: ${{ matrix.cache-from }}
           cache-to: ${{ (github.event_name != 'pull_request') && matrix.cache-to || '' }}
 
@@ -206,6 +207,9 @@ jobs:
       - name: Checkout trusted source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Write install stamp
+        run: python3 scripts/write_install_stamp.py --output install-stamp.json --distribution docker --update-mechanism external --source ci
+
       # Retry once on transient Docker Hub / buildkit pull failures.
       # See build job for rationale; same pattern.
       - name: Set up Docker Buildx
@@ -234,8 +238,6 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
-          build-args: |
-            HERMES_GIT_SHA=${{ github.sha }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           cache-from: ${{ matrix.cache-from }}
           cache-to: ${{ matrix.cache-to }}

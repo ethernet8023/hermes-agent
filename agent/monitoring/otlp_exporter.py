@@ -34,28 +34,22 @@ class OTLPUnavailable(RuntimeError):
     """Raised when the optional OpenTelemetry SDK isn't installed."""
 
 
-def _require_sdk(*, auto_install: bool = True, prompt: bool = True):
+def _require_sdk(*, auto_install: bool = True):
     """Import the OTel SDK, lazily installing it on first use if needed.
 
-    Routes through tools.lazy_deps (feature 'export.otlp') so a missing SDK
+    Routes through pm.ensure_import('otlp') so a missing SDK
     triggers the standard venv install flow — same as every other optional
-    backend — gated by security.allow_lazy_installs and TTY-prompted. Falls back
-    to OTLPUnavailable (with a manual install hint) when the SDK can't be made
+    backend — gated by security.allow_lazy_installs. Falls back to
+    OTLPUnavailable (with a manual install hint) when the SDK can't be made
     importable (lazy installs disabled, install failed, or auto_install=False).
-
-    ``auto_install``: attempt the lazy install when missing (default True).
-    ``prompt``: ask before installing when interactive (default True); pass
-    False from non-interactive contexts like the continuous streamer.
     """
     if auto_install:
         try:
-            from tools.lazy_deps import ensure as _lazy_ensure
-            _lazy_ensure("export.otlp", prompt=prompt)
-        except ImportError:
-            pass  # lazy_deps unavailable — fall through to the import attempt
+            from pm import ensure_import as _lazy_ensure
+            _lazy_ensure("otlp")
         except Exception:
-            # FeatureUnavailable (lazy installs disabled / declined / failed) —
-            # fall through; the import below raises OTLPUnavailable with the hint.
+            # Any lazy-install failure — fall through; the import below
+            # raises OTLPUnavailable with the hint.
             pass
     try:
         from opentelemetry.sdk.trace import TracerProvider
@@ -240,7 +234,7 @@ def start_streaming(
     ``event_filter`` scopes the exporter to its plane, e.g. gateway-health
     export, so enabling one plane cannot silently export unrelated events.
 
-    Non-interactive context (startup): attempts a lazy install with prompt=False
+    Non-interactive context (startup): attempts a lazy install
     so a configured-but-missing SDK is installed once (gated by
     security.allow_lazy_installs), then streams. If it still can't load, logs and
     no-ops — never blocks or raises into startup.
@@ -248,7 +242,7 @@ def start_streaming(
     if not is_enabled(config):
         return None
     try:
-        _require_sdk(prompt=False)
+        _require_sdk()
     except OTLPUnavailable:
         logger.warning("monitoring.export.otlp.enabled but the OTel SDK could not "
                        "be installed/imported; install 'hermes-agent[otlp]'")

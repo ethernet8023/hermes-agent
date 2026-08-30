@@ -199,6 +199,13 @@ def gui_install_summary(hermes_home: "Path | None" = None) -> dict:
     packaged = [p for p in packaged_gui_app_paths() if p.exists()]
     userdata = desktop_userdata_dir()
 
+    # Steward facts, so the UI can gate its destructive options on the same
+    # ladder the CLI uninstaller uses: only a git checkout may have its code
+    # removed; sealed trees (nix / desktop-app / docker) get data-only.
+    from hermes_cli import steward as steward_mod
+
+    steward, code_removal_allowed = steward_mod.classify_install(_agent_root(home))
+
     return {
         "hermes_home": str(home),
         "agent_installed": agent_is_installed(home),
@@ -208,6 +215,8 @@ def gui_install_summary(hermes_home: "Path | None" = None) -> dict:
         "userdata_dir": str(userdata),
         "userdata_exists": userdata.exists(),
         "platform": sys.platform,
+        "steward": steward,
+        "code_removal_allowed": code_removal_allowed,
     }
 
 

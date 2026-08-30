@@ -441,7 +441,7 @@ def _load_json_store(path: Path) -> dict:
     """Load a JSON file as a dict, returning ``{}`` on any error."""
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
     return {}
@@ -506,7 +506,7 @@ class _ThreadedProcessHandle:
 
         # Pipe for stdout — drain thread in _wait_for_process reads the read end.
         read_fd, write_fd = os.pipe()
-        self._stdout = os.fdopen(read_fd, "r", encoding="utf-8", errors="replace")
+        self._stdout = os.fdopen(read_fd, "r", encoding="utf-8", errors="replace")  # windows-footgun: ok (pipe is BOM-free)
         self._write_fd = write_fd
 
         def _worker():
@@ -677,8 +677,8 @@ class BaseEnvironment(ABC):
         """Return the backend temp directory used for session artifacts.
 
         Most sandboxed backends use ``/tmp`` inside the target environment.
-        LocalEnvironment overrides this on platforms like Termux where ``/tmp``
-        may be missing and ``TMPDIR`` is the portable writable location.
+        LocalEnvironment overrides this on hosts where ``/tmp`` may be missing
+        and ``TMPDIR`` is the portable writable location.
         """
         return "/tmp"
 

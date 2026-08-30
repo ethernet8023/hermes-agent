@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -58,7 +59,7 @@ def _m():
 _UPDATE_RUNTIME_RELOAD_MODULES = (
     "hermes_constants",
     "tools.environments.local",
-    "tools.lazy_deps",
+    "pm.extras",
 )
 
 #: Package prefixes whose cached modules become stale the moment the checkout
@@ -559,45 +560,6 @@ _INSTALL_DEFINING_FILES = (
     "uv.lock",
 )
 
-def _editable_install_is_current(git_cmd, cwd, pre_pull_sha: str | None) -> bool:
-    """True when the pulled commits cannot have invalidated the editable install.
-
-    ``uv pip install -e .`` never audits an editable target — it reinstalls on
-    every invocation, and every reinstall rewrites the console-script shims.
-    On Windows that rewrite is the only reason the running ``hermes.exe`` has
-    to be quarantined, and a quarantine that loses its race is the whole
-    ``os error 32`` family. Not reinstalling when the reinstall provably
-    cannot change anything removes that risk outright for the common update,
-    rather than trying to make the rename win more often.
-
-    Skipping is safe because Hermes pins its editable finder to a *static*
-    module list (``[tool.setuptools] py-modules`` plus
-    ``packages.find.include``). The one source-only change that would stale
-    that finder is a new top-level module or package, and it cannot land
-    without a ``pyproject.toml`` diff. Dependencies and ``[project.scripts]``
-    live there too. New submodules inside an already-mapped package resolve
-    through the real package directory and need no reinstall.
-
-    Fails closed: an unresolvable pre-pull SHA (shallow checkout, ZIP swap)
-    or a failed ``git diff`` returns False and the install runs as before.
-    """
-    if not pre_pull_sha:
-        return False
-    try:
-        result = subprocess.run(
-            git_cmd
-            + ["diff", "--name-only", f"{pre_pull_sha}..HEAD", "--"]
-            + list(_INSTALL_DEFINING_FILES),
-            cwd=cwd,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
-    except OSError:
-        return False
-    if result.returncode != 0:
-        return False
-    return not result.stdout.strip()
-
 def _validate_critical_files_syntax(root) -> tuple[bool, str | None, str | None]:
     """Compile each file in ``_UPDATE_CRITICAL_FILES`` to catch SyntaxErrors.
 
@@ -765,7 +727,7 @@ def _gateway_prompt(prompt_text: str, default: str = "", timeout: float = 300.0)
     while _time.monotonic() < deadline:
         if response_path.exists():
             try:
-                answer = response_path.read_text(encoding="utf-8").strip()
+                answer = response_path.read_text(encoding="utf-8-sig").strip()
                 response_path.unlink(missing_ok=True)
                 prompt_path.unlink(missing_ok=True)
                 return answer if answer else default
@@ -1666,6 +1628,159 @@ def _is_zip_preserved_entry_status_line(line: str) -> bool:
     return True
 
 
+# Release tags have the form v1.2.3. A tag can have a pre-release suffix.
+# The stable channel ignores tags with a suffix. Stable means final releases only.
+# The major component is capped at three digits. The historical CalVer tags
+# (for example v2026.7.20) use a four-digit year, and a numeric sort would
+# rank them above every SemVer release. This matches _SEMVER_TAG_RE in
+# scripts/write_install_stamp.py.
+_RELEASE_TAG_RE = re.compile(r"^v(0|[1-9]\d{0,2})\.(\d+)\.(\d+)$")
+
+
+def _parse_release_tag(tag: str):
+    """Parse ``vX.Y.Z`` into a sortable (X, Y, Z) tuple, or return None.
+
+    Tags with a pre-release or build suffix (``v1.2.3-rc1``) return None.
+    Tags that do not have the shape of a final release also return None.
+    The stable channel only moves between final releases.
+    """
+    m = _RELEASE_TAG_RE.match(tag.strip())
+    if not m:
+        return None
+    return tuple(int(g) for g in m.groups())
+
+
+def _latest_release_tag_from_ls_remote(output: str):
+    """Select the newest final-release tag from ``git ls-remote --tags`` output.
+
+    Returns ``(tag, sha)`` or ``(None, None)``. Peeled entries (``^{}``) have
+    priority over the tag-object SHA. Thus annotated tags and lightweight tags
+    both give the commit SHA.
+    """
+    best = None          # (version_tuple, tag)
+    shas = {}            # tag -> commit sha (peeled wins)
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2:
+            continue
+        sha, ref = parts
+        if not ref.startswith("refs/tags/"):
+            continue
+        name = ref[len("refs/tags/"):]
+        peeled = name.endswith("^{}")
+        if peeled:
+            name = name[:-3]
+        version = _parse_release_tag(name)
+        if version is None:
+            continue
+        if peeled or name not in shas:
+            shas[name] = sha.strip()
+        if best is None or version > best[0]:
+            best = (version, name)
+    if best is None:
+        return None, None
+    tag = best[1]
+    return tag, shas.get(tag)
+
+
+def _resolve_latest_release_tag(git_cmd, cwd):
+    """Ask origin for the newest final release tag. Returns (tag, sha) or (None, None)."""
+    try:
+        result = subprocess.run(
+            git_cmd + ["ls-remote", "--tags", "origin", "v*"],
+            cwd=cwd,
+            capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("Could not list release tags from origin: %s", exc)
+        return None, None
+    if result.returncode != 0:
+        logger.warning(
+            "git ls-remote --tags failed: %s",
+            (result.stderr or "").strip().splitlines()[:1],
+        )
+        return None, None
+    return _latest_release_tag_from_ls_remote(result.stdout)
+
+
+def _stable_channel_active(args) -> bool:
+    """Return True when this update must track tagged releases, not a branch.
+
+    ``args`` is the update argparse namespace, or None when the caller has no
+    flags to honor. An explicit ``--branch`` always wins (the user names the
+    exact update target; a tag silently overriding it would resurrect the bug
+    class --branch prevents). An explicit ``--channel`` is the transient
+    per-invocation override (``--set-channel`` is the persistent one). In all
+    other cases the effective channel comes from the per-install record
+    (see hermes_cli.update_channel.resolve_update_channel).
+    """
+    if getattr(args, "branch", None):
+        return False
+    transient = getattr(args, "channel", None)
+    if transient:
+        from hermes_cli.update_channel import CHANNEL_STABLE
+
+        # nightly on a source tree normalizes to main (not stable).
+        return transient == CHANNEL_STABLE
+    try:
+        from hermes_cli.config import load_config
+        from hermes_cli.update_channel import CHANNEL_STABLE, resolve_update_channel
+
+        config = None
+        try:
+            config = load_config()
+        except Exception as exc:
+            logger.debug("Could not load config for channel resolution: %s", exc)
+        return resolve_update_channel(config, _m().PROJECT_ROOT) == CHANNEL_STABLE
+    except Exception as exc:
+        logger.warning("Channel resolution failed; defaulting to main: %s", exc)
+        return False
+
+
+def _github_latest_release_tag():
+    """Resolve the newest final-release tag with the GitHub API (no git necessary).
+
+    The ZIP-fallback path uses this function. That path exists because git
+    file I/O is broken. The function tries /releases/latest first, because that
+    endpoint obeys the draft and prerelease curation. If that fails, it lists
+    the tags and selects the maximum final release.
+    Returns the tag name or None.
+    """
+    import urllib.error
+    import urllib.request
+
+    def _get_json(url):
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github+json",
+                          "User-Agent": "hermes-update"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    base = "https://api.github.com/repos/NousResearch/hermes-agent"
+    try:
+        data = _get_json(f"{base}/releases/latest")
+        tag = data.get("tag_name")
+        if isinstance(tag, str) and _parse_release_tag(tag) is not None:
+            return tag
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        logger.debug("GitHub /releases/latest unavailable: %s", exc)
+    try:
+        tags = _get_json(f"{base}/tags?per_page=100")
+        best = None
+        for entry in tags if isinstance(tags, list) else []:
+            name = entry.get("name") if isinstance(entry, dict) else None
+            version = _parse_release_tag(name) if isinstance(name, str) else None
+            if version is not None and (best is None or version > best[0]):
+                best = (version, name)
+        return best[1] if best else None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        logger.debug("GitHub /tags unavailable: %s", exc)
+        return None
+
+
 def _is_zip_staging_artifact_status_line(line: str) -> bool:
     """True when a porcelain status line is our own two-phase-swap artifact."""
     payload = line[3:] if len(line) >= 3 else line
@@ -1859,8 +1974,20 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         )
         _m().sys.exit(1)
     _abort_zip_update_if_dirty_tree()
+    # Stable channel: pull the archive of the release tag, not main. The ZIP
+    # path runs when git file I/O is broken. Thus resolve the tag with the
+    # GitHub API, not with git. No git invocation is necessary.
+    zip_ref = f"refs/heads/{branch}"
+    if _stable_channel_active(args):
+        tag = _github_latest_release_tag()
+        if tag is None:
+            print("✗ Hermes cannot resolve the latest release from the GitHub API.")
+            print("  Switch channels with: hermes update --set-channel main")
+            _m().sys.exit(1)
+        print(f"→ Update channel: stable. Hermes downloads release {tag}.")
+        zip_ref = f"refs/tags/{tag}"
     zip_url = (
-        f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
+        f"https://github.com/NousResearch/hermes-agent/archive/{zip_ref}.zip"
     )
 
     print("→ Downloading latest version...")
@@ -2042,55 +2169,21 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
     _m()._abort_dependency_sync_if_self_locked()
     print("→ Updating Python dependencies...")
 
-    from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+    import pm
 
-    # Keep managed uv current — runs `uv self update` if we already have one.
-    update_managed_uv()
+    try:
+        pm.sync_venv(["all"], explicit=True)
+    except _shim_quarantine_error_type() as _sqe:
+        # #87331: this runs inside the ZIP-fallback error handler, so the
+        # boundary except clause in cmd_update cannot catch it — refuse
+        # here with the same defer-via-marker contract.
+        _refuse_update_for_contended_shims(_sqe)
+    except pm.InstallError as _sync_err:
+        print(f"  ✗ {_sync_err}")
+        print("  Re-run `hermes update` (or `hermes pm install`) once resolved.")
 
-    uv_bin = ensure_uv()
-
-    pip_cmd = [_m().sys.executable, "-m", "pip"]
-    if not uv_bin:
-        uv_bin = _ensure_uv_for_termux(pip_cmd)
-    if uv_bin:
-        # Same third-party UV-env isolation as the main update path (#83914):
-        # a user-level UV_PYTHON_INSTALL_DIR / UV_PYTHON from unrelated
-        # software must not steer which interpreter uv resolves here.
-        from hermes_cli.managed_uv import managed_python_env
-
-        uv_env = managed_python_env()
-        uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-        if _m()._is_termux_env(uv_env):
-            uv_env.pop("PYTHONPATH", None)
-            uv_env.pop("PYTHONHOME", None)
-        try:
-            _m()._install_python_dependencies_with_optional_fallback([uv_bin, "pip"], env=uv_env)
-        except _shim_quarantine_error_type() as _sqe:
-            # #87331: this runs inside the ZIP-fallback error handler, so the
-            # boundary except clause in cmd_update cannot catch it — refuse
-            # here with the same defer-via-marker contract.
-            _refuse_update_for_contended_shims(_sqe)
-    else:
-        # Use sys.executable to explicitly call the venv's pip module,
-        # avoiding PEP 668 'externally-managed-environment' errors on Debian/Ubuntu.
-        # Some environments lose pip inside the venv; bootstrap it back with
-        # ensurepip before trying the editable install.
-        try:
-            subprocess.run(
-                pip_cmd + ["--version"],
-                cwd=_m().PROJECT_ROOT,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            subprocess.run(
-                [_m().sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
-                cwd=_m().PROJECT_ROOT,
-                check=True,
-            )
-        _m()._install_python_dependencies_with_optional_fallback(pip_cmd)
-
-    install_prefix = [uv_bin, "pip"] if uv_bin else pip_cmd
+    uv_bin, uv_env = pm.uv(venv=_m().PROJECT_ROOT / "venv")
+    install_prefix = [uv_bin, "pip"] if uv_bin else [_m().sys.executable, "-m", "pip"]
     install_env = uv_env if uv_bin else None
     _m()._restore_active_tool_dependencies(
         active_tool_dependencies,
@@ -2946,11 +3039,14 @@ def _clear_fleet_restart_pending_marker() -> None:
 def _current_checkout_sha() -> str | None:
     """Current on-disk checkout HEAD, or None if it cannot be resolved."""
     try:
-        from hermes_cli.build_info import get_code_identity
+        from hermes_cli.version_info import get_code_identity
 
         sha = (get_code_identity(refresh=True) or {}).get("sha")
         return str(sha) if sha else None
     except Exception:
+        # get_code_identity raises only on a mispackaged stamp (missing
+        # updateMechanism / 'light' payload); a live git checkout is the
+        # correct fallback for dev trees.
         return _capture_head_sha(["git"], _m().PROJECT_ROOT)
 
 
@@ -3294,34 +3390,15 @@ def _filter_non_gateway_concurrent_instances(
             non_gateway.append((pid, name))
     return non_gateway
 
-def _upgrade_pip_before_lazy_refresh(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Upgrade pip before lazy-backend refreshes.
-
-    Older pip (e.g. 24.0 on Python 3.11) can fail setuptools-backed source
-    builds during lazy installs and leave a partially-written venv (#57828).
-    Never raises.
-    """
-    try:
-        _m()._run_package_only_install(
-            install_cmd_prefix + ["install", "--upgrade", "pip"],
-            env=env,
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.debug("pip upgrade before lazy refresh failed: %s", exc)
-
 
 def _capture_active_lazy_features() -> list[str]:
-    """Snapshot active lazy backends before a managed runtime is replaced."""
+    """Snapshot the venv's enabled extras before a managed runtime is replaced."""
     try:
-        from tools import lazy_deps
+        import pm
 
-        return lazy_deps.active_features()
+        return pm.enabled_extras()
     except Exception as exc:
-        logger.debug("Could not snapshot active lazy features: %s", exc)
+        logger.debug("Could not snapshot enabled extras: %s", exc)
         return []
 
 
@@ -3396,7 +3473,7 @@ def _restore_active_tool_dependencies(
     failed: list[tuple[str, str]] = []
     for name, install_args in missing:
         try:
-            _m()._run_package_only_install(
+            _m()._run_install_with_heartbeat(
                 install_cmd_prefix + ["install", *install_args, "--quiet"],
                 env=env,
             )
@@ -3415,116 +3492,23 @@ def _restore_active_tool_dependencies(
         print(f"  ⚠ {name} failed to restore: {reason}")
 
 
-def _refresh_active_lazy_features(
-    install_cmd_prefix: list[str] | None = None,
-    *,
-    env: dict[str, str] | None = None,
-    features: list[str] | None = None,
-) -> bool:
-    """Refresh lazy-installed backends after a code update.
+def _refresh_active_lazy_features(features: list[str] | None = None) -> bool:
+    """Re-sync the venv's enabled extras against the (possibly new) uv.lock.
 
-    When pyproject.toml's ``[all]`` extra was slimmed down (May 2026), most
-    optional backends moved to ``tools/lazy_deps.py`` and only install on
-    first use. ``hermes update`` runs ``uv pip install -e .[all]`` which
-    leaves those packages untouched — so if we bump a pin in
-    :data:`LAZY_DEPS` (CVE response, transitive bug fix), users who already
-    activated the backend keep the stale version forever.
-
-    This function asks lazy_deps which features the user has previously
-    activated and reinstalls them under the current pins. Features the
-    user never enabled stay quiet — no churn for cold backends.
-
-    Returns True when the venv is safe to use (refresh succeeded, or no
-    active lazy backends, or post-failure import repair succeeded). Returns
-    False when a failed lazy install left broken core imports that automatic
-    repair could not fix (#57828).
-
-    Never raises. A failure here must not block the rest of the update.
+    Extras live in the installed-state file and uv.lock owns every pin, so
+    a post-update refresh is one sync_venv() call: it re-installs exactly
+    the locked versions of everything enabled. Never raises.
     """
     try:
-        from tools import lazy_deps
+        from pm.ensure import sync_venv
+
+        sync_venv(features, explicit=True)
+        return True
     except Exception as exc:
-        logger.debug("Lazy refresh skipped (import failed): %s", exc)
-        return True
-
-    if features is None:
-        try:
-            active = lazy_deps.active_features()
-        except Exception as exc:
-            logger.debug("Lazy refresh skipped (active_features failed): %s", exc)
-            return True
-    else:
-        active = features
-
-    if not active:
-        return True
-
-    print()
-    print(f"→ Refreshing {len(active)} active lazy backend(s)...")
-
-    unexpected_failure = False
-    try:
-        if features is None:
-            results = lazy_deps.refresh_active_features(prompt=False)
-        else:
-            results = lazy_deps.restore_features(active)
-    except Exception as exc:
-        # refresh_active_features is documented as never-raise, but defend
-        # the update flow against future regressions.
-        print(f"  ⚠ Lazy refresh failed unexpectedly: {exc}")
-        results = {}
-        unexpected_failure = True
-
-    refreshed = [f for f, s in results.items() if s in {"refreshed", "restored"}]
-    current = [f for f, s in results.items() if s == "current"]
-    failed = [(f, s) for f, s in results.items() if s.startswith("failed:")]
-    skipped = [(f, s) for f, s in results.items() if s.startswith("skipped:")]
-
-    if refreshed:
-        print(f"  ↑ {len(refreshed)} refreshed: {', '.join(refreshed)}")
-    if current:
-        print(f"  ✓ {len(current)} already current")
-    if skipped:
-        # Most common reason: security.allow_lazy_installs=false. Show one
-        # line so the user knows why; not an error.
-        names = ", ".join(f for f, _ in skipped)
-        reason = skipped[0][1].split(": ", 1)[-1]
-        print(f"  · {len(skipped)} skipped ({reason}): {names}")
-
-    if not failed and not unexpected_failure:
-        return True
-
-    for feature, status in failed:
-        reason = status.split(": ", 1)[-1]
-        # Clip noisy pip stderr to keep update output legible.
-        if len(reason) > 200:
-            reason = reason[:200] + "..."
-        print(f"  ⚠ {feature} failed to refresh: {reason}")
-
-    if install_cmd_prefix is None:
-        print("  ⚠ Lazy refresh failed; rerun `hermes update` once resolved.")
+        print(f"  ⚠ Extra re-sync failed: {exc}")
+        print("  Rerun `hermes update` (or `hermes pm install`) once resolved.")
         return False
 
-    # Immediate import-based recovery — metadata-only verifiers miss the case
-    # where DISTRIBUTION-INFO remains but import files were wiped (#57828).
-    # Unavailable probes are indeterminate, not healthy — keep the lazy marker.
-    status = _m()._repair_venv_via_import_probes(install_cmd_prefix, env=env)
-    if status == "repaired":
-        print(
-            "  Lazy backend(s) keep their previous version until refresh succeeds."
-        )
-        return True
-    if status == "healthy":
-        print(
-            "  Lazy backend(s) keep their previous version; probed packages look intact."
-        )
-        print("  Rerun `hermes update` once the upstream issue is resolved.")
-        return True
-    if status == "indeterminate":
-        print(
-            "  ⚠ Leaving `.lazy-refresh-incomplete` until import probes can confirm health."
-        )
-    return False
 
 def _refresh_active_memory_provider_dependencies() -> None:
     """Refresh pip dependencies for the configured external memory provider.
@@ -3574,80 +3558,6 @@ def _refresh_active_memory_provider_dependencies() -> None:
     except Exception as exc:
         print(f"  ⚠ {provider} dependencies failed to refresh: {exc}")
 
-def _is_android_python() -> bool:
-    return _m().sys.platform == "android"
-
-def _install_psutil_android_compat(
-    install_cmd_prefix: list[str],
-    *,
-    env: dict[str, str] | None = None,
-) -> None:
-    """Install psutil on Android by patching upstream platform detection.
-
-    psutil's setup currently gates Linux sources behind
-    ``sys.platform.startswith('linux')``. On Termux Python reports
-    ``sys.platform == 'android'``, so setup aborts with
-    "platform android is not supported" despite compiling fine when using the
-    Linux source path.
-
-    We patch only the extracted build tree used for this install attempt;
-    nothing is persisted in the repository.
-
-    Stopgap: remove this once https://github.com/giampaolo/psutil/pull/2762
-    merges and ships in a release. The standalone installer script uses the
-    same shared helper and should be removed together.
-    """
-    import tempfile
-    import urllib.request
-    from hermes_cli.psutil_android import PSUTIL_URL, prepare_patched_psutil_sdist
-
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        archive = tmp_path / "psutil.tar.gz"
-        urllib.request.urlretrieve(PSUTIL_URL, archive)
-        src_root = prepare_patched_psutil_sdist(archive, tmp_path)
-
-        _m()._run_install_with_heartbeat(
-            install_cmd_prefix + ["install", "--no-build-isolation", str(src_root)],
-            env=env,
-        )
-
-def _ensure_uv_for_termux(pip_cmd: list[str]) -> str | None:
-    """Best-effort uv bootstrap on Termux for faster update installs.
-
-    The normal path (``ensure_uv()`` in managed_uv) installs the managed
-    standalone uv into ``$HERMES_HOME/bin/uv``, but on Termux the official
-    installer may not work (glibc vs bionic).  Prefer a uv already on PATH
-    (e.g. ``pkg install uv``); only if there is none do we fall back to a
-    wheel-only ``pip install uv`` so we never source-build the Rust crate.
-    """
-    from hermes_cli.managed_uv import resolve_uv
-
-    existing = resolve_uv()
-    if existing:
-        return existing
-    if not _m()._is_termux_env():
-        return None
-    # A Termux-packaged uv lands on PATH but not in the managed bin dir, so
-    # resolve_uv() misses it. Use it before pip, which has no Android wheel and
-    # would otherwise build uv from source on a low-memory device.
-    system_uv = shutil.which("uv")
-    if system_uv:
-        return system_uv
-    try:
-        print("  → Termux detected: trying to install uv for faster dependency updates...")
-        result = subprocess.run(
-            pip_cmd + ["install", "uv", "--only-binary", ":all:"],
-            cwd=_m().PROJECT_ROOT,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
-    except Exception:
-        pass
-    # After pip install, check managed path first, then PATH
-    return resolve_uv() or shutil.which("uv")
-
 def _npm_manifest_paths() -> tuple[Path, ...]:
     """Manifests whose changes must defeat the update-skip.
 
@@ -3670,7 +3580,7 @@ def _npm_manifest_paths() -> tuple[Path, ...]:
     root_pkg = _m().PROJECT_ROOT / "package.json"
     paths = [_m().PROJECT_ROOT / "package-lock.json", root_pkg]
     try:
-        workspaces = json.loads(root_pkg.read_text(encoding="utf-8")).get(
+        workspaces = json.loads(root_pkg.read_text(encoding="utf-8-sig")).get(
             "workspaces", []
         )
         if isinstance(workspaces, dict):  # legacy {"packages": [...]} form
@@ -3723,7 +3633,7 @@ def _npm_lockfile_changed(hermes_root: Path) -> bool:
         cache_file = hermes_root / f".npm_lock_hash_{cache_key}"
         if not cache_file.exists():
             return True
-        return cache_file.read_text(encoding="utf-8").strip() != current
+        return cache_file.read_text(encoding="utf-8-sig").strip() != current
     except OSError:
         return True
 
@@ -4027,6 +3937,40 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     if swept:
         print(f"  (removed {len(swept)} aborted-fetch pack temp file(s))")
 
+    # Stable channel: if the caller did not ask for a branch, the question is
+    # "is there a newer tagged release?". The question is not "are there new
+    # commits on main?". Compare against the newest release tag and return.
+    if not branch_explicit:
+        if _stable_channel_active(None):
+            print("→ Update channel: stable (tagged releases)")
+            tag, tag_sha = _resolve_latest_release_tag(git_cmd, _m().PROJECT_ROOT)
+            if tag is None:
+                print("✗ No release tags found on origin. A check of the stable channel is not possible.")
+                print("  Switch channels with: hermes update --set-channel main")
+                sys.exit(1)
+            head_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
+            # Newer releases possibly do not exist locally yet. "At the tag"
+            # is a SHA comparison. The merge-base check tells us whether HEAD
+            # contains the tag (HEAD is ahead of the release or at the release).
+            at_or_past_tag = False
+            if head_sha and tag_sha:
+                if head_sha == tag_sha:
+                    at_or_past_tag = True
+                else:
+                    contained = subprocess.run(
+                        git_cmd + ["merge-base", "--is-ancestor", tag_sha, "HEAD"],
+                        cwd=_m().PROJECT_ROOT,
+                        capture_output=True,
+                        text=True, encoding="utf-8", errors="replace",
+                    )
+                    at_or_past_tag = contained.returncode == 0
+            if at_or_past_tag:
+                print(f"✓ Up to date with the latest release ({tag}).")
+            else:
+                print(f"→ New release available: {tag}")
+                print("  Run `hermes update` to install it.")
+            return
+
     # Fetch only the branch we compare against; prefer upstream as the canonical
     # reference. A bare `git fetch <remote>` pulls every ref, and this repo has
     # thousands of auto-generated branches, so scope the fetch to <branch>.
@@ -4230,7 +4174,7 @@ def _ensure_fhs_path_guard() -> None:
         if not cfg.is_file():
             continue
         try:
-            existing = cfg.read_text(errors="replace", encoding="utf-8")
+            existing = cfg.read_text(errors="replace", encoding="utf-8-sig")
         except OSError:
             continue
         # Idempotency: skip if any uncommented PATH= line already references
@@ -4864,7 +4808,7 @@ def _dependency_sync_would_rewrite(dist_name: str) -> bool | None:
         from packaging.version import Version
 
         pyproject = _m().PROJECT_ROOT / "pyproject.toml"
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
         project = data.get("project") or {}
         req_strings: list[str] = list(project.get("dependencies") or [])
         for extra_reqs in (project.get("optional-dependencies") or {}).values():
@@ -7651,9 +7595,31 @@ def _cmd_update_impl(args, gateway_mode: bool):
         if swept:
             print("  (removed %d aborted-fetch pack temp file(s))" % len(swept))
 
+        # target_ref is the reference that we count against, fast-forward to,
+        # and reset to. On the main channel it is origin/<branch>. That is the
+        # historical behavior. On the stable channel it is the commit of the
+        # newest release tag. The current branch pointer fast-forwards to the
+        # release. Thus the checkout keeps its branch shape (no detached HEAD).
+        # The next stable update then fast-forward merges to the next tag.
+        target_ref = f"origin/{branch}"
+        stable_tag = None
+        if _stable_channel_active(args):
+            print("→ Update channel: stable (tagged releases)")
+            stable_tag, _stable_tag_sha = _resolve_latest_release_tag(
+                git_cmd, _m().PROJECT_ROOT
+            )
+            if stable_tag is None:
+                print("✗ No release tags found on origin. An update on the stable channel is not possible.")
+                print("  Switch channels with: hermes update --set-channel main")
+                _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
+                sys.exit(1)
+            print(f"→ Latest release: {stable_tag}")
+            target_ref = stable_tag
+
         print("→ Fetching updates...")
+        fetch_target = ["tag", stable_tag] if stable_tag else [branch]
         fetch_result = subprocess.run(
-            git_cmd + ["fetch", "origin", branch],
+            git_cmd + ["fetch", "origin", *fetch_target],
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
@@ -7701,7 +7667,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
         #                    stale tree.
         parked_branch_switched = False
         in_place_update = False
-        if current_branch != branch and current_branch != "HEAD":
+        # Stable channel: the checkout does NOT switch branches. The current
+        # branch pointer fast-forwards (or merges) to the release tag's
+        # commit, so the parked-branch machinery below is main-channel only.
+        if stable_tag is None and current_branch != branch and current_branch != "HEAD":
             switch_safe, switch_block_reason = _m()._assess_parked_branch_switch(
                 git_cmd, _m().PROJECT_ROOT, current_branch, branch
             )
@@ -7769,7 +7738,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     f"(fully merged) — switching back to {branch}..."
                 )
 
-        if not in_place_update and current_branch != branch:
+        if stable_tag is None and not in_place_update and current_branch != branch:
             if current_branch == "HEAD":
                 print(
                     f"  ⚠ Currently on detached HEAD — switching to {branch} "
@@ -7825,7 +7794,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # 0), so keep it, but treat the shallow NUMBER as unknown and recover
         # the real one via the GitHub compare API when possible.
         result = subprocess.run(
-            git_cmd + ["rev-list", f"HEAD..origin/{branch}", "--count"],
+            git_cmd + ["rev-list", f"HEAD..{target_ref}", "--count"],
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
@@ -7851,7 +7820,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 text=True, encoding="utf-8", errors="replace",
             ).stdout.strip()
             target_sha = subprocess.run(
-                git_cmd + ["rev-parse", f"origin/{branch}"],
+                git_cmd + ["rev-parse", target_ref],
                 cwd=_m().PROJECT_ROOT, capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
             ).stdout.strip()
@@ -7928,19 +7897,16 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     check=False,
                 )
 
-            # "No new commits" does not mean the managed interpreter is safe.
-            # uv can retain the same CPython patch while python-build-standalone
-            # refreshes the embedded SQLite underneath it. Keep the existing
-            # update-boundary hook active on this retry path too.
-            from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+            # "No new commits" does not mean the venv is safe: pm owns the uv
+            # pin now — a pin bump realizes a NEW entry on the next ensure.
+            # The update command is the one caller that must SEE realization
+            # failures, so use the raising API, not the None-swallowing uv().
+            import pm
 
-            runtime_repairs = []
-            update_managed_uv(repair_observer=runtime_repairs.append)
-            ensure_uv(repair_observer=runtime_repairs.append)
-            runtime_repaired = next(
-                (result for result in runtime_repairs if result.repaired),
-                None,
-            )
+            try:
+                pm.ensure("uv")
+            except pm.InstallError as e:
+                print(f"⚠ Managed uv unavailable: {e}")
 
             # A current checkout does NOT imply a healthy install: a previous
             # dependency sync may have failed partway (classic on Windows,
@@ -7968,9 +7934,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # too — same mapped-extension hazard as the update sync.
                 _m()._abort_dependency_sync_if_self_locked(_windows_gateway_resume)
                 _write_update_incomplete_marker()
-                from hermes_cli.managed_uv import ensure_uv
+                import pm
 
-                repair_uv = ensure_uv()
+                repair_uv, repair_env = pm.uv(venv=_m().PROJECT_ROOT / "venv")
                 # A managed install whose venv is gone entirely (interrupted
                 # repair after the old venv was moved aside) needs the venv
                 # recreated before dependencies can be installed into it.
@@ -7986,34 +7952,17 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         cwd=_m().PROJECT_ROOT,
                         check=False,
                     )
+                try:
+                    pm.sync_venv(["all"] + list(active_lazy_features or []), explicit=True)
+                except pm.InstallError as _sync_err:
+                    print(f"  ✗ {_sync_err}")
                 if repair_uv:
-                    # Isolated from third-party UV env vars (#83914), same as
-                    # the main-path and git-path dependency syncs.
-                    from hermes_cli.managed_uv import managed_python_env
-
-                    repair_env = managed_python_env()
-                    repair_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-                    _m()._install_python_dependencies_with_optional_fallback(
-                        [repair_uv, "pip"], env=repair_env, group="all"
-                    )
-                    _m()._refresh_active_lazy_features(
-                        [repair_uv, "pip"],
-                        env=repair_env,
-                        features=active_lazy_features,
-                    )
                     _m()._restore_active_tool_dependencies(
                         active_tool_dependencies,
                         [repair_uv, "pip"],
                         env=repair_env,
                     )
                 else:
-                    _m()._install_python_dependencies_with_optional_fallback(
-                        [sys.executable, "-m", "pip"], group="all"
-                    )
-                    _m()._refresh_active_lazy_features(
-                        [sys.executable, "-m", "pip"],
-                        features=active_lazy_features,
-                    )
                     _m()._restore_active_tool_dependencies(
                         active_tool_dependencies,
                         [sys.executable, "-m", "pip"],
@@ -8043,16 +7992,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         else "✓ Up to date with your fork (official repo not checked)."
                     ),
                 )
-            if runtime_repaired is not None and not _m()._is_windows():
-                print()
-                print(
-                    "⚠ Restart required to finish the managed Python runtime repair."
-                )
-                print(
-                    "  Any running Hermes gateways, Desktop backends, or other "
-                    "long-lived processes still use the previous runtime."
-                )
-                print("  Restart each of them to pick up the repaired runtime.")
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
             # Git is current, but a prior pull may still owe the fleet a
             # restart (#95294). Catch up even on the "Already up to date"
@@ -8084,7 +8023,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # `pull --ff-only origin <branch>` given the fresh tracking ref;
             # the divergence fallback below is unchanged.
             pull_result = subprocess.run(
-                git_cmd + ["merge", "--ff-only", f"origin/{branch}"],
+                git_cmd + ["merge", "--ff-only", target_ref],
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
@@ -8342,84 +8281,25 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # via ``_recover_from_interrupted_install``. Cleared after the core
         # ``.[all]`` install completes — lazy refresh uses a separate marker.
         _write_update_incomplete_marker()
-        deps_current = _editable_install_is_current(
-            git_cmd, _m().PROJECT_ROOT, pre_pull_sha
-        )
-        if deps_current:
-            print("→ Python dependencies unchanged — skipping reinstall")
-        else:
-            print("→ Updating Python dependencies...")
-        from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+        print("→ Syncing Python dependencies...")
+        import pm
 
-        # Keep managed uv current — runs `uv self update` if we already have one.
-        update_managed_uv()
+        try:
+            pm.sync_venv(["all"], explicit=True)
+            deps_synced = True
+        except pm.InstallError as _sync_err:
+            deps_synced = False
+            print(f"  ✗ {_sync_err}")
+            print("  Re-run `hermes update` (or `hermes pm install`) once resolved.")
 
-        uv_bin = ensure_uv()
-
+        uv_bin, uv_env = pm.uv(venv=_m().PROJECT_ROOT / "venv")
         pip_cmd = [sys.executable, "-m", "pip"]
-        if not uv_bin:
-            uv_bin = _ensure_uv_for_termux(pip_cmd)
-        install_group = "all"
-
-        if uv_bin:
-            # Use official managed_python_env() isolation so third-party
-            # UV_PYTHON_INSTALL_DIR (e.g. WorkBuddy) cannot hijack uv; then
-            # point VIRTUAL_ENV at this install's venv.
-            from hermes_cli.managed_uv import managed_python_env
-
-            uv_env = managed_python_env()
-            uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
-            if _m()._is_termux_env(uv_env):
-                uv_env.pop("PYTHONPATH", None)
-                uv_env.pop("PYTHONHOME", None)
-                install_group = "termux-all"
-                print("  → Termux detected: using uv + curated termux-all optional profile...")
-            if not deps_current:
-                if _m()._is_termux_env(uv_env) and _is_android_python():
-                    print("  → Termux/Android detected: prebuilding psutil with Linux source path compatibility...")
-                    _install_psutil_android_compat([uv_bin, "pip"], env=uv_env)
-                _m()._install_python_dependencies_with_optional_fallback(
-                    [uv_bin, "pip"], env=uv_env, group=install_group
-                )
-        else:
-            # Use sys.executable to explicitly call the venv's pip module,
-            # avoiding PEP 668 'externally-managed-environment' errors on Debian/Ubuntu.
-            # Some environments lose pip inside the venv; bootstrap it back with
-            # ensurepip before trying the editable install.
-            pip_cmd = [sys.executable, "-m", "pip"]
-            try:
-                subprocess.run(
-                    pip_cmd + ["--version"],
-                    cwd=_m().PROJECT_ROOT,
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError:
-                subprocess.run(
-                    [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
-                    cwd=_m().PROJECT_ROOT,
-                    check=True,
-                )
-            if _m()._is_termux_env():
-                install_group = "termux-all"
-                print("  → Termux detected: using curated termux-all optional profile...")
-            if not deps_current:
-                if _m()._is_termux_env() and _is_android_python():
-                    print("  → Termux/Android detected: prebuilding psutil with Linux source path compatibility...")
-                    _install_psutil_android_compat(pip_cmd)
-                _m()._install_python_dependencies_with_optional_fallback(pip_cmd, group=install_group)
-
         install_prefix = [uv_bin, "pip"] if uv_bin else pip_cmd
         lazy_env = uv_env if uv_bin else None
 
-        if deps_current:
-            # The verification normally runs inside the install we just
-            # skipped. Run it here so a wrong skip self-heals into a real
-            # install (both verifiers reinstall what they find missing)
-            # instead of leaving a venv nobody checked.
-            _m()._verify_core_dependencies_installed(
-                install_prefix, env=lazy_env, group=install_group
-            )
+        if deps_synced:
+            # Console-script shims aren't covered by the sync stamp — verify
+            # them so a venv whose Scripts/ was clobbered self-heals.
             _m()._verify_console_scripts_installed(install_prefix, env=lazy_env)
 
         # Core ``.[all]`` install finished. Clear the generic core breadcrumb
@@ -8431,7 +8311,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # The update process is still the old Python interpreter process. Run
         # one final cache/module refresh immediately before lazy backend
         # refresh, which imports newly-pulled modules that may depend on fresh
-        # symbols in hermes_constants or lazy_deps. The dependency install
+        # symbols in hermes_constants or pm. The dependency install
         # above may also have regenerated bytecode from build-cache copies —
         # this second sweep catches those stragglers (#60242, #65240).
         removed = _m()._clear_bytecode_cache(_m().PROJECT_ROOT)
@@ -8443,18 +8323,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
         _m()._refresh_bootstrap_cache_scripts(branch)
         _m()._reload_updated_runtime_modules()
 
-        # Upgrade pip before lazy refreshes — stale pip can fail source builds
-        # and leave partially-written packages (#57828).
         _write_lazy_refresh_incomplete_marker()
-        _m()._upgrade_pip_before_lazy_refresh(install_prefix, env=lazy_env)
-
-        # Lazy refresh can corrupt the venv when a backend install fails.
-        # Clear the lazy marker only when refresh/repair is confirmed healthy.
-        lazy_ok = _m()._refresh_active_lazy_features(
-            install_prefix,
-            env=lazy_env,
-            features=active_lazy_features,
-        )
+        lazy_ok = _m()._refresh_active_lazy_features(active_lazy_features)
         if lazy_ok:
             _m()._clear_lazy_refresh_incomplete_marker()
         else:

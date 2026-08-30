@@ -7,7 +7,8 @@ const copy = {
   availableBody: 'A new version of Hermes is ready to install.',
   availableTitleBackend: 'Backend update available',
   availableBodyBackend: 'A newer version of the connected Hermes backend is ready to install.',
-  availableBodyNoChangelog: 'A newer version is ready. Release notes aren’t available for this install type.'
+  availableBodyNoChangelog: 'A newer version is ready. Release notes aren’t available for this install type.',
+  availableBodyRelease: (tag: string) => `Hermes ${tag} is ready to install.`
 }
 
 describe('resolveUpdateCopy', () => {
@@ -34,5 +35,22 @@ describe('resolveUpdateCopy', () => {
     const r = resolveUpdateCopy({ target: 'client', shownItems: 0, copy })
     expect(r.title).toBe('New update available')
     expect(r.body).toBe(copy.availableBodyNoChangelog)
+  })
+
+  it('stable channel with a known tag names the release, not the commit count', () => {
+    const r = resolveUpdateCopy({
+      target: 'client',
+      shownItems: 0,
+      channel: 'stable',
+      latestTag: 'v0.18.0',
+      copy
+    })
+
+    expect(r.body).toBe('Hermes v0.18.0 is ready to install.')
+  })
+
+  it('stable channel without a tag falls back to the generic release body', () => {
+    const r = resolveUpdateCopy({ target: 'client', shownItems: 0, channel: 'stable', copy })
+    expect(r.body).toBe(copy.availableBody)
   })
 })

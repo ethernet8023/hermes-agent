@@ -4,6 +4,7 @@ and hand back its composed environment."""
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 from typing import Optional
 
 from pm import paths
@@ -170,12 +171,69 @@ def _install(
             package.migrate(previous, version)
 
 
+def stage_only(name: str, target: str, progress=None) -> "Path":
+    """Cross-target staging: publish the pinned (package, version, target)
+    entry into the store and return its path. No facts are written and no
+    Runner is composed -- the staged binaries belong to ANOTHER machine
+    (e.g. linux-arm64-bionic .debs staged on a glibc CI host); this host's
+    installed-state must not learn about them. Idempotent: an already
+    published + verifying entry is returned as-is.
+    """
+    lockfile = _lockfile()
+    facts = _facts()
+    store = _store()
+    package = get_package(name)
+    version = lockfile.version(package.name)
+    if version is None:
+        raise InstallError(package.name, "not in the lockfile")
+    reason = package.missing_reason(target)
+    if reason is not None:
+        raise InstallError(package.name, f"unavailable on {target}: {reason}")
+    if getattr(package, "pin_only", False):
+        # A pure pin (e.g. the termux-docker digest): no bytes, no store
+        # entry, nothing to verify locally -- the pin IS the artifact.
+        return store.root / package.store_entry(version, target)
+    artifacts = lockfile.artifacts(package.name, target)
+    entry_name = package.store_entry(version, target)
+    with store.install_lock():
+        entry = store.entry(entry_name)
+        if store.published(entry_name) and not package.verify(entry, target):
+            shutil.rmtree(entry, ignore_errors=True)
+        if not store.published(entry_name):
+            if not artifacts:
+                raise InstallError(
+                    package.name,
+                    f"no artifact for {target} in the lockfile",
+                    "run `hermes pm lock --bump` for this package",
+                )
+            with store.scratch() as scratch:
+                staged = scratch / "tree"
+                for index, artifact in enumerate(artifacts):
+                    archive = store.fetch(
+                        artifact["url"], artifact["sha256"], scratch,
+                        progress=_artifact_progress(progress, index, len(artifacts)),
+                    )
+                    if index == 0:
+                        package.unpack(archive, staged, target)
+                    else:
+                        extra = scratch / f"extra-{index}"
+                        package.unpack(archive, extra, target)
+                        merge_tree(extra, staged)
+                package.stage(store, staged, version, target)
+                store.publish(staged, entry_name)
+        reason = package.verify(store.entry(entry_name), target)
+        if reason:
+            raise InstallError(package.name, f"published entry failed verification: {reason}")
+    return store.entry(entry_name)
+
+
 def ensure(
     name: str,
     *,
     base_env: Optional[dict] = None,
     explicit: bool = False,
     progress=None,
+    target: Optional[str] = None,
 ) -> Runner:
     """``explicit`` marks a deliberate install command (`hermes pm
     install`, `hermes pm bundle`) — those ARE the remedy the lazy-install
@@ -191,7 +249,7 @@ def ensure(
     lockfile = _lockfile()
     facts = _facts()
     store = _store()
-    target = current_target()
+    target = target or current_target()
 
     chain = walk([name])
     missing = [

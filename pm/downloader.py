@@ -30,11 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-# GitHub's release-asset CDN (release-assets.githubusercontent.com, which
-# TUR's pool 302s to) 403s unknown tool UAs from CI runner IP ranges --
-# their docs require a real User-Agent. A browser-shaped one is the
-# least-privileged string every asset CDN accepts.
-_UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) hermes-pm/1.0"}
+_UA = {"User-Agent": "hermes-pm"}
 _LOOPBACK = ("http://127.0.0.1:", "http://localhost:", "http://[::1]:")
 _CHUNK = 1 << 20  # read/write block, also the minimum range size
 
@@ -47,17 +43,7 @@ class _HttpsRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not (newurl.startswith("https://") or newurl.startswith(_LOOPBACK)):
             raise DownloadError(f"refusing redirect to non-https url: {newurl}")
-        forwarded = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if forwarded is not None:
-            # urllib's default redirect DROPS custom headers (rebuilds the
-            # request from the URL alone). Release-asset CDNs (GitHub's,
-            # TUR's) 403 requests without a real User-Agent, so the pin
-            # fetch died on the redirect hop. Carry our headers forward.
-            carried = dict(req.headers)
-            carried.pop("Host", None)
-            for k, v in carried.items():
-                forwarded.add_header(k, v)
-        return forwarded
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 _OPENER = urllib.request.build_opener(_HttpsRedirectHandler())

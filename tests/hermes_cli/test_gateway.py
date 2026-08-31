@@ -1177,16 +1177,65 @@ def _seal_project_root(monkeypatch, tmp_path) -> Path:
     return root
 
 
-def test_apt_termux_refusal_helper_keys_on_steward_stamp(
+def test_apt_termux_probe_keys_on_steward_stamp(
     monkeypatch, tmp_path
 ):
-    """The refusal fires only for a sealed apt-termux tree."""
+    """The apt-termux probe fires only for a sealed apt-termux tree."""
     _seal_project_root(monkeypatch, tmp_path)
-    assert gateway._apt_termux_no_service_manager_refusal() is True
+    assert gateway._is_apt_termux_install() is True
 
-    # A git checkout (the repo itself) is not steward-owned: no refusal.
+    # A git checkout (the repo itself) is not steward-owned: not apt-termux.
     monkeypatch.setattr(gateway, "PROJECT_ROOT", Path(__file__).parent.parent)
-    assert gateway._apt_termux_no_service_manager_refusal() is False
+    assert gateway._is_apt_termux_install() is False
+
+
+def test_detached_start_guidance_shared_by_apt_termux_and_launchd(monkeypatch, tmp_path, capsys):
+    """Both detached-start sites ride one helper. The apt-termux start path
+    prints its exact guidance lines via ``_start_detached_with_guidance``
+    (messages must stay byte-identical), and the launchd fallback wrapper
+    delegates to the same helper."""
+    _seal_project_root(monkeypatch, tmp_path)
+    printed = []
+    monkeypatch.setattr(
+        gateway, "_start_detached_with_guidance",
+        lambda **kwargs: printed.append(kwargs) or True,
+    )
+
+    gateway._gateway_command_inner(argparse.Namespace(gateway_command="start"))
+
+    (kwargs,) = printed  # the apt-termux branch called the shared helper once
+    assert kwargs["success_started"] == "✓ Started gateway as a background process"
+    assert (
+        kwargs["success_restart"]
+        == "  It will NOT auto-start at boot or auto-restart on crash."
+    )
+    assert kwargs["failure_hint"] is gateway._apt_termux_nohup_hint
+
+
+def test_launchd_fallback_wraps_shared_detached_start(monkeypatch, capsys):
+    """The launchd fallback is a thin pre-lines wrapper over the shared
+    helper: same spawn, same manual-hint failure path, same exit-on-fail."""
+    calls = []
+
+    def fake_helper(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(gateway, "_start_detached_with_guidance", fake_helper)
+    monkeypatch.setattr(gateway, "_write_launchd_unsupported_marker", lambda: None)
+
+    assert gateway._launchd_fallback_to_detached("test reason") is True
+
+    (kwargs,) = calls
+    assert kwargs["pre_lines"] == (
+        "⚠ launchd cannot manage the gateway on this macOS version (test reason).",
+    )
+    assert kwargs["success_started"] == "✓ Started gateway as a background process instead"
+    assert (
+        kwargs["success_restart"]
+        == "  It will NOT auto-start at login or auto-restart on crash."
+    )
+    assert kwargs["exit_on_failure"] is True
 
 
 def test_gateway_install_refused_on_apt_termux(monkeypatch, tmp_path, capsys):

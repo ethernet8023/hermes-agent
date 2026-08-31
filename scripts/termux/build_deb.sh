@@ -95,12 +95,17 @@ log "Package version: $DEB_VERSION"
 log "Creating venv with the bundled CPython (inside the container)"
 if [ -d "$PAYLOAD_ABS/venv" ]; then rm -rf "$PAYLOAD_ABS/venv"; fi
 docker run --rm --platform linux/arm64 \
+    --user root \
     -v "$PAYLOAD_ABS:/payload" \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr
-        export PATH="$PREFIX/bin:$PATH"
-        # The staged tree is mounted at its REAL $PREFIX path so the venv's
+        export PATH="$PREFIX/bin:${PATH:-/usr/bin:/bin}"
+        # The staged binary is dynamically linked against its OWN tree lib;
+        # the container linker needs to be told where it lives (same fix as
+        # the wheelhouse container half).
+        export LD_LIBRARY_PATH="/payload/python$PREFIX/lib:/payload/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
         PY="/payload/python$PREFIX/bin/python3.11"

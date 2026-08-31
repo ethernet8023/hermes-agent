@@ -33,7 +33,6 @@ PRs will be accepted to fix issues with them, but they will take precedence belo
 | OS / Architecture              | Installation methods                                                 | Notes                                                                        |
 | ------------------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | **Nix** (MacOS, Linux, NixOS)  | [`install.sh`](./nix-setup.md)                                       | Breaks often due to node.js packaging woes. Best of luck~! &lt;3             |
-| **Android / [Termux](./termux.md)** (aarch64) | [APT package](./termux.md) (`pkg install hermes-agent`) | Self-contained package — bundles its own Python and Node. No service manager: run the gateway in a Termux session. |
 
 ## Unsupported
 
@@ -42,7 +41,7 @@ We suggest that you migrate to a supported distribution method or platform.
 They may be broken right now, they may break more in the future.
 PRs to fix them will _not_ be accepted, and any code that keeps compatibility with them may be removed at any point.
 
-- Android / Termux on non-aarch64 devices (aarch64 is [supported](./termux.md) via our APT package)
+- Android / Termux (support was removed)
 - installs via the AUR (we might upstream patches if it helps out &lt;3)
 - macOS on x86 (Intel) processors
 - installs via `pypi` (e.g. `uv tool install hermes-agent`, `pip install hermes-agent`, etc.)

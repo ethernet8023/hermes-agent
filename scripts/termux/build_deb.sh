@@ -99,7 +99,7 @@ docker run --rm --platform linux/arm64 \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr
-        export PATH="$PREFIX/bin:$PATH"
+        export PATH="$PREFIX/bin:${PATH:-/usr/bin:/bin}"
         # The staged tree is mounted at its REAL $PREFIX path so the venv's
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true

@@ -43,7 +43,17 @@ class _HttpsRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not (newurl.startswith("https://") or newurl.startswith(_LOOPBACK)):
             raise DownloadError(f"refusing redirect to non-https url: {newurl}")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        forwarded = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if forwarded is not None:
+            # urllib's default redirect DROPS custom headers (rebuilds the
+            # request from the URL alone). Release-asset CDNs (GitHub's,
+            # TUR's) 403 requests without a real User-Agent, so the pin
+            # fetch died on the redirect hop. Carry our headers forward.
+            carried = dict(req.headers)
+            carried.pop("Host", None)
+            for k, v in carried.items():
+                forwarded.add_header(k, v)
+        return forwarded
 
 
 _OPENER = urllib.request.build_opener(_HttpsRedirectHandler())

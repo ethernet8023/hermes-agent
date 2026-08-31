@@ -94,20 +94,32 @@ log "Package version: $DEB_VERSION"
 # $PREFIX path they will occupy on-device ($PREFIX is contractual).
 log "Creating venv with the bundled CPython (inside the container)"
 if [ -d "$PAYLOAD_ABS/venv" ]; then rm -rf "$PAYLOAD_ABS/venv"; fi
+# The bind mount is runner-owned: the container (any uid) can only write
+# into a dir the HOST pre-created with open perms (same as the wheelhouse).
+mkdir -p "$PAYLOAD_ABS/venv"
+chmod 0777 "$PAYLOAD_ABS/venv"
 docker run --rm --platform linux/arm64 \
+    --user root \
     -v "$PAYLOAD_ABS:/payload" \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr
-        export PATH="$PREFIX/bin:$PATH"
-        # The staged tree is mounted at its REAL $PREFIX path so the venv's
+        export PATH="$PREFIX/bin:${PATH:-/usr/bin:/bin}"
+        # The staged binary is dynamically linked against its OWN tree lib;
+        # the container linker needs to be told where it lives (same fix as
+        # the wheelhouse container half).
+        export LD_LIBRARY_PATH="/payload/python$PREFIX/lib:/payload/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
         PY="/payload/python$PREFIX/bin/python3.11"
-        "$PY" -m venv --copies /payload/venv
-        /payload/venv/bin/python -m pip install --no-index --no-cache-dir \
-            --find-links /payload/wheelhouse /payload/app
-        /payload/venv/bin/python -m pip check
+        UV="/payload/uv$PREFIX/bin/uv"
+        # The staged python bundled ensurepip fails in this environment;
+        # the STAGED uv creates the venv and installs (the exact pattern
+        # the wheelhouse container proved end-to-end).
+        "$UV" venv --python "$PY" --seed /payload/venv
+        "$UV" pip install --python /payload/venv/bin/python \n            --no-index --find-links /payload/wheelhouse /payload/app
+        "$UV" pip check --python /payload/venv/bin/python
     ' || fail "venv assembly failed inside the container (offline wheelhouse install)"
 
 # [3] Trampolines: POSIX sh, resolve their own dir, dispatch on the bundled

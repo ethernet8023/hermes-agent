@@ -115,22 +115,10 @@ def patch_psutil(src_root: Path) -> None:
     common.write_text(content.replace(PSUTIL_MARKER, PSUTIL_PATCH), encoding="utf-8")
 
 
-def _dist_version(name: str, spec: str) -> str | None:
-    # Exact pins carry the version ("==X.Y.Z"); anything else cannot be
-    # skip-checked safely, so it always builds.
-    return spec.strip().lstrip("=") if spec.strip().startswith("==") else None
-
-
 def build_wheels(build_set: list[str], specs: dict[str, str], wheelhouse: Path) -> None:
     for name in build_set:
         spec = specs.get(name, "")
         req = f"{name}{spec}" if spec else name
-        ver = _dist_version(name, spec)
-        if ver is not None and any(
-            wheelhouse.glob(f"{name.replace('-', '_')}-{ver}-*.whl")
-        ):
-            print(f"==> {name} {ver} already in the wheelhouse (cache restore); skipping")
-            continue
         if name in ("psutil", "uvloop"):
             print(f"==> building {name} (download + extract + pre-build fixups)")
             with tempfile.TemporaryDirectory(prefix=f"hermes-build-{name}-") as tmp:

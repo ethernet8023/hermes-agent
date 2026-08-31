@@ -94,13 +94,22 @@ log "Package version: $DEB_VERSION"
 # $PREFIX path they will occupy on-device ($PREFIX is contractual).
 log "Creating venv with the bundled CPython (inside the container)"
 if [ -d "$PAYLOAD_ABS/venv" ]; then rm -rf "$PAYLOAD_ABS/venv"; fi
+# The bind mount is runner-owned: the container (any uid) can only write
+# into a dir the HOST pre-created with open perms (same as the wheelhouse).
+mkdir -p "$PAYLOAD_ABS/venv"
+chmod 0777 "$PAYLOAD_ABS/venv"
 docker run --rm --platform linux/arm64 \
+    --user root \
     -v "$PAYLOAD_ABS:/payload" \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr
-        export PATH="$PREFIX/bin:$PATH"
-        # The staged tree is mounted at its REAL $PREFIX path so the venv's
+        export PATH="$PREFIX/bin:${PATH:-/usr/bin:/bin}"
+        # The staged binary is dynamically linked against its OWN tree lib;
+        # the container linker needs to be told where it lives (same fix as
+        # the wheelhouse container half).
+        export LD_LIBRARY_PATH="/payload/python$PREFIX/lib:/payload/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
         PY="/payload/python$PREFIX/bin/python3.11"

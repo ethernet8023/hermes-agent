@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "comment": "Exact pins for the termux .deb build. Bump all together: termux-deb versions -> debUrl + debSha256 -> wheel platformTag/ABI. Interpreters come from the termux-main apt pool as digest-pinned .debs (extracted, not built \u2014 upstream package-builder is amd64-only). Resolved 2026-08-31.",
+  "comment": "Exact pins for the termux .deb build (Task 3 of .hermes/plans/2026-08-31_termux-deb.md). Bump all together: recipe commit -> CPython/node versions -> container digest. Resolved 2026-08-31.",
   "termuxPackages": {
     "repo": "https://github.com/termux/termux-packages",
     "commit": "21805d5f54f934d119ea31a2071870302e88b867",
@@ -11,47 +11,14 @@
   "python": {
     "recipe": "packages/python",
     "version": "3.14.6",
-    "source": "termux-deb",
-    "debUrl": "https://packages.termux.dev/apt/termux-main/pool/main/p/python/python_3.14.6-1_aarch64.deb",
-    "debSha256": "3166e56c2b6c03fff41191fbb9d736302978e7c484702814d9f6dc99dd6006bd",
-    "debVersion": "3.14.6-1",
-    "depends": [
-      "gdbm",
-      "libandroid-posix-semaphore",
-      "libandroid-support",
-      "libbz2",
-      "libcrypt",
-      "libexpat",
-      "libffi",
-      "liblzma",
-      "libsqlite",
-      "ncurses",
-      "ncurses-ui-libs",
-      "openssl",
-      "readline",
-      "zlib",
-      "zstd"
-    ],
-    "note": "Termux CI-built CPython, pinned exactly (url+sha256 from the signed termux-main index, resolved 2026-08-31). Extracted into the payload \u2014 the phone python stays untouched. Upstream package-builder is amd64-only, so recipe-build on our arm lane is out; consuming their artifacts is the vetted-supplier call.",
-    "pinnedOn": "2026-08-31"
+    "semverRegex": "^3\\.[0-9]+\\.[0-9]+$"
   },
   "node": {
     "recipe": "packages/nodejs-lts",
+    "source": "recipe-build",
     "version": "24.18.0",
-    "source": "termux-deb",
-    "debUrl": "https://packages.termux.dev/apt/termux-main/pool/main/n/nodejs-lts/nodejs-lts_24.18.0-1_aarch64.deb",
-    "debSha256": "490f4d08c45b25a7ea7db6ee466ebb3ee61f07083260b85332704ed018f59a87",
-    "debVersion": "24.18.0-1",
-    "depends": [
-      "libc++",
-      "openssl",
-      "c-ares",
-      "libicu",
-      "libsqlite",
-      "zlib"
-    ],
-    "note": "Termux CI-built nodejs-lts, pinned exactly. Same extract-into-payload shape as python.",
-    "pinnedOn": "2026-08-31"
+    "semverRegex": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+    "note": "Built from the termux-packages nodejs-lts recipe at the pinned commit (recipe build pins reproducibly; vendoring termux's prebuilt deb was the alternative and is not used)."
   },
   "termuxDocker": {
     "image": "docker.io/termux/termux-docker",
@@ -59,10 +26,6 @@
     "digest": "sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303",
     "architecture": "arm64",
     "pinnedOn": "2026-08-31"
-  },
-  "wheel": {
-    "platformTag": "android_24_arm64_v8a",
-    "note": "Single source for the PEP 738 android platform tag used by termux_build.sh (retag target and index.json). pythonAbi (cp<major><minor>) is derived at build time from python.version, not stored here."
   },
   "toolchain": {
     "setuptools": "83.0.0",

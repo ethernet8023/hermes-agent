@@ -85,18 +85,3 @@ def test_toolchain_pins_are_semver(pins):
 def test_python_semver_regex_is_consistent_with_pin(pins):
     # The regex recorded in pins.json must accept the recorded version.
     assert re.fullmatch(pins["python"]["semverRegex"], pins["python"]["version"])
-
-
-def test_wheel_platform_tag_is_valid_android_tag(pins):
-    wheel = pins["wheel"]
-    assert re.fullmatch(r"android_\d+_arm64_v8a", wheel["platformTag"]), (
-        f"wheel.platformTag {wheel['platformTag']!r} is not a PEP 738 android tag"
-    )
-
-
-def test_python_abi_derivation_matches_python_pin(pins):
-    # The build derives index.json's pythonAbi as cp<major><minor> from
-    # python.version; pin the derivation contract here so a change to the
-    # version format or the derivation is caught on both ends.
-    pv = pins["python"]["version"].split(".")
-    assert re.fullmatch(rf"cp{re.escape(pv[0])}{re.escape(pv[1])}", f"cp{pv[0]}{pv[1]}")

@@ -27,10 +27,6 @@
     "architecture": "arm64",
     "pinnedOn": "2026-08-31"
   },
-  "wheel": {
-    "platformTag": "android_24_arm64_v8a",
-    "note": "Single source for the PEP 738 android platform tag used by termux_build.sh (retag target and index.json). pythonAbi (cp<major><minor>) is derived at build time from python.version, not stored here."
-  },
   "toolchain": {
     "setuptools": "83.0.0",
     "cython": "3.3.0",

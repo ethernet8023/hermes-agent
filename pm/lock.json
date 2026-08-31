@@ -96,35 +96,6 @@
       },
       "version": "0.21.0"
     },
-    "ffmpeg": {
-      "artifacts": {
-        "darwin-arm64": {
-          "sha256": "8287a1b2229e05eb41859f073e18e6c52c60a778f2f5e6881070fe51b79407fe",
-          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffmpeg.zip"
-        },
-        "darwin-x64": {
-          "sha256": "5bdead62ff504ab9b447cc72b212c4fb481e3f7de5877d427a51bee8136dda40",
-          "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffmpeg.zip"
-        },
-        "linux-arm64": {
-          "sha256": "92cff3dec20d996bb5b8a918b156b64301338e7c28046053c82d0935cf7c6eb2",
-          "url": "https://ffmpeg.martin-riedl.de/download/linux/arm64/1787072884_9.0.1/ffmpeg.zip"
-        },
-        "linux-x64": {
-          "sha256": "18bec7d5c2ab3b24d277466b758394e109b0479133b98d155c5540ed3013fa74",
-          "url": "https://ffmpeg.martin-riedl.de/download/linux/amd64/1787074600_9.0.1/ffmpeg.zip"
-        },
-        "win32-arm64": {
-          "sha256": "c50d45440d6376155842b653ecea1b323569b254db29cd7a42b298a924fd162c",
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-28-17-08/ffmpeg-n9.0.1-11-ge47273f4d9-winarm64-gpl-9.0.zip"
-        },
-        "win32-x64": {
-          "sha256": "dee63142094f79f6a50cdece65384b7793181eab3b6db2ec907834981bb8ab10",
-          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-28-17-08/ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0.zip"
-        }
-      },
-      "version": "9.0.1"
-    },
     "gh": {
       "artifacts": {
         "darwin-arm64": {
@@ -153,6 +124,35 @@
         }
       },
       "version": "2.97.0"
+    },
+    "ffmpeg": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "8287a1b2229e05eb41859f073e18e6c52c60a778f2f5e6881070fe51b79407fe",
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffmpeg.zip"
+        },
+        "darwin-x64": {
+          "sha256": "5bdead62ff504ab9b447cc72b212c4fb481e3f7de5877d427a51bee8136dda40",
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffmpeg.zip"
+        },
+        "linux-arm64": {
+          "sha256": "92cff3dec20d996bb5b8a918b156b64301338e7c28046053c82d0935cf7c6eb2",
+          "url": "https://ffmpeg.martin-riedl.de/download/linux/arm64/1787072884_9.0.1/ffmpeg.zip"
+        },
+        "linux-x64": {
+          "sha256": "18bec7d5c2ab3b24d277466b758394e109b0479133b98d155c5540ed3013fa74",
+          "url": "https://ffmpeg.martin-riedl.de/download/linux/amd64/1787074600_9.0.1/ffmpeg.zip"
+        },
+        "win32-arm64": {
+          "sha256": "c50d45440d6376155842b653ecea1b323569b254db29cd7a42b298a924fd162c",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-28-17-08/ffmpeg-n9.0.1-11-ge47273f4d9-winarm64-gpl-9.0.zip"
+        },
+        "win32-x64": {
+          "sha256": "dee63142094f79f6a50cdece65384b7793181eab3b6db2ec907834981bb8ab10",
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-28-17-08/ffmpeg-n9.0.1-11-ge47273f4d9-win64-gpl-9.0.zip"
+        }
+      },
+      "version": "9.0.1"
     },
     "git": {
       "artifacts": {
@@ -254,35 +254,31 @@
     "node": {
       "artifacts": {
         "darwin-arm64": {
-          "sha256": "bef4c7e75087c029835f519a7ba640eba52fa617fadb3a9049828ff3b45b57dd",
-          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-darwin-arm64.tar.xz"
+          "sha256": "7ee659a7768e641bbfd5360940660b8e8fd0052f77488f365562bac522fc15d4",
+          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-darwin-arm64.tar.xz"
         },
         "darwin-x64": {
-          "sha256": "06607eef24180c3d1299455efe315bfef67b68b271dc307841cb3fb3af39e211",
-          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-darwin-x64.tar.xz"
+          "sha256": "f279d1ed28ce57f7788bf23435d2ad7fdd7438904ad5c4d8a1081a7cde3d4b96",
+          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-darwin-x64.tar.xz"
         },
         "linux-arm64": {
-          "sha256": "f6d8eedc52170667d45730ac2f413c4aa1e7cd2165c9cac5746ef3cb0f4ec45a",
-          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-linux-arm64.tar.xz"
-        },
-        "linux-arm64-bionic": {
-          "sha256": "eaf3ed8a6e4b72ebaa8c2cb3bad778c577cdf9ea87ca91761213d8a3940fc090",
-          "url": "https://packages.termux.dev/apt/termux-main/pool/main/n/nodejs/nodejs_26.4.0-1_aarch64.deb"
+          "sha256": "afc7a004018485092ac8985b817b0d5684472bd9472e0b57d2ab88737e50090d",
+          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-linux-arm64.tar.xz"
         },
         "linux-x64": {
-          "sha256": "5c4286dcd5bbd5acb1ccc7eb0e088bd5eb1e3affad671ee9364004f8f6a4a431",
-          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-linux-x64.tar.xz"
+          "sha256": "982aa24dd8be4c889c6a8ab337ddff3b0896645b20f4239356e80552c16277ee",
+          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-linux-x64.tar.xz"
         },
         "win32-arm64": {
-          "sha256": "394cb72e664faaa518ca1877bcc20bb03a3e2f51ed1f6cfce53e1a306e8c97f6",
-          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-win-arm64.zip"
+          "sha256": "be8775204cfceca5a73c30f91bf0de5e85274c01b776dc13f16b91aa251ebb01",
+          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-win-arm64.zip"
         },
         "win32-x64": {
-          "sha256": "5f87d038c6ec442aa46b9126f8ca170acbd2f3b9b9152ca798cf54596a31e214",
-          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-win-x64.zip"
+          "sha256": "d3bd72755141ed32bbcd841228ee81897c8a98d50dfa7dae2179399a0a7c90f8",
+          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-win-x64.zip"
         }
       },
-      "version": "26.4.0"
+      "version": "26.7.0"
     },
     "npm": {
       "artifacts": {
@@ -296,35 +292,31 @@
     "python": {
       "artifacts": {
         "darwin-arm64": {
-          "sha256": "f7783d9a56a75d91554c08409a674e8678d56d42555fdbb365d8190d5cc93659",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-aarch64-apple-darwin-install_only.tar.gz"
+          "sha256": "fcba9f3f676c83e07225e38116649f0c6eb94cb4fcc166632cf92769462b6e39",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-aarch64-apple-darwin-install_only.tar.gz"
         },
         "darwin-x64": {
-          "sha256": "d1842391797a9478fc1de67c8575f275c1cdf2e93a8d1deb991939dec3ec9bbf",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-x86_64-apple-darwin-install_only.tar.gz"
+          "sha256": "d9117d31251ba5c9a81ac7ad7c00dab1d5228e261eb0cda94550b4da1cc73bd1",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-x86_64-apple-darwin-install_only.tar.gz"
         },
         "linux-arm64": {
-          "sha256": "8c66cfe06264399eac4d271a7adc078b6c2adac7405a83f42b8276596466a3ad",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-aarch64-unknown-linux-gnu-install_only.tar.gz"
-        },
-        "linux-arm64-bionic": {
-          "sha256": "b927d1cbeacffb426d52e4860650caf9afd1945f85eaece26f37ae3327d5fa7c",
-          "url": "https://tur.kcubeterm.com/pool/tur/python3.11_3.11.15_aarch64.deb"
+          "sha256": "9142c12dd3559eaac58a18d8905b99a293979d5e5a1b4fb5cf4cebbf82ef6f33",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-aarch64-unknown-linux-gnu-install_only.tar.gz"
         },
         "linux-x64": {
-          "sha256": "b9fff092374acebc451bb881156afe6a58991213d25386358742fee296128909",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-x86_64-unknown-linux-gnu-install_only.tar.gz"
+          "sha256": "33994fad90145ba559ebbe8a18d69fa7e56653502f7ba14ba07199b52cde3775",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-x86_64-unknown-linux-gnu-install_only.tar.gz"
         },
         "win32-arm64": {
-          "sha256": "18a5596a81706d4d65a45ceecee85f6fcd7399e51b177e503aa684b45d262825",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-aarch64-pc-windows-msvc-install_only.tar.gz"
+          "sha256": "450cbf91ff0dbfce7fa1d40ba19103187852076496b6153e528fa6dc43a88a58",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-aarch64-pc-windows-msvc-install_only.tar.gz"
         },
         "win32-x64": {
-          "sha256": "7e61d3d8fa394c063e586db9cc36dc91eb77211f426e2dcc3379412b227d41a6",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-x86_64-pc-windows-msvc-install_only.tar.gz"
+          "sha256": "ffaee1e94c8488f833473e56e1c980ca1a58d91126d21ddf0f6ba052e69cf511",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-x86_64-pc-windows-msvc-install_only.tar.gz"
         }
       },
-      "version": "3.11.15+20260807"
+      "version": "3.11.16+20260814"
     },
     "ripgrep": {
       "artifacts": {
@@ -354,14 +346,6 @@
         }
       },
       "version": "15.2.0"
-    },
-    "termux-docker": {
-      "artifacts": {
-        "linux-arm64-bionic": {
-          "url": "docker://termux/termux-docker@sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303"
-        }
-      },
-      "version": "sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303"
     },
     "uv": {
       "artifacts": {

@@ -23,7 +23,6 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import logging
 import threading
 import urllib.error
 import urllib.request
@@ -31,11 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-# GitHub's release-asset CDN (release-assets.githubusercontent.com, which
-# TUR's pool 302s to) 403s unknown tool UAs from CI runner IP ranges --
-# their docs require a real User-Agent. A browser-shaped one is the
-# least-privileged string every asset CDN accepts.
-_UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) hermes-pm/1.0"}
+_UA = {"User-Agent": "hermes-pm"}
 _LOOPBACK = ("http://127.0.0.1:", "http://localhost:", "http://[::1]:")
 _CHUNK = 1 << 20  # read/write block, also the minimum range size
 
@@ -48,17 +43,7 @@ class _HttpsRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not (newurl.startswith("https://") or newurl.startswith(_LOOPBACK)):
             raise DownloadError(f"refusing redirect to non-https url: {newurl}")
-        forwarded = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if forwarded is not None:
-            # urllib's default redirect DROPS custom headers (rebuilds the
-            # request from the URL alone). Release-asset CDNs (GitHub's,
-            # TUR's) 403 requests without a real User-Agent, so the pin
-            # fetch died on the redirect hop. Carry our headers forward.
-            carried = dict(req.headers)
-            carried.pop("Host", None)
-            for k, v in carried.items():
-                forwarded.add_header(k, v)
-        return forwarded
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 _OPENER = urllib.request.build_opener(_HttpsRedirectHandler())
@@ -341,24 +326,6 @@ class Download:
             raise DownloadPaused(source.url)
         if errors:
             self._write_sidecar(side, covered)
-            # Parallel ranged GETs trip edge/CDN rate limits that a single
-            # connection does not (observed live: every single-request probe
-            # green while the 4-thread fetch 404ed, same runner, same URL).
-            # Retry once single-stream; the digest check still proves the
-            # bytes. A partial from the failed attempt is kept (covered is
-            # persisted above), so the retry only fetches the gaps.
-            if self.connections > 1:
-                logging.getLogger(__name__).warning(
-                    "parallel ranged fetch failed for %s (%s); retrying single-stream",
-                    source.url, errors[0],
-                )
-                saved = self.connections
-                try:
-                    self.connections = 1
-                    self._fetch_ranged(source, total, tick)
-                finally:
-                    self.connections = saved
-                return
             raise errors[0]
         if written[0] != total:
             self._write_sidecar(side, covered)

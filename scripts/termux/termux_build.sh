@@ -92,26 +92,17 @@ import re, sys
 out = []
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
-    # uv export wraps long lines with backslash continuations; strip the
-    # trailing continuation BEFORE capturing markers/specs -- a backslash
-    # riding into a marker makes Marker() throw (and a throwing marker
-    # must not silently admit the package into the build set).
-    line = re.sub(r"\\\s*$", "", line)
     if not line or line.startswith("#"):
         continue
-    marker = ""
-    m = re.search(r"\s;\s*(.+)$", line)
-    if m:
-        marker = m.group(1).strip()
-        line = line[: m.start()]
-    line = re.sub(r"\s*--.*$", "", line)
+    line = re.sub(r"\s*;.*$", "", line)  # drop environment markers for the probe
+    line = re.sub(r"\s*--.*$", "", line)  # drop option lines entirely below
     if line.startswith("--") or not line:
         continue
     m = re.match(r"^([A-Za-z0-9._-]+)(\[[^]]*\])?([=<>~!^].*)?$", line)
     if m:
-        out.append((m.group(1), m.group(3) or "", marker))
+        out.append((m.group(1), m.group(3) or ""))
 open(sys.argv[2], "w", encoding="utf-8").write(
-    "\n".join(f"{name}\t{spec}\t{marker}" for name, spec, marker in out) + "\n"
+    "\n".join(f"{name} { spec}" for name, spec in out) + "\n"
 )
 PYEOF
 [ -s "$RESOLVED" ] || fail "resolved dependency list is empty"
@@ -124,60 +115,29 @@ python3 - "$RESOLVED" "$BUILD_SET" <<'PYEOF' || fail "PyPI wheel-coverage probe 
 import json, re, sys, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-# The TARGET environment the wheelhouse must satisfy: Termux's bionic
-# python. TUR 3.11 reports sys.platform "linux" (the android value only
-# arrived in 3.13), so markers keying on linux admit it -- and windows/
-# darwin markers exclude it, which is the whole point.
-TARGET_ENV = {
-    "implementation_name": "cpython",
-    "implementation_version": "3.11.15",
-    "os_name": "posix",
-    "platform_machine": "aarch64",
-    "platform_release": "",
-    "platform_system": "Linux",
-    "platform_version": "",
-    "python_full_version": "3.11.15",
-    "python_version": "3.11",
-    "sys_platform": "linux",
-}
+resolved = [l.split(None, 1) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
 
 def locked_version(spec: str) -> str | None:
+    """Extract the pinned version from an equality spec like '==1.2.3'."""
     m = re.search(r"==\s*([A-Za-z0-9._+!-]+)", spec or "")
     return m.group(1) if m else None
 
-def marker_admits(marker: str) -> bool:
-    if not marker:
-        return True
-    from packaging.markers import Marker
-    from packaging.utils import canonicalize_name
-    try:
-        return Marker(marker).evaluate(TARGET_ENV)
-    except Exception:
-        # An unevaluable marker is a build-set decision, not a silent
-        # exclude: admit it so the wheel build surfaces the truth loudly.
-        return True
-
-entries = []
-for line in open(sys.argv[1], encoding="utf-8"):
-    if not line.strip():
-        continue
-    name, spec, marker = (line.split("\t", 2) + ["", ""])[:3]
-    entries.append((name, spec, marker))
-
-def probe(item):
-    name, spec, marker = item
-    if not marker_admits(marker):
-        return name, None, None  # target-excluded: no build, no coverage need
+def probe(item: tuple[str, str]) -> tuple[str, bool, str | None]:
+    name, spec = item
     try:
         with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/json", timeout=30) as r:
             d = json.load(r)
+        # Probe the LOCKED version, not d['info']['version'] (latest):
+        # the wheelhouse must cover exactly what the lock resolves to.
         locked = locked_version(spec) or d["info"]["version"]
         files = d["releases"].get(locked, [])
-        # Coverage means INSTALLABLE on android/bionic, not "a wheel exists":
-        # only py3-none-any (platform-independent) wheels satisfy a package;
-        # anything else installs nowhere on termux and must be built here.
+        # Coverage means INSTALLABLE on android/bionic, not "a wheel exists".
+        # The offline install gate is --only-binary :all: against this
+        # wheelhouse, so only py3-none-any (platform-independent) wheels
+        # satisfy a package; anything else (manylinux/musl/win/mac tags)
+        # installs nowhere on termux and must be built from sdist here.
         covered = any(
-            f["filename"].endswith(".whl") and "-none-any.whl" in f["filename"]
+            f["filename"].endswith(".whl") and f["filename"].split("-")[-1] == "none-any.whl"
             for f in files
         )
         return name, covered, None
@@ -185,21 +145,16 @@ def probe(item):
         return name, False, str(exc)
 
 with ThreadPoolExecutor(max_workers=10) as ex:
-    results = list(ex.map(probe, entries))
+    results = list(ex.map(probe, resolved))
 
 needs_build = []
-excluded = 0
-for name, covered, err in results:
-    if covered is None:
-        excluded += 1
-        continue
+for name, has_wheel, err in results:
     if err is not None:
         print(f"  probe miss {name}: {err} -> building from sdist", file=sys.stderr)
-    if not covered:
+    if not has_wheel:
         needs_build.append(name)
 open(sys.argv[2], "w", encoding="utf-8").write("\n".join(needs_build) + "\n")
-print(f"  {excluded} of {len(entries)} deps are marker-excluded for android")
-print(f"  {len(needs_build)} of {len(entries) - excluded} applicable packages need sdist builds")
+print(f"  {len(needs_build)} of {len(resolved)} packages need sdist builds")
 PYEOF
 
 # Build constants (platform tag, ABI, toolchain) come from
@@ -212,9 +167,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # builds would use whatever setuptools/cython the container happens
 # to have. Install the pinned versions up front.
 log "Enforcing toolchain pins"
-python3 - "${TOOLCHAIN_PINS[@]}" <<'PYEOF' || fail "toolchain pin enforcement failed"
+python3 - <<'PYEOF' || fail "toolchain pin enforcement failed"
 import subprocess, sys
-pkgs = sys.argv[1:]
+pkgs = """${TOOLCHAIN_PINS[*]}""".split()
 print(f"  installing: {' '.join(pkgs)}")
 subprocess.run([sys.executable, "-m", "pip", "install", *pkgs], check=True)
 PYEOF

@@ -101,6 +101,7 @@ def evaluate_update_admission(project_root: Path) -> Optional[UpdateRefusal]:
             STEWARD_DESKTOP,
             STEWARD_DOCKER,
             STEWARD_NIX,
+            STEWARD_UPDATE_COMMANDS,
             sealed_steward,
             steward_update_message,
         )
@@ -126,7 +127,7 @@ def evaluate_update_admission(project_root: Path) -> Optional[UpdateRefusal]:
             if steward == STEWARD_APT_TERMUX:
                 # The APT repo owns the code tree; `hermes update` must
                 # never run in place — `pkg upgrade` replaces it wholesale.
-                command = "pkg upgrade hermes-agent"
+                command = STEWARD_UPDATE_COMMANDS[steward]
                 return UpdateRefusal(
                     code=steward,
                     message=steward_update_message(steward),

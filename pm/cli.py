@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from pm.ensure import _facts, _lockfile, _store, ensure, stage_only
+from pm.ensure import _facts, _lockfile, _store, ensure
 from pm.ensure import uv as pm_uv
 from pm.package import InstallError
 from pm.registry import get_package
@@ -50,17 +50,12 @@ def cmd_lock(args) -> int:
     return 0
 
 
-def _install_names(names: list[str], target: str | None = None) -> int:
+def _install_names(names: list[str]) -> int:
     failed = 0
     for name in names:
         try:
-            if target is not None:
-                # Cross-target staging: publish the entry, touch no facts.
-                entry = stage_only(name, target)
-                print(f"✓ {name} (staged for {target}: {entry.name})")
-            else:
-                ensure(name, explicit=True)
-                print(f"✓ {name}")
+            ensure(name, explicit=True)
+            print(f"✓ {name}")
         except InstallError as e:
             print(f"✗ {e}")
             failed += 1
@@ -91,18 +86,10 @@ def _drop_unloadable_runtime_files(store_dir: Path) -> None:
 
 
 def cmd_install(args) -> int:
-    cross_target = getattr(args, "target", None)
-    if cross_target:
-        if cross_target not in ALL_TARGETS:
-            print(f"✗ unknown target {cross_target!r}; known: {', '.join(ALL_TARGETS)}")
-            return 1
-        if not args.names:
-            print("✗ --target requires explicit package names")
-            return 1
     names = args.names or [
         n for n in _lockfile().names() if not get_package(n).optional
     ]
-    failed = _install_names(names, target=cross_target)
+    failed = _install_names(names)
     if not args.names:
         from pm.ensure import sync_venv
 
@@ -377,11 +364,6 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("install", help="install packages (default: all required)")
     p.add_argument("names", nargs="*")
-    p.add_argument(
-        "--target",
-        help="stage for a cross target (e.g. linux-arm64-bionic on a glibc "
-        "CI host); requires explicit package names",
-    )
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("env", help="print composed env of installed packages")

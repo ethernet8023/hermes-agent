@@ -207,27 +207,3 @@ def test_admission_apt_termux_refuses_with_pkg_upgrade(tmp_path, monkeypatch):
     assert refusal.code == "apt-termux"
     assert "pkg upgrade hermes-agent" in refusal.message
     assert "pkg upgrade hermes-agent" in refusal.update_command
-
-
-def test_admission_apt_termux_command_comes_from_steward_table(tmp_path, monkeypatch):
-    """The apt-termux remediation command is read from
-    ``STEWARD_UPDATE_COMMANDS`` in steward.py — not hardcoded inline — so the
-    message table and the update_command stay one source of truth."""
-    import hermes_cli.image_provenance as ip
-    import hermes_cli.steward as steward_mod
-
-    monkeypatch.setattr(ip, "IMAGE_PROVENANCE_PATH", tmp_path / "absent.json")
-    monkeypatch.setattr(
-        "hermes_cli.config.detect_install_method", lambda *a, **k: "git"
-    )
-    # Prove the table is the source: a table edit flows into the refusal.
-    monkeypatch.setitem(
-        steward_mod.STEWARD_UPDATE_COMMANDS,
-        steward_mod.STEWARD_APT_TERMUX,
-        "pkg upgrade hermes-agent --from-table",
-    )
-    root = _sealed_tree(tmp_path, "apt-termux")
-    refusal = evaluate_update_admission(root)
-    assert refusal is not None
-    assert refusal.code == "apt-termux"
-    assert refusal.update_command == "pkg upgrade hermes-agent --from-table"

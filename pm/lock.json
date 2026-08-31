@@ -96,35 +96,6 @@
       },
       "version": "0.21.0"
     },
-    "gh": {
-      "artifacts": {
-        "darwin-arm64": {
-          "sha256": "a58b8fd77b417a38f47a0b54d1370c59b0fcdb324ccc9ca002b0998f7c4c999e",
-          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_macOS_arm64.zip"
-        },
-        "darwin-x64": {
-          "sha256": "63298c998cc2a924c9e254c6af6a1caad6ece281122687a91f079bc0a462700e",
-          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_macOS_amd64.zip"
-        },
-        "linux-arm64": {
-          "sha256": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
-          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_arm64.tar.gz"
-        },
-        "linux-x64": {
-          "sha256": "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
-          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_amd64.tar.gz"
-        },
-        "win32-arm64": {
-          "sha256": "3e2d4a166da4ee5020c592737b65eec0e724946d5d5b962f5fe59d99116dc4bf",
-          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_windows_arm64.zip"
-        },
-        "win32-x64": {
-          "sha256": "35d7fe05c4dd1411ffda1e73dfc7c6f44b75c936ca51fa6595c657fdc0350cec",
-          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_windows_amd64.zip"
-        }
-      },
-      "version": "2.97.0"
-    },
     "ffmpeg": {
       "artifacts": {
         "darwin-arm64": {
@@ -153,6 +124,35 @@
         }
       },
       "version": "9.0.1"
+    },
+    "gh": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "a58b8fd77b417a38f47a0b54d1370c59b0fcdb324ccc9ca002b0998f7c4c999e",
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_macOS_arm64.zip"
+        },
+        "darwin-x64": {
+          "sha256": "63298c998cc2a924c9e254c6af6a1caad6ece281122687a91f079bc0a462700e",
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_macOS_amd64.zip"
+        },
+        "linux-arm64": {
+          "sha256": "73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5",
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_arm64.tar.gz"
+        },
+        "linux-x64": {
+          "sha256": "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112",
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_linux_amd64.tar.gz"
+        },
+        "win32-arm64": {
+          "sha256": "3e2d4a166da4ee5020c592737b65eec0e724946d5d5b962f5fe59d99116dc4bf",
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_windows_arm64.zip"
+        },
+        "win32-x64": {
+          "sha256": "35d7fe05c4dd1411ffda1e73dfc7c6f44b75c936ca51fa6595c657fdc0350cec",
+          "url": "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_windows_amd64.zip"
+        }
+      },
+      "version": "2.97.0"
     },
     "git": {
       "artifacts": {
@@ -254,31 +254,35 @@
     "node": {
       "artifacts": {
         "darwin-arm64": {
-          "sha256": "7ee659a7768e641bbfd5360940660b8e8fd0052f77488f365562bac522fc15d4",
-          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-darwin-arm64.tar.xz"
+          "sha256": "bef4c7e75087c029835f519a7ba640eba52fa617fadb3a9049828ff3b45b57dd",
+          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-darwin-arm64.tar.xz"
         },
         "darwin-x64": {
-          "sha256": "f279d1ed28ce57f7788bf23435d2ad7fdd7438904ad5c4d8a1081a7cde3d4b96",
-          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-darwin-x64.tar.xz"
+          "sha256": "06607eef24180c3d1299455efe315bfef67b68b271dc307841cb3fb3af39e211",
+          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-darwin-x64.tar.xz"
         },
         "linux-arm64": {
-          "sha256": "afc7a004018485092ac8985b817b0d5684472bd9472e0b57d2ab88737e50090d",
-          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-linux-arm64.tar.xz"
+          "sha256": "f6d8eedc52170667d45730ac2f413c4aa1e7cd2165c9cac5746ef3cb0f4ec45a",
+          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-linux-arm64.tar.xz"
+        },
+        "linux-arm64-bionic": {
+          "sha256": "eaf3ed8a6e4b72ebaa8c2cb3bad778c577cdf9ea87ca91761213d8a3940fc090",
+          "url": "https://packages.termux.dev/apt/termux-main/pool/main/n/nodejs/nodejs_26.4.0-1_aarch64.deb"
         },
         "linux-x64": {
-          "sha256": "982aa24dd8be4c889c6a8ab337ddff3b0896645b20f4239356e80552c16277ee",
-          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-linux-x64.tar.xz"
+          "sha256": "5c4286dcd5bbd5acb1ccc7eb0e088bd5eb1e3affad671ee9364004f8f6a4a431",
+          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-linux-x64.tar.xz"
         },
         "win32-arm64": {
-          "sha256": "be8775204cfceca5a73c30f91bf0de5e85274c01b776dc13f16b91aa251ebb01",
-          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-win-arm64.zip"
+          "sha256": "394cb72e664faaa518ca1877bcc20bb03a3e2f51ed1f6cfce53e1a306e8c97f6",
+          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-win-arm64.zip"
         },
         "win32-x64": {
-          "sha256": "d3bd72755141ed32bbcd841228ee81897c8a98d50dfa7dae2179399a0a7c90f8",
-          "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-win-x64.zip"
+          "sha256": "5f87d038c6ec442aa46b9126f8ca170acbd2f3b9b9152ca798cf54596a31e214",
+          "url": "https://nodejs.org/dist/v26.4.0/node-v26.4.0-win-x64.zip"
         }
       },
-      "version": "26.7.0"
+      "version": "26.4.0"
     },
     "npm": {
       "artifacts": {
@@ -292,31 +296,35 @@
     "python": {
       "artifacts": {
         "darwin-arm64": {
-          "sha256": "fcba9f3f676c83e07225e38116649f0c6eb94cb4fcc166632cf92769462b6e39",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-aarch64-apple-darwin-install_only.tar.gz"
+          "sha256": "f7783d9a56a75d91554c08409a674e8678d56d42555fdbb365d8190d5cc93659",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-aarch64-apple-darwin-install_only.tar.gz"
         },
         "darwin-x64": {
-          "sha256": "d9117d31251ba5c9a81ac7ad7c00dab1d5228e261eb0cda94550b4da1cc73bd1",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-x86_64-apple-darwin-install_only.tar.gz"
+          "sha256": "d1842391797a9478fc1de67c8575f275c1cdf2e93a8d1deb991939dec3ec9bbf",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-x86_64-apple-darwin-install_only.tar.gz"
         },
         "linux-arm64": {
-          "sha256": "9142c12dd3559eaac58a18d8905b99a293979d5e5a1b4fb5cf4cebbf82ef6f33",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-aarch64-unknown-linux-gnu-install_only.tar.gz"
+          "sha256": "8c66cfe06264399eac4d271a7adc078b6c2adac7405a83f42b8276596466a3ad",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-aarch64-unknown-linux-gnu-install_only.tar.gz"
+        },
+        "linux-arm64-bionic": {
+          "sha256": "b927d1cbeacffb426d52e4860650caf9afd1945f85eaece26f37ae3327d5fa7c",
+          "url": "https://tur.kcubeterm.com/pool/tur/python3.11_3.11.15_aarch64.deb"
         },
         "linux-x64": {
-          "sha256": "33994fad90145ba559ebbe8a18d69fa7e56653502f7ba14ba07199b52cde3775",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-x86_64-unknown-linux-gnu-install_only.tar.gz"
+          "sha256": "b9fff092374acebc451bb881156afe6a58991213d25386358742fee296128909",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-x86_64-unknown-linux-gnu-install_only.tar.gz"
         },
         "win32-arm64": {
-          "sha256": "450cbf91ff0dbfce7fa1d40ba19103187852076496b6153e528fa6dc43a88a58",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-aarch64-pc-windows-msvc-install_only.tar.gz"
+          "sha256": "18a5596a81706d4d65a45ceecee85f6fcd7399e51b177e503aa684b45d262825",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-aarch64-pc-windows-msvc-install_only.tar.gz"
         },
         "win32-x64": {
-          "sha256": "ffaee1e94c8488f833473e56e1c980ca1a58d91126d21ddf0f6ba052e69cf511",
-          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-x86_64-pc-windows-msvc-install_only.tar.gz"
+          "sha256": "7e61d3d8fa394c063e586db9cc36dc91eb77211f426e2dcc3379412b227d41a6",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260807/cpython-3.11.15+20260807-x86_64-pc-windows-msvc-install_only.tar.gz"
         }
       },
-      "version": "3.11.16+20260814"
+      "version": "3.11.15+20260807"
     },
     "ripgrep": {
       "artifacts": {
@@ -347,34 +355,46 @@
       },
       "version": "15.2.0"
     },
+    "termux-docker": {
+      "artifacts": {
+        "linux-arm64-bionic": {
+          "url": "docker://termux/termux-docker@sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303"
+        }
+      },
+      "version": "sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303"
+    },
     "uv": {
       "artifacts": {
         "darwin-arm64": {
-          "sha256": "546f7f8a6c70ff13a3a9d2bc958db3427298cebf3e0cb756f9177133b7068843",
-          "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-apple-darwin.tar.gz"
+          "sha256": "301f72afaf54060f92da7016cb0115bd077f43a9c8e39c1d8170a0bac80fd398",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-aarch64-apple-darwin.tar.gz"
         },
         "darwin-x64": {
-          "sha256": "4c9f52262a14da336e4a42ed24992d12d0c956acde87619e4611d321dffa602b",
-          "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-apple-darwin.tar.gz"
+          "sha256": "e1ca175824f1056589ce9908f7631879ebc3c36535b5e63dc06510beb370b4c1",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-apple-darwin.tar.gz"
         },
         "linux-arm64": {
-          "sha256": "bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2",
-          "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-unknown-linux-gnu.tar.gz"
+          "sha256": "c36fe17937ff6bd16dc42fc13854b5465999fcab2efe0af559381e945e3c6001",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-aarch64-unknown-linux-gnu.tar.gz"
+        },
+        "linux-arm64-bionic": {
+          "sha256": "2ddf74df0e93e5aef5669fd850599bea00349b183000ef5f687ec021e093cc7f",
+          "url": "https://packages.termux.dev/apt/termux-main/pool/main/u/uv/uv_0.12.9_aarch64.deb"
         },
         "linux-x64": {
-          "sha256": "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101",
-          "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-unknown-linux-gnu.tar.gz"
+          "sha256": "ec7a99cd05e0cd7f80243f135ce1361c76835cb0ee60055d14d20eba8eba1460",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-unknown-linux-gnu.tar.gz"
         },
         "win32-arm64": {
-          "sha256": "4343217d668727b8a8eb5cad92389a1d2eeead93c89940d1b955ba1bb15462eb",
-          "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-pc-windows-msvc.zip"
+          "sha256": "d3360363a3cb671f2c854f4ef48cf4a57fe8664f8ec6a248076d68b797a8acc0",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-aarch64-pc-windows-msvc.zip"
         },
         "win32-x64": {
-          "sha256": "b23350c79e8ad0192b8124af13a0f17e8d4e4549524785e1aef389ae5a06990e",
-          "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-pc-windows-msvc.zip"
+          "sha256": "ddbfcee1ac615a0499f6aa97b5ec8ebdf3ee4a7714a48055ec2ba0030e3cf810",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-pc-windows-msvc.zip"
         }
       },
-      "version": "0.12.3"
+      "version": "0.12.9"
     }
   },
   "schema": 1

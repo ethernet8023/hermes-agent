@@ -27,14 +27,35 @@ export const OUT_OF_STORE_PUBLISHER =
 const CONTENT_TYPES = {
   '.appinstaller': 'application/appinstaller',
   '.msixbundle': 'application/msixbundle',
-  '.msix': 'application/msix'
+  '.msix': 'application/msix',
+  // Termux APT repo artifacts (uploaded under releases/termux/<channel>/).
+  // InRelease/Release/Packages are extensionless; match by exact basename
+  // too so apt gets text/plain instead of octet-stream.
+  '.deb': 'application/vnd.debian.binary-package',
+  '.gz': 'application/gzip',
+  'release.gpg': 'application/pgp-signature',
+  inrelease: 'text/plain',
+  release: 'text/plain',
+  packages: 'text/plain'
 }
 
-/** The Content-Type to store for a staged release artifact, if any. */
+/**
+ * The Content-Type to store for a staged release artifact, if any.
+ *
+ * Keys starting with '.' (or containing one, like 'release.gpg') match by
+ * filename suffix. Extensionless keys (inrelease/release/packages — the apt
+ * repo metadata) match by exact basename only, so 'foo-release' or
+ * 'xrelease' never collide with the apt 'Release' file.
+ */
 export function contentTypeFor(filename) {
   const lower = String(filename).toLowerCase()
-  for (const [suffix, mime] of Object.entries(CONTENT_TYPES)) {
-    if (lower.endsWith(suffix)) return mime
+  const base = lower.slice(lower.lastIndexOf('/') + 1)
+  for (const [key, mime] of Object.entries(CONTENT_TYPES)) {
+    if (key.includes('.')) {
+      if (lower.endsWith(key)) return mime
+    } else if (base === key) {
+      return mime
+    }
   }
   return undefined
 }

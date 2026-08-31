@@ -4941,62 +4941,31 @@ def _spawn_detached_gateway() -> bool:
     return True
 
 
-def _start_detached_with_guidance(
-    *,
-    pre_lines=(),
-    success_started="✓ Started gateway as a background process instead",
-    success_restart="  It will NOT auto-start at login or auto-restart on crash.",
-    failure_hint=None,
-    exit_on_failure=True,
-) -> bool:
-    """Start the gateway detached, with the caller's guidance lines.
+def _launchd_fallback_to_detached(reason: str, *, exit_on_failure: bool = True) -> bool:
+    """Start the gateway detached when launchd can't manage it, with guidance.
 
-    Shared by every detached-start site (the launchd fallback and the
-    apt-termux start path): each supplies only the lines that differ —
-    what to print before the attempt, the success wording, and the hint
-    to surface when the spawn fails. The Logs/Stop lines and the failure
-    error are common. Returns True if the detached gateway was launched;
-    on failure prints the error and hint and (by default) exits non-zero
-    so the failure surfaces instead of silently doing nothing.
+    Returns True if the detached gateway was launched. When it can't be
+    launched, prints the manual workaround and (by default) exits non-zero so
+    the failure surfaces instead of silently doing nothing.
     """
     from hermes_constants import display_hermes_home as _dhh
 
-    for line in pre_lines:
-        print(line)
+    _write_launchd_unsupported_marker()
+    print(f"⚠ launchd cannot manage the gateway on this macOS version ({reason}).")
     if _spawn_detached_gateway():
-        print(success_started)
-        print(success_restart)
+        print("✓ Started gateway as a background process instead")
+        print("  It will NOT auto-start at login or auto-restart on crash.")
         print(f"  Logs: {_dhh()}/logs/gateway.log")
         print("  Stop it with: hermes gateway stop")
         return True
     print_error("Failed to start the gateway as a background process.")
-    if failure_hint is not None:
-        failure_hint()
+    print(
+        f"  Try manually: nohup hermes gateway run --replace "
+        f"> {_dhh()}/logs/gateway.log 2>&1 &"
+    )
     if exit_on_failure:
         sys.exit(1)
     return False
-
-
-def _launchd_fallback_to_detached(reason: str, *, exit_on_failure: bool = True) -> bool:
-    """Start the gateway detached when launchd can't manage it, with guidance."""
-    from hermes_constants import display_hermes_home as _dhh
-
-    def _manual_hint() -> None:
-        print(
-            f"  Try manually: nohup hermes gateway run --replace "
-            f"> {_dhh()}/logs/gateway.log 2>&1 &"
-        )
-
-    _write_launchd_unsupported_marker()
-    return _start_detached_with_guidance(
-        pre_lines=(
-            f"⚠ launchd cannot manage the gateway on this macOS version ({reason}).",
-        ),
-        success_started="✓ Started gateway as a background process instead",
-        success_restart="  It will NOT auto-start at login or auto-restart on crash.",
-        failure_hint=_manual_hint,
-        exit_on_failure=exit_on_failure,
-    )
 
 
 def generate_launchd_plist() -> str:
@@ -7996,18 +7965,16 @@ def _block_until_terminated() -> None:
         threading.Event().wait()
 
 
-def _is_apt_termux_install() -> bool:
+def _apt_termux_no_service_manager_refusal() -> bool:
     """True when this install is a sealed ``apt-termux`` tree.
 
     A Termux APT package is a sealed venv owned by the package manager with
     no service manager behind it: the systemd/launchd/Windows-task service
     lanes do not exist there. Keyed on the steward stamp (``sealed_steward``),
-    never a platform probe. This is a pure boolean probe — what a call site
-    does with it (refuse the service lane, start detached, print guidance)
-    belongs to the call site. Foreground process management — ``hermes
-    gateway stop``/``start``/``status`` via the CLI's own PID-file registry,
-    and the detached nohup-equivalent fallback — keeps working; only the
-    *service* install lane is refused by callers.
+    never a platform probe. Foreground process management — ``hermes gateway
+    stop``/``start``/``status`` via the CLI's own PID-file registry, and the
+    detached nohup-equivalent fallback — keeps working; only the *service*
+    install lane is refused.
     """
     from hermes_cli.steward import STEWARD_APT_TERMUX, sealed_steward
 
@@ -8051,7 +8018,7 @@ def _gateway_command_inner(args):
         force = getattr(args, "force", False)
         system = getattr(args, "system", False)
         run_as_user = getattr(args, "run_as_user", None)
-        if _is_apt_termux_install():
+        if _apt_termux_no_service_manager_refusal():
             # Sealed apt-termux install: no systemd/launchd/schtasks lane.
             _apt_termux_nohup_hint()
             sys.exit(1)
@@ -8175,7 +8142,7 @@ def _gateway_command_inner(args):
             managed_error("uninstall gateway service")
             return
         system = getattr(args, "system", False)
-        if _is_apt_termux_install():
+        if _apt_termux_no_service_manager_refusal():
             # There is no managed service to remove on an apt-termux install.
             _apt_termux_nohup_hint()
             print("Stop manual runs with: hermes gateway stop")
@@ -8227,15 +8194,21 @@ def _gateway_command_inner(args):
                 )
                 _wait_for_gateway_exit(timeout=10.0, force_after=5.0)
 
-        if _is_apt_termux_install():
+        if _apt_termux_no_service_manager_refusal():
             # Sealed apt-termux install: no service manager to call. Start
             # is the CLI's own detached background process (the nohup
             # fallback) — the PID file keeps stop/status/restart working.
-            _start_detached_with_guidance(
-                success_started="✓ Started gateway as a background process",
-                success_restart="  It will NOT auto-start at boot or auto-restart on crash.",
-                failure_hint=_apt_termux_nohup_hint,
-            )
+            if _spawn_detached_gateway():
+                from hermes_constants import display_hermes_home as _dhh
+
+                print("✓ Started gateway as a background process")
+                print("  It will NOT auto-start at boot or auto-restart on crash.")
+                print(f"  Logs: {_dhh()}/logs/gateway.log")
+                print("  Stop it with: hermes gateway stop")
+            else:
+                print_error("Failed to start the gateway as a background process.")
+                _apt_termux_nohup_hint()
+                sys.exit(1)
         elif supports_systemd_services():
             systemd_start(system=system)
         elif is_macos():

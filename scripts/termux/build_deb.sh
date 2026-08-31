@@ -94,20 +94,65 @@ log "Package version: $DEB_VERSION"
 # $PREFIX path they will occupy on-device ($PREFIX is contractual).
 log "Creating venv with the bundled CPython (inside the container)"
 if [ -d "$PAYLOAD_ABS/venv" ]; then rm -rf "$PAYLOAD_ABS/venv"; fi
+# The venv's dep list: the resolved graph with markers intact (the installer
+# evaluates them on bionic) and documented android build misses skipped --
+# uv pip check tolerates the app importing without them (its relay exporter
+# is the only casualty). Generated host-side; consumed in-container.
+python3 - "$PAYLOAD_ABS/.work/resolved.txt" "$PAYLOAD_ABS/.work/resolved-reqs.txt" <<'PYREQS' \
+    || fail "deb-venv reqs generation failed"
+import sys
+from pathlib import Path
+
+src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+MISSES = {"nemo-relay"}
+out = []
+for line in src.read_text(encoding="utf-8").splitlines():
+    if not line.strip():
+        continue
+    parts = line.split("\t")
+    name, spec, marker = parts[0], parts[1] if len(parts) > 1 else "", parts[2] if len(parts) > 2 else ""
+    if name in MISSES:
+        continue
+    req = f"{name}{spec.strip()}" if spec.strip() else name
+    if marker:
+        req += f" ; {marker}"
+    out.append(req)
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(chr(10).join(out) + chr(10), encoding="utf-8")
+PYREQS
+# The bind mount is runner-owned: the container (any uid) can only write
+# into a dir the HOST pre-created with open perms (same as the wheelhouse).
+mkdir -p "$PAYLOAD_ABS/venv"
+chmod 0777 "$PAYLOAD_ABS/venv"
 docker run --rm --platform linux/arm64 \
+    --user root \
     -v "$PAYLOAD_ABS:/payload" \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr
-        export PATH="$PREFIX/bin:$PATH"
-        # The staged tree is mounted at its REAL $PREFIX path so the venv's
+        export PATH="$PREFIX/bin:${PATH:-/usr/bin:/bin}"
+        # The staged binary is dynamically linked against its OWN tree lib;
+        # the container linker needs to be told where it lives (same fix as
+        # the wheelhouse container half).
+        export LD_LIBRARY_PATH="/payload/python$PREFIX/lib:/payload/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
         PY="/payload/python$PREFIX/bin/python3.11"
-        "$PY" -m venv --copies /payload/venv
-        /payload/venv/bin/python -m pip install --no-index --no-cache-dir \
-            --find-links /payload/wheelhouse /payload/app
-        /payload/venv/bin/python -m pip check
+        UV="/payload/uv$PREFIX/bin/uv"
+        # The staged python bundled ensurepip fails in this environment;
+        # the STAGED uv creates the venv and installs (the exact pattern
+        # the wheelhouse container proved end-to-end).
+        "$UV" venv --python "$PY" --seed /payload/venv
+        "$UV" pip install --python /payload/venv/bin/python \
+            --no-index --find-links /payload/wheelhouse --no-deps /payload/app
+        # The app graph minus documented misses, markers intact (the
+        # nemo-relay core dep cannot build on android; the deb ships
+        # without the relay exporter).
+        "$UV" pip install --python /payload/venv/bin/python \
+            --no-index --find-links /payload/wheelhouse \
+            -r /payload/.work/resolved-reqs.txt
+        "$UV" pip check --python /payload/venv/bin/python
     ' || fail "venv assembly failed inside the container (offline wheelhouse install)"
 
 # [3] Trampolines: POSIX sh, resolve their own dir, dispatch on the bundled

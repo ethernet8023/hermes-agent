@@ -12,6 +12,35 @@ SCRIPT = HERE.parent / "scripts" / "termux" / "deb_version.py"
 from scripts.termux.deb_version import deb_version_for_tag  # noqa: E402
 
 
+def test_nightly_tag_shape_matches_canonical():
+    """Invariant: the deb versioner accepts EXACTLY the nightly tags the
+    canonical release tooling mints. The canonical shape lives in
+    hermes_cli/update_channel.py:_NIGHTLY_TAG_RE (8-or-14-digit, 20-prefixed
+    timestamps); scripts/r2-release.mjs:channelForTag parses the same shape.
+    A tag this module accepts but the release flow would never mint (or vice
+    versa) is version-drift between the .deb channel and the feed channel.
+    """
+    from hermes_cli.update_channel import _NIGHTLY_TAG_RE
+    from scripts.termux import deb_version as dv
+
+    samples = [
+        "v0.20.6-nightly.20260831120000",  # canonical nightly (14-digit)
+        "v0.20.6-nightly.20260831",        # canonical nightly (8-digit)
+        "v1.2.3",                          # stable
+    ]
+    for tag in samples:
+        assert dv._TAG_RE.match(tag), f"deb versioner rejects canonical tag {tag}"
+
+    never_minted = [
+        "v1.2.3-nightly.202608311",   # 9 digits -- canonical rejects
+        "v1.2.3-nightly.12345678",    # non-20 prefix -- canonical rejects
+        "v1.2.3-nightly.202608311200001",  # 15 digits -- canonical rejects
+    ]
+    for tag in never_minted:
+        assert not _NIGHTLY_TAG_RE.match(tag), f"sample is actually canonical: {tag}"
+        assert not dv._TAG_RE.match(tag), f"deb versioner accepts never-minted tag {tag}"
+
+
 def test_stable_tag_maps_to_revision_1():
     assert deb_version_for_tag("v1.2.3") == "1.2.3-1"
 

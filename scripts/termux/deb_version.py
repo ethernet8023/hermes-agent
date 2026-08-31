@@ -18,9 +18,13 @@ from __future__ import annotations
 import re
 import sys
 
+# The nightly timestamp shape MUST match the canonical _NIGHTLY_TAG_RE in
+# hermes_cli/update_channel.py (exactly 8 or 14 digits, 20-prefixed) and
+# channelForTag in scripts/r2-release.mjs. Cross-referenced by
+# tests/test_termux_deb_version.py::test_nightly_tag_shape_matches_canonical.
 _TAG_RE = re.compile(
     r"^v(?P<major>\d{1,3})\.(?P<minor>\d{1,3})\.(?P<patch>\d{1,3})"
-    r"(?:-nightly\.(?P<ts>\d{8,14}))?$"
+    r"(?:-nightly\.(?P<ts>20\d{6}(?:\d{6})?))?$"
 )
 
 

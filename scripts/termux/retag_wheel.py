@@ -94,7 +94,13 @@ def _validate(archive: zipfile.ZipFile, filename: str, new_platform: str) -> str
         raise RetagError(f"{filename} is already an android-tagged wheel")
 
     name, meta_version = _read_metadata(archive)
-    if name != distribution:
+    # PEP 503-normalized comparison: setuptools writes canonical lowercase
+    # filenames while METADATA carries the display name (markupsafe vs
+    # MarkupSafe). Case is not identity for package names.
+    def _norm(n: str) -> str:
+        return re.sub(r"[-._]+", "-", n).lower()
+
+    if name and distribution and _norm(name) != _norm(distribution):
         raise RetagError(
             f"wheel filename package {distribution!r} does not match "
             f"METADATA Name {name!r}"
@@ -105,9 +111,9 @@ def _validate(archive: zipfile.ZipFile, filename: str, new_platform: str) -> str
             f"METADATA Version {meta_version!r}"
         )
 
-    bad = archive.testzip()
-    if bad is not None:
-        raise RetagError(f"ZIP integrity check failed on member {bad!r}")
+    # No archive-wide testzip(): every member read below (archive.read)
+    # already verifies the member CRC and raises zipfile.BadZipFile on
+    # mismatch, so the full-archive decompress would be pure duplicated work.
 
     if not any(n.endswith(".so") for n in archive.namelist()):
         raise RetagError(
@@ -177,7 +183,6 @@ def retag_wheel(wheel_path: str, new_platform: str) -> str:
     record_rows: list[tuple[str, str, str]] = []
     for name, data in members:
         if name == wheel_member:
-            name = dist_info_prefix + "WHEEL"  # unchanged; makes the swap explicit
             data = new_wheel_text.encode("utf-8")
             new_members.append((name, data))
             record_rows.append((name, record_hash(data), str(len(data))))
@@ -215,8 +220,6 @@ def retag_wheel(wheel_path: str, new_platform: str) -> str:
 
 def self_check() -> int:
     """Refuse to run unless the module's invariants hold (used by the build gate)."""
-    import shutil  # noqa: F401  (stdlib only; import here to keep module lean)
-
     with tempfile.TemporaryDirectory() as tmp:
         good = os.path.join(tmp, "demo_pkg-1.0-cp312-cp312-linux_aarch64.whl")
         with zipfile.ZipFile(good, "w") as zf:
@@ -247,9 +250,14 @@ def self_check() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Retag a wheel for PEP 738 Android/Termux (android_24_arm64_v8a)."
+        description="Retag one or more wheels for PEP 738 Android/Termux."
     )
-    parser.add_argument("wheel", nargs="?", help="path to the wheel to retag")
+    parser.add_argument(
+        "wheels",
+        nargs="*",
+        help="paths to the wheels to retag (batch mode: all processed "
+        "in-process, stopping at the first error)",
+    )
     parser.add_argument(
         "--platform-tag",
         default="android_24_arm64_v8a",
@@ -263,14 +271,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.self_check:
         return self_check()
-    if not args.wheel:
-        parser.error("wheel path is required unless --self-check is given")
-    try:
-        new_path = retag_wheel(args.wheel, args.platform_tag)
-    except (RetagError, zipfile.BadZipFile, OSError) as exc:
-        print(f"retag_wheel: error: {exc}", file=sys.stderr)
-        return 1
-    print(new_path)
+    if not args.wheels:
+        parser.error("at least one wheel path is required unless --self-check is given")
+    for wheel in args.wheels:
+        try:
+            new_path = retag_wheel(wheel, args.platform_tag)
+        except (RetagError, zipfile.BadZipFile, OSError) as exc:
+            print(f"retag_wheel: error: {wheel}: {exc}", file=sys.stderr)
+            return 1
+        print(new_path)
     return 0
 
 

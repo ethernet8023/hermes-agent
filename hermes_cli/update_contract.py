@@ -97,9 +97,11 @@ def evaluate_update_admission(project_root: Path) -> Optional[UpdateRefusal]:
     # detect (the payload has no .install_method stamp and no .git).
     try:
         from hermes_cli.steward import (
+            STEWARD_APT_TERMUX,
             STEWARD_DESKTOP,
             STEWARD_DOCKER,
             STEWARD_NIX,
+            STEWARD_UPDATE_COMMANDS,
             sealed_steward,
             steward_update_message,
         )
@@ -121,6 +123,15 @@ def evaluate_update_admission(project_root: Path) -> Optional[UpdateRefusal]:
                     code="nix",
                     message=steward_update_message(steward),
                     update_command=recommended_update_command_for_method("nix"),
+                )
+            if steward == STEWARD_APT_TERMUX:
+                # The APT repo owns the code tree; `hermes update` must
+                # never run in place — `pkg upgrade` replaces it wholesale.
+                command = STEWARD_UPDATE_COMMANDS[steward]
+                return UpdateRefusal(
+                    code=steward,
+                    message=steward_update_message(steward),
+                    update_command=command,
                 )
             # desktop-app and future package managers: there is no CLI
             # remediation command — the steward's own instructions ARE the

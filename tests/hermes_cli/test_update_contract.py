@@ -174,3 +174,36 @@ def test_refusal_receipt_written_as_refused(tmp_path, monkeypatch):
     steps = {s["name"]: s for s in data["steps"]}
     assert "admission" in steps and steps["admission"]["ok"] is False
     assert "docker pull" in steps["admission"]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Sealed-steward admission gate: apt-termux
+# ---------------------------------------------------------------------------
+
+
+def _sealed_tree(tmp_path: Path, distribution: str) -> Path:
+    """A sealed (no .git) tree stamped with ``distribution``."""
+    root = tmp_path / "sealed"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "install-stamp.json").write_text(
+        json.dumps({"distribution": distribution})
+    )
+    return root
+
+
+def test_admission_apt_termux_refuses_with_pkg_upgrade(tmp_path, monkeypatch):
+    """A sealed apt-termux tree (no .git) is refused by the steward gate:
+    the package manager owns the code tree, so remediation is pkg upgrade
+    — never `hermes update`."""
+    import hermes_cli.image_provenance as ip
+
+    monkeypatch.setattr(ip, "IMAGE_PROVENANCE_PATH", tmp_path / "absent.json")
+    monkeypatch.setattr(
+        "hermes_cli.config.detect_install_method", lambda *a, **k: "git"
+    )
+    root = _sealed_tree(tmp_path, "apt-termux")
+    refusal = evaluate_update_admission(root)
+    assert refusal is not None
+    assert refusal.code == "apt-termux"
+    assert "pkg upgrade hermes-agent" in refusal.message
+    assert "pkg upgrade hermes-agent" in refusal.update_command

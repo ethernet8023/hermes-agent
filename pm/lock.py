@@ -110,6 +110,21 @@ class Facts:
             return False
         return (store_root / fact["entry"]).exists()
 
+    def installed_for_target(
+        self, name: str, expected_version: str | None, store_root: Path, entry_name: str
+    ) -> bool:
+        """Target-aware installed check for cross-target staging: the fact
+        names the entry, and entries are (package, version, target)-keyed.
+        The HOST's fact never satisfies a cross-target stage and vice versa.
+        """
+        fact = self._packages.get(name)
+        if not fact:
+            # No fact at all: the entry dir alone is NOT proof -- facts are
+            # the installed-state record; a stray entry is a cache, not an
+            # install. (Keeps installed()'s semantics for the null case.)
+            return False
+        return fact.get("entry") == entry_name and (store_root / entry_name).exists()
+
     def env_for(self, name: str, store_root: Path) -> dict:
         fact = self._packages.get(name) or {}
         return _resolve(fact.get("env", {}), store_root)

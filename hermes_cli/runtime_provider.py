@@ -163,6 +163,13 @@ def _detect_api_mode_for_url(base_url: str) -> Optional[str]:
         return "codex_responses"
     if hostname == "api.actual.inc":
         return "codex_responses"
+    # Ramp Router: Responses-native host — /v1/chat/completions is only a
+    # minimal compatibility shim, while reasoning and caching support live
+    # on /v1/responses (docs.router.com/api/endpoint). Mirrors the
+    # host_mandated_api_mode clause in hermes_cli/providers.py so the
+    # runtime resolver stays in lockstep. Exact hostname per #32243.
+    if hostname == "api.router.com":
+        return "codex_responses"
     # Direct native Anthropic host: realign with providers.determine_api_mode,
     # which already maps this host to anthropic_messages. The exact-hostname
     # match rejects lookalike subdomains (api.anthropic.com.attacker.test) and
@@ -700,6 +707,30 @@ def _try_resolve_from_custom_pool(
         return None
 
 
+def _filter_capabilities(value: Any) -> Dict[str, bool]:
+    """Return the string-keyed boolean capabilities accepted at runtime."""
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: enabled
+        for key, enabled in value.items()
+        if isinstance(key, str) and isinstance(enabled, bool)
+    }
+
+
+def _lift_model_capabilities(
+    entry: Dict[str, Any], model: Optional[str], result: Dict[str, Any]
+) -> None:
+    """Copy explicit boolean per-model capabilities into the runtime."""
+    capabilities = _filter_capabilities(entry.get("capabilities"))
+    models = entry.get("models")
+    model_config = models.get(model) if isinstance(models, dict) and model else None
+    if isinstance(model_config, dict):
+        capabilities.update(_filter_capabilities(model_config))
+    if capabilities:
+        result["capabilities"] = capabilities
+
+
 def _lift_max_output_tokens(entry: Dict[str, Any], result: Dict[str, Any]) -> None:
     """Propagate a per-provider output cap onto the resolved runtime dict.
 
@@ -797,7 +828,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
                 # Found match by provider key
                 base_url = entry.get("api") or entry.get("url") or entry.get("base_url") or ""
                 if base_url:
-                    result = {
+                    result: Dict[str, Any] = {
                         "name": entry.get("name", ep_name),
                         "base_url": base_url.strip(),
                         "api_key": resolved_api_key,
@@ -825,6 +856,9 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
                     if api_mode:
                         result["api_mode"] = api_mode
                     _lift_max_output_tokens(entry, result)
+                    capabilities = _filter_capabilities(entry.get("capabilities"))
+                    if capabilities:
+                        result["capabilities"] = capabilities
                     return result
 
     # Fall back to custom_providers: list (legacy format)
@@ -872,6 +906,9 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
         if model_name:
             result["model"] = model_name
         _lift_max_output_tokens(entry, result)
+        capabilities = _filter_capabilities(entry.get("capabilities"))
+        if capabilities:
+            result["capabilities"] = capabilities
         return result
 
     return None
@@ -1170,6 +1207,53 @@ def _resolve_named_custom_runtime(
     # `provider: ollama` with a LAN/WireGuard `base_url` doesn't silently
     # fall through to OpenRouter.
     requested_norm = (requested_provider or "").strip().lower()
+
+    # Managed llama.cpp runtime: a llamacpp-flavored alias with no explicit
+    # base_url resolves to the supervised server (or a detected external
+    # one) before the generic custom fallthrough. Explicit base_url always
+    # wins — a user pointing at a specific server means that server.
+    if requested_norm in ("llamacpp", "llama.cpp", "llama-cpp") and not explicit_base_url:
+        try:
+            from hermes_cli.local_runtime.endpoint import resolve_llamacpp_endpoint
+
+            endpoint = resolve_llamacpp_endpoint()
+        except Exception:  # noqa: BLE001 — resolution is best-effort
+            endpoint = None
+        if endpoint:
+            return {
+                "provider": "custom",
+                "api_mode": "chat_completions",
+                "base_url": endpoint["base_url"],
+                "api_key": (explicit_api_key or "").strip()
+                or endpoint["api_key"] or "no-key-required",
+                "source": "local-runtime",
+                "requested_provider": requested_provider,
+            }
+        # No server to serve this model. Say so and stop — falling through
+        # to the generic custom path sends the request to whatever provider
+        # picks it up (OpenRouter with a placeholder key), and the user's
+        # "local server is off" surfaces as that provider's baffling
+        # "401 Invalid API key". The switch's own state picks the message:
+        # the user who turned the server off gets pointed at the switch,
+        # anyone else at the setup pane.
+        try:
+            from hermes_cli.config import load_config as _load_cfg
+
+            _lr_enabled = bool((_load_cfg().get("local_runtime") or {}).get("enabled"))
+        except Exception:  # noqa: BLE001
+            _lr_enabled = False
+        if _lr_enabled:
+            raise ValueError(
+                "The local model server isn't running. It may still be "
+                "starting — try again in a moment, or check Settings → "
+                "Providers → Local models."
+            )
+        raise ValueError(
+            "The local model server is turned off. Turn it back on in "
+            "Settings → Providers → Local models, or switch to another "
+            "model."
+        )
+
     if requested_norm and requested_norm != "custom":
         try:
             from hermes_cli.auth import resolve_provider as _resolve_provider
@@ -1232,6 +1316,7 @@ def _resolve_named_custom_runtime(
         model_name = target_model or custom_provider.get("model")
         if model_name:
             pool_result["model"] = model_name
+        _lift_model_capabilities(custom_provider, model_name, pool_result)
         if isinstance(custom_provider.get("max_output_tokens"), int):
             pool_result["max_output_tokens"] = custom_provider["max_output_tokens"]
         request_overrides = _custom_provider_request_overrides(custom_provider)
@@ -1287,6 +1372,7 @@ def _resolve_named_custom_runtime(
         "base_url": base_url,
         "api_key": api_key or "no-key-required",
         "source": f"custom_provider:{custom_provider.get('name', requested_provider)}",
+        "requested_provider": requested_provider,
     }
     # Propagate the model name so callers can override self.model when the
     # provider name differs from the actual model string the API expects.
@@ -1298,6 +1384,9 @@ def _resolve_named_custom_runtime(
         result["model"] = target_model
     elif custom_provider.get("model"):
         result["model"] = custom_provider["model"]
+    _lift_model_capabilities(
+        custom_provider, result.get("model"), result
+    )
     if isinstance(custom_provider.get("max_output_tokens"), int):
         result["max_output_tokens"] = custom_provider["max_output_tokens"]
     # Per-provider extra HTTP headers (proxies, gateways, custom auth).

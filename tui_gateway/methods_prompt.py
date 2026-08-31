@@ -862,7 +862,18 @@ def _(rid, params: dict) -> dict:
             5071,
             f"session storage could not be written: {exc}",
         )
-    _start_agent_build(sid, session)
+    # A completed FAILED build must not wedge the session: the error frame
+    # says retryable, so a new send (or the error card's Retry) rebuilds the
+    # agent with fresh provider resolution instead of replaying the cached
+    # failure forever. Before this, only a model switch reset the failed
+    # generation — a session that failed once (local server off) kept
+    # erroring after the server came back, while new sessions worked. Falls
+    # through to the normal build when there is no completed failure to
+    # clear.
+    if not _restart_completed_failed_agent_build(
+        sid, session, session.get("agent_ready")
+    ):
+        _start_agent_build(sid, session)
 
     def run_after_agent_ready() -> None:
         # Patient wait (#63078): the user's message is already the accepted
@@ -1372,6 +1383,77 @@ def _(rid, params: dict) -> dict:
                 "background.complete",
                 parent,
                 {"task_id": task_id, "text": f"error: {e}"},
+            )
+        finally:
+            _clear_session_context(session_tokens)
+
+    threading.Thread(target=run, daemon=True).start()
+    return _ok(rid, {"task_id": task_id})
+
+
+@method("prompt.btw")
+def _(rid, params: dict) -> dict:
+    """Answer a side question about the session without touching its history.
+
+    Snapshots the live conversation (in-flight ``_session_messages`` when a
+    turn is running, else the persisted ``session["history"]``) and runs a
+    one-shot auxiliary LLM call against it (``agent/side_question.py``). The
+    session's history, role alternation, and prompt cache are untouched; the
+    answer arrives as a ``btw.complete`` event.
+    """
+    session, err = _sess(params, rid)
+    if err:
+        return err
+    text, parent = params.get("text", ""), params.get("session_id", "")
+    if not text:
+        return _err(rid, 4012, "text required")
+    task_id = f"btw_{uuid.uuid4().hex[:6]}"
+
+    agent = session.get("agent")
+    snapshot = list(
+        getattr(agent, "_session_messages", None)
+        or session.get("history")
+        or []
+    )
+    main_runtime = {
+        "model": getattr(agent, "model", None),
+        "provider": getattr(agent, "provider", None),
+        "base_url": getattr(agent, "base_url", None),
+        "api_key": getattr(agent, "api_key", None),
+        "api_mode": getattr(agent, "api_mode", None),
+    }
+
+    def run():
+        session_tokens = _set_session_context(task_id, cwd=_session_cwd(session))
+        try:
+            from agent.side_question import answer_side_question
+
+            _profile_home_str = session.get("profile_home")
+            home_token = (
+                set_hermes_home_override(_profile_home_str)
+                if _profile_home_str
+                else None
+            )
+            try:
+                answer = answer_side_question(
+                    text,
+                    snapshot,
+                    parent_agent=agent,
+                    main_runtime=main_runtime,
+                )
+            finally:
+                if home_token is not None:
+                    reset_hermes_home_override(home_token)
+            _emit(
+                "btw.complete",
+                parent,
+                {"task_id": task_id, "question": text, "text": answer or ""},
+            )
+        except Exception as e:
+            _emit(
+                "btw.complete",
+                parent,
+                {"task_id": task_id, "question": text, "text": f"error: {e}"},
             )
         finally:
             _clear_session_context(session_tokens)

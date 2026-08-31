@@ -18,14 +18,13 @@ etc.) surface as specific blocked checks via `hermes computer-use doctor`
 rather than failing silently.
 
 Install:
-  cua-driver is a pinned pm package — pm/lock.json carries the release and
-  the per-platform sha256, and the pm store is the canonical install:
-    hermes pm install        (or `hermes tools` → Computer Use toolset)
-  Resolution below prefers the pm store's copy, then PATH and the canonical
-  user-local locations the upstream installer uses.
+  - **macOS**:
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh)"
+  - **Windows** (PowerShell):
+      irm https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1 | iex
 
-After install, `cua-driver` supports `cua-driver mcp` (stdio transport)
-which is what we invoke.
+After install, `cua-driver` is on $PATH and supports `cua-driver mcp` (stdio
+transport) which is what we invoke.
 
 The macOS path uses private SkyLight SPIs (SLEventPostToPid,
 SLPSPostEventRecordTo, _AXObserverAddNotificationAndCheckRemote) that aren't
@@ -310,26 +309,6 @@ def _cua_capability_manifest() -> Optional[str]:
     return raw.strip()
 
 
-def _cua_grant_existing_profile() -> bool:
-    """True when the user pre-authorized existing-profile browser attachment.
-
-    Reads ``computer_use.grant_existing_profile`` (default False). This is
-    cua-driver's trusted-launcher grant. Hermes passes
-    ``--grant existing-profile`` when it launches the standard-mode runtime.
-    On macOS it also selects a private socket so the newly configured
-    CuaDriver.app runtime cannot collide with an already-running default
-    daemon. The setting never applies to bounded mode, where the reviewed
-    capability manifest owns authorization.
-
-    It DOES apply to unrestricted mode. An approval bypass (``--yolo``,
-    ``-z``) is consent to skip prompts, not consent to read an existing
-    browser profile's live pages, cookies, and storage, so the host-side
-    grant floor enforces this key even when the private unrestricted daemon
-    would answer the launch.
-    """
-    return bool(_computer_use_cfg().get("grant_existing_profile", False))
-
-
 def _manifest_is_mode_independent(path: str) -> bool:
     """True when this capability manifest may accompany any permission mode.
 
@@ -359,44 +338,6 @@ def _manifest_is_mode_independent(path: str) -> bool:
         return False
     version = parsed.get("version")
     return isinstance(version, int) and not isinstance(version, bool) and version >= 3
-
-
-def _standard_runtime_launch_args(
-    args: List[str],
-    *,
-    grant_existing_profile: bool,
-    platform: str,
-    socket_path: Optional[str] = None,
-) -> Tuple[List[str], Optional[str]]:
-    """Return MCP args and any private runtime socket owned by this transport.
-
-    Windows and Linux run the standard runtime in the MCP process, so the
-    launch grant can be passed directly. macOS proxies through CuaDriver.app;
-    a grant must therefore launch a fresh app daemon on a private socket
-    instead of trying to reconfigure the default daemon.
-
-    macOS TCC attribution: because the runtime runs inside CuaDriver.app,
-    Accessibility and Screen Recording grants attribute to the
-    ``com.trycua.driver`` bundle — never to the host Hermes process. That
-    is the accepted trade for one pinned binary and one launch path on
-    every platform; the in-process ``--direct`` runtime (restack-era) is
-    deliberately not ported — it is mutually exclusive with ``--socket``,
-    which the embedded private-daemon path here requires.
-
-    ``platform`` is explicit so this policy can be tested as a pure
-    function on every CI host.
-    """
-    result = list(args)
-    if not grant_existing_profile:
-        return result, None
-    result.extend(["--grant", "existing-profile"])
-    if platform != "darwin":
-        return result, None
-    private_socket = socket_path or os.path.join(
-        tempfile.gettempdir(), f"hermes-cua-standard-{uuid.uuid4().hex[:12]}.sock"
-    )
-    result.extend(["--socket", private_socket])
-    return result, private_socket
 
 
 def _computer_use_max_image_dimension() -> Optional[int]:
@@ -1114,29 +1055,6 @@ def _has_path_separator(value: str) -> bool:
     return os.sep in value or (os.altsep is not None and os.altsep in value)
 
 
-def _pm_cua_driver_cmd() -> Optional[str]:
-    """The pm store's pinned cua-driver binary, realized on demand.
-
-    cua-driver is a pm package: pm/lock.json pins the release and the
-    per-platform sha256, and ``pm.ensure`` stages it into the store. The
-    store's copy is canonical — it wins over PATH and user-local install
-    locations so every surface drives the same pinned binary. Returns
-    None when pm cannot provide it (not pinned, lazy installs disabled,
-    sealed bundle) so the caller falls back to PATH.
-    """
-    try:
-        import pm
-
-        runner = pm.ensure("cua-driver")
-        for candidate in ("cua-driver.exe", "cua-driver"):
-            resolved = shutil.which(candidate, path=runner.env.get("PATH"))
-            if resolved:
-                return resolved
-    except Exception as e:  # pragma: no cover — defensive
-        logger.debug("pm cua-driver unavailable: %s", e)
-    return None
-
-
 def _candidate_cua_driver_commands(override: Optional[str] = None) -> List[str]:
     """Return candidate cua-driver commands in resolution order.
 
@@ -1186,27 +1104,10 @@ def resolve_cua_driver_cmd(override: Optional[str] = None) -> Optional[str]:
     """Resolve the cua-driver executable for every runtime/status surface.
 
     A supplied override (or ``HERMES_CUA_DRIVER_CMD``) is never silently
-    replaced by another binary. Otherwise the pm store's pinned copy wins
-    (``_pm_cua_driver_cmd``), then PATH, then canonical user-local
-    installation locations used by the official installer.
+    replaced by another binary. Otherwise resolve PATH first, then canonical
+    user-local installation locations used by the official installer.
     """
-    configured = (
-        override if override is not None else os.environ.get(_CUA_DRIVER_CMD_ENV, "")
-    ).strip()
-    if configured:
-        # An explicit override is authoritative: if it is wrong, report the
-        # driver missing instead of silently picking a different binary.
-        expanded = os.path.expanduser(configured)
-        if _has_path_separator(expanded):
-            return expanded if shutil.which(expanded) else None
-        return shutil.which(expanded)
-
-    # Managed-first: the pm store's pinned copy is canonical.
-    managed = _pm_cua_driver_cmd()
-    if managed:
-        return managed
-
-    for candidate in _candidate_cua_driver_commands(None):
+    for candidate in _candidate_cua_driver_commands(override):
         expanded = os.path.expanduser(candidate)
         if _has_path_separator(expanded):
             if shutil.which(expanded):
@@ -1491,10 +1392,22 @@ def _maybe_nudge_update() -> None:
 
 
 def cua_driver_install_hint() -> str:
+    if sys.platform == "win32":
+        installer = (
+            '  irm https://raw.githubusercontent.com/trycua/cua/main/'
+            'libs/cua-driver/scripts/install.ps1 | iex'
+        )
+    else:
+        installer = (
+            '  /bin/bash -c "$(curl -fsSL '
+            'https://raw.githubusercontent.com/trycua/cua/main/'
+            'libs/cua-driver/scripts/install.sh)"'
+        )
     return (
         "cua-driver is not installed. Install with one of:\n"
-        "  hermes pm install\n"
         "  hermes computer-use install\n"
+        "Or run the upstream installer directly:\n"
+        f"{installer}\n"
         "Or run `hermes tools` and enable the Computer Use toolset to install it automatically."
     )
 
@@ -1754,10 +1667,6 @@ class _CuaDriverSession:
         # Used to revive a logical ended-session rejection without
         # recursive call_tool re-entry or backend-owned state (#71166).
         self._declared_session_id: Optional[str] = None
-        # A macOS standard-mode launch grant belongs to the app daemon that
-        # receives it. Select and own a private endpoint so an existing
-        # default daemon cannot reject or silently miss the requested grant.
-        self._owned_standard_runtime_socket: Optional[str] = None
         self._transport_generation = 0
         self._transport_reset_callback: Optional[Any] = None
 
@@ -1801,13 +1710,6 @@ class _CuaDriverSession:
                 child_env = self._embedded_daemon.child_env()
             else:
                 command, args = _resolve_mcp_invocation(driver_cmd)
-                args, owned_socket = _standard_runtime_launch_args(
-                    args,
-                    grant_existing_profile=_cua_grant_existing_profile(),
-                    platform=sys.platform,
-                    socket_path=self._owned_standard_runtime_socket,
-                )
-                self._owned_standard_runtime_socket = owned_socket
                 child_env = cua_driver_child_env()
             _t_manifest = _time.monotonic()
             params = StdioServerParameters(
@@ -1916,17 +1818,8 @@ class _CuaDriverSession:
         with self._lock:
             if self._started:
                 return
-            # A previous transport may have died without taking down its
-            # private app daemon. Stop that exact endpoint before relaunching
-            # with --grant; grants cannot modify an already-running runtime.
-            if self._owned_standard_runtime_socket is not None:
-                self._stop_owned_standard_runtime_locked()
             self._bridge.start()
-            try:
-                self._start_lifecycle_locked()
-            except Exception:
-                self._stop_owned_standard_runtime_locked()
-                raise
+            self._start_lifecycle_locked()
             self._started = True
 
     def _start_lifecycle_locked(self) -> None:
@@ -1972,11 +1865,9 @@ class _CuaDriverSession:
     def stop(self) -> None:
         with self._lock:
             if not self._started:
-                self._stop_owned_standard_runtime_locked()
                 return
             self._started = False
             self._stop_lifecycle_locked()
-            self._stop_owned_standard_runtime_locked()
 
     def set_transport_reset_callback(self, callback: Any) -> None:
         """Register a synchronous cache invalidation hook for transport swaps."""
@@ -1990,34 +1881,6 @@ class _CuaDriverSession:
             callback()
         except Exception as exc:
             logger.debug("cua-driver transport reset callback failed: %s", exc)
-
-    def _stop_owned_standard_runtime_locked(self) -> None:
-        """Stop the exact private macOS app daemon launched for a grant."""
-        socket_path = getattr(self, "_owned_standard_runtime_socket", None)
-        if not socket_path:
-            return
-        self._owned_standard_runtime_socket = None
-        driver_command = resolve_cua_driver_cmd()
-        if driver_command:
-            from tools.environments.local import _sanitize_subprocess_env
-
-            try:
-                subprocess.run(
-                    [driver_command, "stop", "--socket", socket_path],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=3.0,
-                    creationflags=windows_hide_flags(),
-                    env=_sanitize_subprocess_env(cua_driver_child_env()),
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
-        if os.path.exists(socket_path):
-            try:
-                os.remove(socket_path)
-            except OSError:
-                pass
 
     def _stop_lifecycle_locked(self) -> None:
         """Signal shutdown + wait for the lifecycle coroutine to unwind.
@@ -2231,7 +2094,6 @@ class _CuaDriverSession:
             except Exception as e:
                 logger.debug("cua-driver session cleanup before reconnect failed: %s", e)
         self._started = False
-        self._stop_owned_standard_runtime_locked()
         # Clear stale capability state; the next start populates from scratch.
         self._capabilities = {}
         self._tool_schemas = {}
@@ -2859,10 +2721,10 @@ class CuaDriverBackend(ComputerUseBackend):
         # backend uses — so users never hit an opaque `No module named 'mcp'`
         # at invoke time. Auto-install is gated by `security.allow_lazy_installs`
         # (default on); when it's disabled or fails, ensure() raises
-        # InstallError carrying an actionable `uv pip install mcp==…`
+        # FeatureUnavailable carrying an actionable `uv pip install mcp==…`
         # hint, which surfaces via the backend-unavailable path in tool.py.
-        from pm import ensure_import as _lazy_ensure
-        _lazy_ensure("computer-use")
+        from tools.lazy_deps import ensure as _lazy_ensure
+        _lazy_ensure("tool.computer_use", prompt=False)
         # A just-installed package may not be importable until the import
         # machinery's caches are refreshed within this process.
         import importlib

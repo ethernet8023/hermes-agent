@@ -417,3 +417,37 @@ def test_repair_log_line_on_same_version_repin(pm_env, caplog):
         ensure("faketool", base_env={})
     repairs = [r.getMessage() for r in caplog.records if "repair:" in r.getMessage()]
     assert any("1.0" in msg and env["digest"][:12] in msg for msg in repairs)
+
+
+def test_tree_digest_ignores_pycache(pm_env, monkeypatch):
+    """Bytecode caches are runtime state, not package bytes: the staged
+    python entry runs (uv venv/uv sync in a bundle build, first boot of a
+    shipped app) and CPython writes __pycache__/*.pyc into it AFTER the
+    digest was recorded. The digest must stay stable across that, while
+    tampering a REAL file inside a dir that merely sits beside a
+    __pycache__ is still caught. (Live field failure: '✗ python: realized
+    bytes do not match recorded digest' on every bundled-release smoke.)"""
+    tree = pm_env["tmp_path"] / "py-entry"
+    (tree / "Lib").mkdir(parents=True)
+    (tree / "Lib" / "os.py").write_text("print('stdlib')")
+
+    before = tree_digest(tree)
+
+    # The interpreter "ran": pyc caches appeared deep in the tree.
+    cache = tree / "Lib" / "__pycache__"
+    cache.mkdir()
+    (cache / "os.cpython-311.pyc").write_bytes(b"\x00compiled-bytes\x00")
+    nested = tree / "Lib" / "json" / "__pycache__"
+    nested.mkdir(parents=True)
+    (nested / "tool.cpython-311.pyc").write_bytes(b"\x00more\x00")
+
+    assert tree_digest(tree) == before
+
+    # A cache write is not a mask: changing a real .py still trips the digest.
+    (tree / "Lib" / "os.py").write_text("print('tampered')")
+    assert tree_digest(tree) != before
+
+    # Restoring the .py (leaving the caches) restores the digest: caches
+    # contribute nothing in either direction.
+    (tree / "Lib" / "os.py").write_text("print('stdlib')")
+    assert tree_digest(tree) == before

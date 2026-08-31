@@ -208,12 +208,17 @@ def tree_digest(root: Path) -> str:
     by posix relpath, hash `relpath\\0<content>` per entry. No mtimes, no
     mode bits. Symlinks contribute their LINK TARGET TEXT (os.readlink),
     not the target's bytes — the link is the data. Directory symlinks are
-    not followed."""
+    not followed.
+
+    ``__pycache__`` directories are skipped: CPython writes .pyc caches
+    into them the first time the staged interpreter runs (uv venv/uv sync
+    in a bundle build; first boot of a shipped app), so they are runtime
+    state, not package bytes — the digest is over what pm published."""
     import hashlib
 
     files: list[tuple[str, Path]] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
+        dirnames[:] = [d for d in sorted(dirnames) if d != "__pycache__"]
         for fname in filenames:
             path = Path(dirpath) / fname
             files.append((path.relative_to(root).as_posix(), path))

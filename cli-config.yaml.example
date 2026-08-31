@@ -148,6 +148,15 @@ model:
 #     # api_mode auto-detected as codex_responses for api.meta.ai; no need to set
 #     # (the bundled meta-ai provider covers this — a named custom provider is
 #     # only needed for a non-default Meta-compatible endpoint)
+# providers:
+#   router:
+#     base_url: https://api.router.com/v1
+#     api_key: ${RAMP_ROUTER_API_KEY}
+#     # api_mode auto-detected as codex_responses for api.router.com — the
+#     # Responses API is Router's native wire (chat/completions is only a
+#     # compatibility shim). The bundled router provider covers this; a named
+#     # custom provider is only needed for a non-default Router-compatible
+#     # endpoint.
 
 
 # Command-minted credentials (optional): key_cmd
@@ -649,9 +658,13 @@ compression:
   # fallback and still handles every non-eligible session.
   codex_responses_native: false
 
-  # Server-side compaction trigger in input tokens. Clamped below the local
-  # compression threshold at request time so the server compacts first.
-  codex_responses_compact_threshold: 200000
+  # Optional absolute server compaction trigger in input tokens. The default
+  # null value follows the resolved local compression trigger with an 8192 token
+  # safety margin. For example, a local trigger of 765000 selects 756808.
+  # A positive integer stays absolute and only clamps downward when needed so
+  # the server compacts first. Invalid values use this automatic behavior. If
+  # the local trigger is unavailable, automatic mode uses 200000.
+  codex_responses_compact_threshold: null
 
   # Number of non-system messages to protect at the head of the transcript, in
   # ADDITION to the system prompt (which is always implicitly protected).
@@ -1216,8 +1229,11 @@ platform_toolsets:
 #         # append  = Hermes defaults first, then user priority
 #         # replace = only the list below defines priority
 #         priority_mode: prepend
+#         # Priority is applied across core + plugin + skill commands before
+#         # the cap, so a listed skill command always keeps a menu slot.
 #         priority:
 #           - my_plugin_command
+#           - my-important-skill
 #   slack:
 #     extra:
 #       # Render live tool calls as Slack-native plan/task cards. This explicit

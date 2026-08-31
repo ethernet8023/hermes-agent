@@ -215,7 +215,12 @@ _uv_lock_digest_cache: dict[Path, tuple] = {}
 def uv_env(base_env: Optional[dict] = None) -> dict[str, str]:
     """Sanitized env for pm's internal uv invocations: user-level UV
     overrides and active-venv leakage must not steer which interpreter or
-    install dir uv picks (the interpreter-hijack class, #83914)."""
+    install dir uv picks (the interpreter-hijack class, #83914), and
+    ambient user/system uv config (uv.toml under XDG_CONFIG_HOME/DIRS)
+    must not reach the subprocess either. User config discovery is
+    redirected to an empty dir; HOME is left alone so caches, credentials,
+    and git keep working (the #82446 isolation contract, which lived in
+    the installers' run_locked_uv_sync() before the sync moved into pm)."""
     env = dict(os.environ if base_env is None else base_env)
     for key in list(env):
         if key.startswith("UV_") or key in (
@@ -226,8 +231,26 @@ def uv_env(base_env: Optional[dict] = None) -> dict[str, str]:
             "PYTHONEXECUTABLE",
         ):
             env.pop(key)
+    isolated = _isolated_config_dir()
+    env["XDG_CONFIG_HOME"] = str(isolated)
+    env["XDG_CONFIG_DIRS"] = str(isolated)
     env["UV_NO_CONFIG"] = "1"
     return env
+
+
+_ISOLATED_CONFIG_DIR: Optional[str] = None
+
+
+def _isolated_config_dir() -> Path:
+    """A per-process empty dir ambient uv config is redirected to. One
+    shared empty dir is all that's needed (and all that ever gets
+    created); it is never populated, so it cannot steer resolution."""
+    import tempfile
+
+    global _ISOLATED_CONFIG_DIR
+    if _ISOLATED_CONFIG_DIR is None:
+        _ISOLATED_CONFIG_DIR = tempfile.mkdtemp(prefix="pm-uv-")
+    return Path(_ISOLATED_CONFIG_DIR)
 
 
 @register

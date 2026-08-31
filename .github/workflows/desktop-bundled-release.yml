@@ -360,6 +360,20 @@ jobs:
             echo "APPLE_API_KEY_P8 secret not set — notarization will be skipped"
           fi
 
+      - name: Pin CMake < 4 for sdist builds
+        # python-olm (matrix extra) builds libolm from sdist on non-Linux
+        # targets, and its libolm/CMakeLists.txt requires CMake < 3.5
+        # compat (removed in CMake 4, which the darwin + win32 runners
+        # ship). Pin a CMake 3.x first on PATH for those legs so the sdist
+        # build configures. Linux uses the manylinux wheel — no build, no
+        # cmake needed. The pip cmake package ships a binary wheel for
+        # every non-Linux target (macos universal2, win_amd64, win_arm64).
+        if: startsWith(matrix.target.label, 'darwin-') || startsWith(matrix.target.label, 'win32-')
+        shell: bash
+        run: |
+          uv tool install cmake==3.31.6
+          echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
+
       - name: Build and package
         shell: bash
         timeout-minutes: 85

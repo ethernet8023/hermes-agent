@@ -437,7 +437,7 @@ class _AuxiliaryCancellationDecision:
 # deadline punishes SLOW summary models exactly as hard as HUNG ones: a
 # reasoning model happily streaming a large summary is killed mid-generation.
 # This thread-local hook lets the host observe liveness instead: the wire
-# consumers below tick it on every streamed token/SSE event, and the host
+# consumers below tick it only for non-empty streamed payloads, and the host
 # extends its deadline while tokens are moving (see gateway/run.py session
 # hygiene + CompressionCommitFence.touch_progress). Thread-local matches the
 # call topology — the aux call and its stream consumption run synchronously
@@ -468,19 +468,80 @@ def _notify_aux_dispatch() -> None:
             logger.debug("aux dispatch hook failed", exc_info=True)
 
 
-def _notify_aux_provider_response() -> None:
-    """Record a provider response/chunk, then preserve the liveness signal."""
+def _notify_aux_timing_response() -> None:
+    """Record a provider response/chunk WITHOUT claiming forward progress.
+
+    Same timing slot as :func:`_notify_aux_provider_response`, minus the
+    forward-progress chain: used for content-free frames (keepalives,
+    lifecycle events, typed-but-empty deltas) that must still count toward
+    ``time_to_first_progress_ms`` telemetry but must not reset a compression
+    inactivity fence.
+    """
     hook = getattr(_aux_provider_response, "hook", None)
     if hook is not None:
         try:
             hook()
         except Exception:
             logger.debug("aux provider response hook failed", exc_info=True)
+
+
+def _notify_aux_provider_response() -> None:
+    """Record a provider response/chunk, then preserve the liveness signal."""
+    _notify_aux_timing_response()
     _notify_aux_progress()
 
 
 def _aux_progress_active() -> bool:
     return getattr(_aux_progress, "hook", None) is not None
+
+
+def _event_field(event: Any, name: str) -> Any:
+    if isinstance(event, dict):
+        return event.get(name)
+    return getattr(event, name, None)
+
+
+def _anthropic_event_has_content(event: Any) -> bool:
+    """Whether an Anthropic stream event carries a non-empty payload."""
+    event_type = _event_field(event, "type")
+    if event_type == "content_block_delta":
+        delta = _event_field(event, "delta")
+        return any(
+            bool(_event_field(delta, field))
+            for field in ("text", "thinking", "partial_json", "signature", "citation")
+        )
+    if event_type == "content_block_start":
+        block = _event_field(event, "content_block")
+        return _event_field(block, "type") == "tool_use" and any(
+            bool(_event_field(block, field)) for field in ("id", "name")
+        )
+    return False
+
+
+_CODEX_PROGRESS_DELTA_TYPES = frozenset(
+    {
+        "response.output_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.text.delta",
+        "response.audio.delta",
+        "response.function_call_arguments.delta",
+        "response.reasoning_text.delta",
+    }
+)
+
+
+def _codex_event_has_content(event: Any) -> bool:
+    """Whether a Codex Responses event carries a non-empty payload."""
+    event_type = _event_field(event, "type")
+    if event_type in _CODEX_PROGRESS_DELTA_TYPES:
+        return bool(_event_field(event, "delta"))
+    if event_type == "response.output_item.added":
+        item = _event_field(event, "item")
+        return "function_call" in str(_event_field(item, "type") or "") and any(
+            bool(_event_field(item, field))
+            for field in ("id", "call_id", "name", "arguments")
+        )
+    return False
 
 
 @contextlib.contextmanager
@@ -649,6 +710,8 @@ _PROVIDER_ALIASES = {
     "tokenhub": "tencent-tokenhub",
     "tencent-cloud": "tencent-tokenhub",
     "tencentmaas": "tencent-tokenhub",
+    "tokenplan": "tencent-tokenplan",
+    "tencent-lkeap": "tencent-tokenplan",
 }
 
 
@@ -1019,7 +1082,8 @@ _API_KEY_PROVIDER_AUX_MODELS_FALLBACK: Dict[str, str] = {
     "opencode-go": "glm-5",
     "kilocode": "google/gemini-3.6-flash",
     "ollama-cloud": "nemotron-3-nano:30b",
-    "tencent-tokenhub": "hy3-preview",
+    "tencent-tokenhub": "hy4-preview",
+    "tencent-tokenplan": "hy4-preview",
     # NB: no "deepinfra" entry — its aux model lives on the ProviderProfile
     # (plugins/model-providers/deepinfra: default_aux_model), which
     # _get_aux_model_for_provider() reads first. Duplicating it here would be
@@ -1906,10 +1970,15 @@ class _CodexCompletionsAdapter:
             def _on_each_event(_event: Any) -> None:
                 # Re-check timeout/cancellation per event, matching the
                 # cadence the old in-line ``_check_cancelled()`` used.
-                # Each SSE event is also forward progress for hosts watching
-                # a progress hook (gateway session hygiene): a reasoning
-                # model streaming a long summary must not look hung.
-                _notify_aux_provider_response()
+                # Provider response timing (TTFP telemetry) records every
+                # frame; forward progress for hosts watching liveness (the
+                # compression commit fence) counts only substantive
+                # payloads — lifecycle and keepalive events must not reset
+                # the compression idle clock.
+                if _codex_event_has_content(_event):
+                    _notify_aux_provider_response()
+                else:
+                    _notify_aux_timing_response()
                 _check_cancelled()
 
             event_stream = self._client.responses.create(**stream_kwargs)
@@ -2263,13 +2332,22 @@ class _AnthropicCompletionsAdapter:
         response = create_anthropic_message(
             self._client,
             anthropic_kwargs,
-            # Tick the aux forward-progress hook per streamed event so hosts
-            # watching liveness (gateway session hygiene) don't kill a
-            # slow-but-generating summary model. No-op when no hook is
-            # installed (None keeps the fast get_final_message path).
+            # Per streamed event: record provider-response timing always, but
+            # tick the forward-progress hook (hosts watching liveness —
+            # gateway session hygiene / the compression commit fence) only
+            # for substantive payloads, so keepalive pings cannot hold a
+            # stalled summary open. No-op when no hook is installed (None
+            # keeps the fast get_final_message path).
             on_stream_event=(
-                (lambda _event: _notify_aux_provider_response())
-                if _aux_progress_active() else None
+                (
+                    lambda event: (
+                        _notify_aux_provider_response()
+                        if _anthropic_event_has_content(event)
+                        else _notify_aux_timing_response()
+                    )
+                )
+                if _aux_progress_active()
+                else None
             ),
         )
         _transport = get_transport("anthropic_messages")
@@ -5057,7 +5135,7 @@ def _refresh_provider_credentials(provider: str) -> bool:
             _evict_cached_clients(normalized)
             return True
         if normalized == "anthropic":
-            from agent.anthropic_adapter import read_claude_code_credentials, _refresh_oauth_token, resolve_anthropic_token
+            from agent.anthropic_credentials import read_claude_code_credentials, _refresh_oauth_token, resolve_anthropic_token
 
             creds = read_claude_code_credentials()
             token = _refresh_oauth_token(creds) if isinstance(creds, dict) and creds.get("refreshToken") else None
@@ -8952,12 +9030,21 @@ def _build_call_kwargs(
             from hermes_cli.providers import nous_api_mode
 
             _nous_on_messages = nous_api_mode(model) == "anthropic_messages"
+        # The managed local llama-server honors explicit caps too: a local
+        # decode burns the user's own GPU at full tilt, so a caller that
+        # says "this is a 64-token task" must be believed — an uncapped
+        # local generation whose EOS never comes runs to the full context
+        # window. No wire-format quirks apply (llama.cpp accepts
+        # max_tokens), and the no-default-cap policy is unchanged: this
+        # only forwards caps callers explicitly set.
+        _is_managed_local = _is_managed_local_endpoint(_effective_base)
         if (
             _is_anthropic_compat_endpoint(provider, _effective_base)
             or _nous_on_messages
             or _is_nvidia_nim
             or _is_moa
             or _is_gemini_native
+            or _is_managed_local
         ):
             # Use auxiliary_max_tokens_param() so models that require
             # max_completion_tokens (GPT-5 family, Copilot) get the right
@@ -9303,6 +9390,49 @@ def _is_streaming_rejected_error(exc: Exception) -> bool:
     )
 
 
+_MANAGED_LOCAL_STATE_TTL_S = 15.0
+_managed_local_cache: "tuple[float, str]" = (0.0, "")
+
+
+def _managed_local_netloc() -> str:
+    """host:port of the managed local llama-server, or "" when none.
+
+    Read from the supervisor's state file (written at spawn, removed on
+    stop) with a short TTL so per-request checks don't hit the disk. The
+    state file is the same source provider resolution uses, so the match
+    is exact — no false positives on other localhost endpoints.
+    """
+    global _managed_local_cache
+    now = time.monotonic()
+    ts, cached = _managed_local_cache
+    if now - ts < _MANAGED_LOCAL_STATE_TTL_S:
+        return cached
+    netloc = ""
+    try:
+        from hermes_cli.local_runtime.supervisor import state_path
+
+        raw = state_path().read_text(encoding="utf-8-sig")
+        base = str((json.loads(raw) or {}).get("base_url", ""))
+        netloc = urlparse(base).netloc.lower()
+    except Exception:
+        netloc = ""
+    _managed_local_cache = (now, netloc)
+    return netloc
+
+
+def _is_managed_local_endpoint(base_url: Optional[str]) -> bool:
+    """True when *base_url* targets the llama-server this Hermes manages."""
+    if not base_url:
+        return False
+    managed = _managed_local_netloc()
+    if not managed:
+        return False
+    try:
+        return urlparse(str(base_url)).netloc.lower() == managed
+    except Exception:
+        return False
+
+
 def _provider_requires_stream(provider: str, base_url: Optional[str]) -> bool:
     """Detect providers that only accept streaming (non-stream = HTTP 400).
 
@@ -9318,12 +9448,27 @@ def _provider_requires_stream(provider: str, base_url: Optional[str]) -> bool:
     Beyond the known-host list, users can mark ANY custom endpoint as
     stream-only via ``auxiliary.stream_only_base_urls`` in config.yaml
     (list of substrings matched against the endpoint URL).
+
+    The managed local llama-server is always streamed for a different
+    reason: cancellation. llama-server only notices a dead client when it
+    writes to the socket. A non-streamed request writes once — after the
+    FULL generation — so an abandoned call (client timeout, retry, app
+    exit) keeps the GPU decoding to the end of the context window with
+    nobody listening; requests that queue behind a model load are the
+    worst case, since the client is long gone before decode even starts.
+    Streaming writes every few tokens, so an abandoned decode dies at the
+    first post-disconnect chunk (verified against llama-server b10362:
+    streamed disconnect cancels in <1s through the router; non-streamed
+    survives until the server's next incidental socket poll, if ever).
     """
     _url = str(base_url or "").lower()
     if not _url:
         return False
     # Tencent Copilot — "Non-stream chat request is currently not supported"
     if base_url_host_matches(_url, "copilot.tencent.com"):
+        return True
+    # Managed local llama-server — streamed so abandonment cancels decode.
+    if _is_managed_local_endpoint(_url):
         return True
     try:
         from hermes_cli.config import load_config
@@ -9353,9 +9498,9 @@ def _create_with_progress(
     neither trigger applies (every existing caller/task) or when the client's
     wire adapter streams internally. With a hook + a chunk-capable client,
     the request is sent with ``stream=True`` and aggregated, ticking the hook
-    per chunk — so the configured ``timeout`` acts per stream read (idle)
-    rather than as a total budget, and outer liveness watchdogs see tokens
-    moving. ``force_stream=True`` (stream-only providers such as Tencent
+    only for substantive chunks. The configured ``timeout`` acts per stream
+    read (idle) rather than as a total budget, and outer liveness watchdogs see
+    tokens moving. ``force_stream=True`` (stream-only providers such as Tencent
     Copilot — credit @kudi88, PR #60686) takes the same streamed path even
     without a hook. Providers that reject the streamed request fall back to
     the plain non-streaming call — except under ``force_stream``, where a
@@ -9403,7 +9548,9 @@ def _create_with_progress(
         return response
 
     # Some shims (MoA virtual provider under quiet mode, defensive adapters)
-    # return a complete response even when stream=True was requested.
+    # return a complete response even when stream=True was requested. A
+    # complete response object carries the full summary payload, so it counts
+    # as provider response progress (TTFP) and forward progress alike.
     if hasattr(chunks, "choices"):
         _notify_aux_provider_response()
         return chunks
@@ -9420,7 +9567,8 @@ def _aggregate_chat_stream(
 ) -> Any:
     """Consume a chat.completions chunk stream into a complete response.
 
-    Ticks the thread-local aux progress hook on every chunk. Raises
+    Ticks the thread-local aux progress hook only for non-empty content,
+    reasoning, or tool-call fragments. Raises
     TimeoutError when *total_ceiling* seconds elapse before the stream
     finishes — phrased with "timed out" so existing timeout classification
     (``_is_timeout_error``) treats it exactly like a request timeout.
@@ -9461,7 +9609,11 @@ class _ChatStreamAccumulator:
         self.resp_model = model or ""
 
     def feed(self, chunk: Any) -> None:
-        _notify_aux_provider_response()
+        # Every provider frame records transport-level timing (TTFP
+        # telemetry, first-frame-wins); only a substantive payload below
+        # ticks the forward-progress hook that keeps compression alive.
+        _notify_aux_timing_response()
+        made_progress = False
         if (
             self._total_ceiling is not None
             and (time.monotonic() - self._started) >= self._total_ceiling
@@ -9486,25 +9638,35 @@ class _ChatStreamAccumulator:
         piece = getattr(delta, "content", None)
         if piece:
             self.content_parts.append(piece)
+            made_progress = True
         reasoning_piece = (
             getattr(delta, "reasoning", None)
             or getattr(delta, "reasoning_content", None)
         )
         if reasoning_piece and isinstance(reasoning_piece, str):
             self.reasoning_parts.append(reasoning_piece)
+            made_progress = True
         for tc in (getattr(delta, "tool_calls", None) or []):
             idx = getattr(tc, "index", 0) or 0
             acc = self.tool_calls_acc.setdefault(
                 idx, {"id": "", "name": "", "arguments": []}
             )
+            tool_fragment = False
             if getattr(tc, "id", None):
                 acc["id"] = tc.id
+                tool_fragment = True
             fn = getattr(tc, "function", None)
             if fn is not None:
                 if getattr(fn, "name", None):
                     acc["name"] = fn.name
+                    tool_fragment = True
                 if getattr(fn, "arguments", None):
                     acc["arguments"].append(fn.arguments)
+                    tool_fragment = True
+            made_progress = made_progress or tool_fragment
+
+        if made_progress:
+            _notify_aux_progress()
 
     def finish(self) -> Any:
         tool_calls = None

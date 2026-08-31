@@ -1370,6 +1370,7 @@ export const ar = defineLocale({
     newProfile: 'ملف شخصي جديد',
     importProfile: 'استيراد ملف شخصي…',
     exportProfile: 'تصدير ملف شخصي…',
+    exportMenu: 'تصدير…',
     imported: 'تم استيراد الملف الشخصي',
     exported: 'تم تصدير الملف الشخصي',
     failedImport: 'فشل استيراد الملف الشخصي',
@@ -1701,7 +1702,7 @@ export const ar = defineLocale({
       removeFolder: 'إزالة',
       create: 'إنشاء',
       menu: 'إجراءات',
-      menuRename: 'إعادة تسمية',
+      menuRename: 'إعادة تسمية…',
       menuAppearance: 'المظهر',
       noColor: 'بلا لون',
       menuAddFolder: 'إضافة مجلد',
@@ -1759,7 +1760,7 @@ export const ar = defineLocale({
       copyId: 'نسخ المعرف',
       export: 'تصدير',
       branchFrom: 'فرع',
-      rename: 'إعادة تسمية',
+      rename: 'إعادة تسمية…',
       archive: 'أرشفة',
       newWindow: 'فتح في نافذة جديدة',
       openInTerminal: 'فتح في الطرفية',
@@ -1990,7 +1991,6 @@ export const ar = defineLocale({
     bundleOutOfSyncDesc:
       'تم تحديث وقت تشغيل Hermes، لكن تطبيق سطح المكتب نفسه لا يزال إصدارًا قديمًا — لن تظهر ميزات الواجهة الجديدة (مثل Bot Mode) حتى يتم تحديث التطبيق. شغّل التحديث أدناه لإعادة بناء التطبيق. إذا لم يختفِ هذا التحذير، فأعد التثبيت من أحدث مثبّت لسطح المكتب.',
     bundleOutOfSyncAction: 'الحصول على المثبّت',
-    updatesSection: 'التحديثات',
     checkNow: 'التحقق الآن',
     checkingShort: 'جار التحقق...',
     seeWhatsNew: 'عرض الجديد',
@@ -2028,7 +2028,7 @@ export const ar = defineLocale({
     availableTitleBackend: 'يتوفر تحديث للواجهة الخلفية',
     availableBodyBackend: 'إصدار أحدث من واجهة Hermes الخلفية المتصلة جاهز للتثبيت.',
     availableBodyNoChangelog: 'إصدار أحدث جاهز. ملاحظات الإصدار غير متاحة لنوع التثبيت هذا.',
-    availableBodyRelease: tag => `Hermes ${tag} جاهز للتثبيت.`,
+    availableBodyRelease: (tag: string) => `Hermes ${tag} جاهز للتثبيت.`,
     updateNow: 'التحديث الآن',
     maybeLater: 'ربما لاحقا',
     moreChanges: count => `+ ${count} تغيير${count === 1 ? '' : 'ات'} إضافي مُضمَّن.`,
@@ -2893,6 +2893,11 @@ export const ar = defineLocale({
       'model-switch': {
         title: 'بدّل النموذج أثناء المحادثة',
         text: 'اسم النموذج زر. غيّره كلما تغيّرت طبيعة العمل.'
+      },
+      'local-setup': {
+        title: 'هذا الجهاز يمكنه تشغيل النماذج محليًا',
+        text: 'عتادك قادر على تشغيل نموذج محلي. تبقى محادثاتك على جهازك ولا تكلف شيئًا.',
+        action: 'إعداد الآن'
       },
       'right-pane': {
         title: 'لوحة العمل',

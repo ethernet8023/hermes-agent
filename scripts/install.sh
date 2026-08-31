@@ -8,6 +8,12 @@
 #   --include-desktop     add the desktop build stage
 set -u
 
+# Prevent uv from discovering config files (uv.toml, pyproject.toml) from the
+# wrong user's home directory when running under sudo -u <user>.  See #21269.
+# pm's own venv sync re-isolates (pm/packages.py::uv_env), so this bootstrap
+# hygiene can't break the locked sync the way it used to before pm owned it.
+export UV_NO_CONFIG=1
+
 REPO_URL="${HERMES_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
 BRANCH="main"
 INSTALL_COMMIT=""
@@ -221,10 +227,26 @@ stage_venv() {
     (cd "$INSTALL_DIR" && "$UV_CMD" venv --allow-existing venv) || fail "uv venv failed"
 }
 
-stage_python_deps() {
+# Delegate the whole python+venv+tools install to pm: stage the pinned uv,
+# let uv run pm.cli, and pm provisions the interpreter, the venv (default
+# extras = [all], so it matches what `hermes update` force-syncs), and the
+# tool store — all hash-verified against pm/lock.json + uv.lock. install.sh
+# no longer runs `uv sync` directly; pm is the single install authority
+# (the run_locked_uv_sync contract moved into pm/packages.py::uv_env).
+bootstrap_pm() {
     ensure_uv
-    log "syncing python dependencies (uv sync --frozen)"
-    (cd "$INSTALL_DIR" && VIRTUAL_ENV="$INSTALL_DIR/venv" "$UV_CMD" sync --frozen --extra all --active) || fail "uv sync failed"
+    local _py
+    _py="$(awk '/^    "python": \{/ { in_py = 1 }
+        in_py && /^      "version":/ { gsub(/.*: "|"$|",$/, ""); print; exit }' \
+        "$INSTALL_DIR/pm/lock.json" | cut -d+ -f1 | cut -d. -f1,2)"
+    [ -n "$_py" ] || _py="3.11"
+    log "delegating python + venv + tools to pm (hash-verified via uv.lock)"
+    (cd "$INSTALL_DIR" && "$UV_CMD" run --no-project --python "$_py" python -m pm.cli install) \
+        || fail "pm install failed"
+}
+
+stage_python_deps() {
+    bootstrap_pm
 }
 
 stage_node_deps() {

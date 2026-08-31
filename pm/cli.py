@@ -126,7 +126,12 @@ def cmd_install(args) -> int:
         from pm.ensure import sync_venv
 
         try:
-            sync_venv(explicit=True)
+            # Default the venv to the [all] feature set — the same thing
+            # `hermes update` force-syncs on every run (update_cmd.py) and
+            # the installers' old `--extra all` did. sync_venv unions, so
+            # any lazy extras already recorded survive this; it only makes
+            # a fresh bootstrap match what the first update would do.
+            sync_venv(["all"], explicit=True)
             print("✓ venv")
         except InstallError as e:
             print(f"✗ {e}")

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from pm.package import (
+    DebPackage,
     InstallError,
     Package,
     StatePackage,
@@ -166,7 +167,7 @@ def _macos_sign_managed_python(python: Path) -> bool:
 
 
 @register
-class Python(BinaryPackage):
+class Python(BinaryPackage, DebPackage):
     """The payload interpreter (python-build-standalone install_only).
     Optional: dev installs use their own venv's python; bundles stage this
     and point the relocatable venv's pyvenv.cfg at it (pm adopt)."""
@@ -175,6 +176,7 @@ class Python(BinaryPackage):
     optional = True
     probe_version = False
     binary_rel = {"win32": "python.exe", "posix": "bin/python3"}
+    deb_package = "python3.11"
 
     def stage(self, store: Store, staged: Path, version: str, target: str) -> None:
         super().stage(store, staged, version, target)
@@ -183,6 +185,9 @@ class Python(BinaryPackage):
             _macos_sign_managed_python(binary)
 
     def fetch_url(self, version: str, target: str) -> str:
+        if target == "linux-arm64-bionic":
+            pyver = version.partition("+")[0]
+            return f"https://tur.kcubeterm.com/pool/tur/python3.11_{pyver}_aarch64.deb"
         # lock version is "<python>+<release tag>", e.g. "3.11.13+20250807"
         pyver, _, tag = version.partition("+")
         if not tag:
@@ -192,6 +197,26 @@ class Python(BinaryPackage):
             "https://github.com/astral-sh/python-build-standalone/releases/download/"
             f"{tag}/cpython-{pyver}+{tag}-{triple}-install_only.tar.gz"
         )
+    def unpack(self, archive: Path, staged: Path, target: str) -> None:
+        if target == "linux-arm64-bionic":
+            DebPackage.unpack(self, archive, staged, target)
+        else:
+            BinaryPackage.unpack(self, archive, staged, target)
+
+    def binary(self, entry: Path, target: str) -> Optional[Path]:
+        if target == "linux-arm64-bionic":
+            return None  # bionic binary cannot exec on the staging host
+        return BinaryPackage.binary(self, entry, target)
+
+    def verify(self, entry: Path, target: str) -> str:
+        if target == "linux-arm64-bionic":
+            expected = entry / self.prefix_rel / "bin/python3.11"
+            if not (expected.is_file() or expected.is_symlink()):
+                return f"python3.11 missing under {self.prefix_rel}/bin"
+            return ""
+        return BinaryPackage.verify(self, entry, target)
+
+
 
 
 def _uv_lock_digest(path: Path) -> bytes:
@@ -283,15 +308,73 @@ class Venv(StatePackage):
 
 
 @register
-class Nodejs(BinaryPackage):
+class Nodejs(BinaryPackage, DebPackage):
+    """nodejs.org tarballs for glibc/mac/win; the Termux main-repo nodejs
+    .deb for bionic (same major line, termux-built)."""
+
     name = "node"
     internal = True
     binary_rel = {"win32": "node.exe", "posix": "bin/node"}
+    deb_package = "nodejs"
 
     def fetch_url(self, version: str, target: str) -> str:
+        if target == "linux-arm64-bionic":
+            # termux's deb carries a -1 revision after the upstream version
+            return f"https://packages.termux.dev/apt/termux-main/pool/main/n/nodejs/nodejs_{version}-1_aarch64.deb"
         plat = _NODE_PLAT[target]
         ext = "zip" if target.startswith("win32") else "tar.xz"
         return f"https://nodejs.org/dist/v{version}/node-v{version}-{plat}.{ext}"
+    def unpack(self, archive: Path, staged: Path, target: str) -> None:
+        if target == "linux-arm64-bionic":
+            DebPackage.unpack(self, archive, staged, target)
+        else:
+            BinaryPackage.unpack(self, archive, staged, target)
+
+    def binary(self, entry: Path, target: str) -> Optional[Path]:
+        if target == "linux-arm64-bionic":
+            return None
+        return BinaryPackage.binary(self, entry, target)
+
+    def verify(self, entry: Path, target: str) -> str:
+        if target == "linux-arm64-bionic":
+            expected = entry / self.prefix_rel / "bin/node"
+            if not (expected.is_file() or expected.is_symlink()):
+                return f"node missing under {self.prefix_rel}/bin"
+            return ""
+        return BinaryPackage.verify(self, entry, target)
+
+
+
+
+@register
+class TermuxDocker(Package):
+    """The termux/termux-docker container image, pinned by registry digest.
+
+    The image is never downloaded or unpacked by pm -- docker pulls it by
+    digest reference at build time. The lock row exists so the digest is
+    pinned in the single pin authority beside every other third-party
+    artifact: consumers read the digest string from the lock's url field
+    (termux/termux-docker@sha256:...). verify() is presence-shaped: this
+    package stages nothing.
+    """
+
+    name = "termux-docker"
+    optional = True
+    # Pure pin: no bytes are staged, so stage_only()/install skip the store
+    # entirely -- the digest's consumers (docker pull) verify it.
+    pin_only = True
+
+    def missing_reason(self, target: str) -> Optional[str]:
+        return None if target == "linux-arm64-bionic" else "docker image target is linux-arm64-bionic"
+
+    def fetch_url(self, version: str, target: str) -> str:
+        return f"docker://termux/termux-docker@{version}"
+
+    def unpack(self, archive: Path, staged: Path, target: str) -> None:
+        raise InstallError(self.name, "a docker image digest is a pin, not a downloadable artifact")
+
+    def verify(self, entry: Path, target: str) -> str:
+        return ""
 
 
 @register

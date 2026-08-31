@@ -167,9 +167,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # builds would use whatever setuptools/cython the container happens
 # to have. Install the pinned versions up front.
 log "Enforcing toolchain pins"
-python3 - "${TOOLCHAIN_PINS[@]}" <<'PYEOF' || fail "toolchain pin enforcement failed"
+python3 - <<'PYEOF' || fail "toolchain pin enforcement failed"
 import subprocess, sys
-pkgs = sys.argv[1:]
+pkgs = """${TOOLCHAIN_PINS[*]}""".split()
 print(f"  installing: {' '.join(pkgs)}")
 subprocess.run([sys.executable, "-m", "pip", "install", *pkgs], check=True)
 PYEOF

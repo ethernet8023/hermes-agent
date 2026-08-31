@@ -57,14 +57,6 @@ STEWARD_UPDATE_MESSAGES = {
     ),
 }
 
-# What `hermes update` runs instead, per steward. Only stewards whose
-# remediation is a fixed command string live here; stewards whose command
-# derives elsewhere (nix, via ``recommended_update_command_for_method``)
-# stay out — their refusal text above already names the flake steps.
-STEWARD_UPDATE_COMMANDS = {
-    STEWARD_APT_TERMUX: "pkg upgrade hermes-agent",
-}
-
 _STEWARD_UPDATE_FALLBACK = (
     "✗ This Hermes install is managed by {steward}.\n"
     "\n"

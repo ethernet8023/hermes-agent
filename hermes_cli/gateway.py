@@ -7965,6 +7965,31 @@ def _block_until_terminated() -> None:
         threading.Event().wait()
 
 
+def _apt_termux_no_service_manager_refusal() -> bool:
+    """True when this install is a sealed ``apt-termux`` tree.
+
+    A Termux APT package is a sealed venv owned by the package manager with
+    no service manager behind it: the systemd/launchd/Windows-task service
+    lanes do not exist there. Keyed on the steward stamp (``sealed_steward``),
+    never a platform probe. Foreground process management — ``hermes gateway
+    stop``/``start``/``status`` via the CLI's own PID-file registry, and the
+    detached nohup-equivalent fallback — keeps working; only the *service*
+    install lane is refused.
+    """
+    from hermes_cli.steward import STEWARD_APT_TERMUX, sealed_steward
+
+    return sealed_steward(PROJECT_ROOT) == STEWARD_APT_TERMUX
+
+
+def _apt_termux_nohup_hint() -> None:
+    """Print the adybag-shape background-start workaround."""
+    from hermes_constants import display_hermes_home as _dhh
+
+    print("no service manager on this platform — run `hermes gateway run` in a Termux session or under nohup")
+    print()
+    print(f"  nohup hermes gateway run >> {_dhh()}/logs/gateway.log 2>&1 &")
+
+
 def _gateway_command_inner(args):
     subcmd = getattr(args, "gateway_command", None)
 
@@ -7993,6 +8018,10 @@ def _gateway_command_inner(args):
         force = getattr(args, "force", False)
         system = getattr(args, "system", False)
         run_as_user = getattr(args, "run_as_user", None)
+        if _apt_termux_no_service_manager_refusal():
+            # Sealed apt-termux install: no systemd/launchd/schtasks lane.
+            _apt_termux_nohup_hint()
+            sys.exit(1)
         if supports_systemd_services():
             if is_wsl():
                 print_warning(
@@ -8113,6 +8142,11 @@ def _gateway_command_inner(args):
             managed_error("uninstall gateway service")
             return
         system = getattr(args, "system", False)
+        if _apt_termux_no_service_manager_refusal():
+            # There is no managed service to remove on an apt-termux install.
+            _apt_termux_nohup_hint()
+            print("Stop manual runs with: hermes gateway stop")
+            sys.exit(1)
         if supports_systemd_services():
             systemd_uninstall(system=system)
         elif is_macos():
@@ -8160,7 +8194,22 @@ def _gateway_command_inner(args):
                 )
                 _wait_for_gateway_exit(timeout=10.0, force_after=5.0)
 
-        if supports_systemd_services():
+        if _apt_termux_no_service_manager_refusal():
+            # Sealed apt-termux install: no service manager to call. Start
+            # is the CLI's own detached background process (the nohup
+            # fallback) — the PID file keeps stop/status/restart working.
+            if _spawn_detached_gateway():
+                from hermes_constants import display_hermes_home as _dhh
+
+                print("✓ Started gateway as a background process")
+                print("  It will NOT auto-start at boot or auto-restart on crash.")
+                print(f"  Logs: {_dhh()}/logs/gateway.log")
+                print("  Stop it with: hermes gateway stop")
+            else:
+                print_error("Failed to start the gateway as a background process.")
+                _apt_termux_nohup_hint()
+                sys.exit(1)
+        elif supports_systemd_services():
             systemd_start(system=system)
         elif is_macos():
             launchd_start()

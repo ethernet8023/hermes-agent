@@ -1147,3 +1147,203 @@ def test_find_profile_gateway_processes_strict_propagates_profile_listing_failur
 
     with pytest.raises(RuntimeError, match="profile listing failed"):
         gateway.find_profile_gateway_processes(strict=True)
+
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Steward-keyed gateway posture: apt-termux sealed installs
+#
+# A Termux APT package ships a sealed tree with no service manager: the
+# systemd/launchd/Windows-task install lane is refused, keyed on the
+# steward stamp (not a platform probe), while the CLI's own foreground
+# process management (`hermes gateway stop`/`start`/`status`, plus the
+# detached nohup-equivalent fallback) keeps working.
+# ---------------------------------------------------------------------------
+
+
+def _apt_termux_tree(tmp_path) -> Path:
+    """A sealed (no .git) tree stamped as an apt-termux install."""
+    root = tmp_path / "apt-termux"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "install-stamp.json").write_text(
+        json.dumps({"distribution": "apt-termux"})
+    )
+    return root
+
+
+def _seal_project_root(monkeypatch, tmp_path) -> Path:
+    root = _apt_termux_tree(tmp_path)
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", root)
+    return root
+
+
+def test_apt_termux_probe_keys_on_steward_stamp(
+    monkeypatch, tmp_path
+):
+    """The apt-termux probe fires only for a sealed apt-termux tree."""
+    _seal_project_root(monkeypatch, tmp_path)
+    assert gateway._is_apt_termux_install() is True
+
+    # A git checkout (the repo itself) is not steward-owned: not apt-termux.
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", Path(__file__).parent.parent)
+    assert gateway._is_apt_termux_install() is False
+
+
+def test_detached_start_guidance_shared_by_apt_termux_and_launchd(monkeypatch, tmp_path, capsys):
+    """Both detached-start sites ride one helper. The apt-termux start path
+    prints its exact guidance lines via ``_start_detached_with_guidance``
+    (messages must stay byte-identical), and the launchd fallback wrapper
+    delegates to the same helper."""
+    _seal_project_root(monkeypatch, tmp_path)
+    printed = []
+    monkeypatch.setattr(
+        gateway, "_start_detached_with_guidance",
+        lambda **kwargs: printed.append(kwargs) or True,
+    )
+
+    gateway._gateway_command_inner(argparse.Namespace(gateway_command="start"))
+
+    (kwargs,) = printed  # the apt-termux branch called the shared helper once
+    assert kwargs["success_started"] == "✓ Started gateway as a background process"
+    assert (
+        kwargs["success_restart"]
+        == "  It will NOT auto-start at boot or auto-restart on crash."
+    )
+    assert kwargs["failure_hint"] is gateway._apt_termux_nohup_hint
+
+
+def test_launchd_fallback_wraps_shared_detached_start(monkeypatch, capsys):
+    """The launchd fallback is a thin pre-lines wrapper over the shared
+    helper: same spawn, same manual-hint failure path, same exit-on-fail."""
+    calls = []
+
+    def fake_helper(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(gateway, "_start_detached_with_guidance", fake_helper)
+    monkeypatch.setattr(gateway, "_write_launchd_unsupported_marker", lambda: None)
+
+    assert gateway._launchd_fallback_to_detached("test reason") is True
+
+    (kwargs,) = calls
+    assert kwargs["pre_lines"] == (
+        "⚠ launchd cannot manage the gateway on this macOS version (test reason).",
+    )
+    assert kwargs["success_started"] == "✓ Started gateway as a background process instead"
+    assert (
+        kwargs["success_restart"]
+        == "  It will NOT auto-start at login or auto-restart on crash."
+    )
+    assert kwargs["exit_on_failure"] is True
+
+
+def test_gateway_install_refused_on_apt_termux(monkeypatch, tmp_path, capsys):
+    """`hermes gateway install` refuses on an apt-termux install with the
+    no-service-manager message, even when systemd would otherwise apply."""
+    _seal_project_root(monkeypatch, tmp_path)
+    monkeypatch.setattr(gateway, "is_managed", lambda: False)
+    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: True)
+    called = []
+    monkeypatch.setattr(gateway, "systemd_install", lambda **k: called.append(k))
+
+    with pytest.raises(SystemExit) as excinfo:
+        gateway._gateway_command_inner(
+            argparse.Namespace(gateway_command="install", force=False,
+                               system=False, run_as_user=None,
+                               start_now=False, start_on_login=False)
+        )
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "no service manager on this platform" in out
+    assert "hermes gateway run" in out
+    assert called == []  # never reached systemd
+
+
+def test_gateway_uninstall_refused_on_apt_termux(monkeypatch, tmp_path, capsys):
+    """`hermes gateway uninstall` refuses on apt-termux: there is no managed
+    service to remove — manual runs are stopped with `hermes gateway stop`."""
+    _seal_project_root(monkeypatch, tmp_path)
+    monkeypatch.setattr(gateway, "is_managed", lambda: False)
+    monkeypatch.setattr(
+        "tools.process_registry._is_supervised_gateway_process",
+        lambda: False,
+    )
+    called = []
+    monkeypatch.setattr(gateway, "systemd_uninstall", lambda **k: called.append(k))
+
+    with pytest.raises(SystemExit) as excinfo:
+        gateway._gateway_command_inner(
+            argparse.Namespace(gateway_command="uninstall", system=False)
+        )
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "no service manager on this platform" in out
+    assert "hermes gateway stop" in out
+    assert called == []
+
+
+def test_gateway_start_falls_back_to_detached_process_on_apt_termux(
+    monkeypatch, tmp_path, capsys
+):
+    """`hermes gateway start` on apt-termux uses the CLI's own process
+    management: a detached background start (the nohup fallback), never a
+    service-manager call. Stop/status keep working via the PID file."""
+    _seal_project_root(monkeypatch, tmp_path)
+    # systemd available would prove the steward branch wins over it.
+    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: True)
+    spawned = []
+    monkeypatch.setattr(
+        gateway, "_spawn_detached_gateway", lambda: spawned.append(1) or True
+    )
+    monkeypatch.setattr(
+        gateway, "systemd_start", lambda system=False: pytest.fail(
+            "systemd_start must not run on an apt-termux install"
+        )
+    )
+
+    gateway._gateway_command_inner(argparse.Namespace(gateway_command="start"))
+
+    assert spawned == [1]
+    out = capsys.readouterr().out
+    assert "Started gateway" in out
+    assert "hermes gateway stop" in out
+
+
+def test_gateway_start_detached_failure_prints_nohup_hint(
+    monkeypatch, tmp_path, capsys
+):
+    """When the detached spawn fails, the manual nohup workaround surfaces."""
+    _seal_project_root(monkeypatch, tmp_path)
+    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: False)
+    monkeypatch.setattr(gateway, "_spawn_detached_gateway", lambda: False)
+
+    with pytest.raises(SystemExit) as excinfo:
+        gateway._gateway_command_inner(argparse.Namespace(gateway_command="start"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "nohup hermes gateway run" in out
+
+
+def test_gateway_stop_still_works_on_apt_termux(monkeypatch, tmp_path, capsys):
+    """Foreground process management survives: `hermes gateway stop` uses the
+    profile-scoped PID file, exactly what adybag's install.sh drives."""
+    _seal_project_root(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "tools.process_registry._is_supervised_gateway_process",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        gateway, "_dispatch_via_service_manager_if_s6", lambda action: False
+    )
+    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: False)
+    monkeypatch.setattr(gateway, "is_macos", lambda: False)
+    monkeypatch.setattr(gateway, "is_windows", lambda: False)
+    monkeypatch.setattr(gateway, "stop_profile_gateway", lambda: True)
+
+    gateway._gateway_command_inner(argparse.Namespace(gateway_command="stop"))
+
+    assert "Stopped gateway for this profile" in capsys.readouterr().out

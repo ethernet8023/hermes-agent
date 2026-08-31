@@ -1,21 +1,98 @@
 #!/usr/bin/env bash
-# Android/Termux wheelhouse builder -- the ONE entry point (Task 2 of
-# .hermes/plans/2026-08-31_termux-deb.md). Runs inside the digest-pinned
-# termux/termux-docker container on a native aarch64 runner; CI and local
-# invoke it identically. No opt-out flags: a skipped step is a different
-# artifact.
+# Android/Termux wheelhouse builder -- the ONE entry point. Two halves:
 #
-# Inputs (all required):
-#   --repo <dir>      hermes-agent checkout to build from (must contain the tag)
-#   --tag <tag>       immutable release tag (vX.Y.Z or vX.Y.Z-nightly.<ts>)
-#   --out <dir>       output dir (wheelhouse/ + index.json + SHA256SUMS land here)
+#   HOST half (glibc runner): tag gates, archive, uv resolve, marker-aware
+#   PyPI probe -> resolved.txt + build_set.txt. Pure data work; arch-free.
 #
-# Optionally exported by CI: HERMES_BUILD_INDEX_URL (internal uv index),
-# GH_TOKEN (for gh release view), nothing else. The script is pure
-# coreutils + git + curl + python3 + uv; it never apt-installs.
+#   CONTAINER half (bionic termux-docker): toolchain pins, the 13-ish native
+#   sdist builds (clang/rust against the container's own termux python),
+#   PEP 738 retag, the --no-index completeness gate, and the import gate.
+#   The wheels MUST be bionic: building them on the glibc host would ship
+#   glibc binaries that cannot exec on any phone.
+#
+# The script re-invokes ITSELF with --in-container inside the digest-pinned
+# image (from pm/lock.json's termux-docker package). No opt-out flags.
+#
+# Inputs (host mode, all required):
+#   --repo <dir>   hermes-agent checkout to build from (must contain the tag)
+#   --tag <tag>    immutable release tag (vX.Y.Z or vX.Y.Z-nightly.<ts>)
+#   --out <dir>    output dir (wheelhouse/ + index.json + SHA256SUMS land here)
 
 set -Eeuo pipefail
 
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/termux/build_config.sh
+. "$HERE/build_config.sh"
+
+log() { printf '\n==> %s\n' "$*"; }
+fail() { printf 'termux_build: FAILED: %s\n' "$*" >&2; exit 1; }
+
+if [ "${1:-}" = "--in-container" ]; then
+    # =================== CONTAINER HALF (bionic) =======================
+    RESOLVED="$2"; BUILD_SET="$3"; WHEELHOUSE="$4"
+    # $5 (optional) is the staged payload root (mounted at /payload):
+    # the wheels are built with THE PAYLOAD'S OWN python -- the TUR .deb
+    # pm staged from the lock -- so the ABI is the shipped ABI by
+    # construction and the offline gate installs into a venv of the very
+    # interpreter the phone will run.
+    PAYLOAD_ROOT="${5:-}"
+    export PREFIX=/data/data/com.termux/files/usr
+    STAGED_PY="$PAYLOAD_ROOT/python$PREFIX/bin/python3.11"
+    # The staged binaries' RUNPATHs point at the phone's $PREFIX layout
+    # (linkerconfig on-device). Inside the container the tree lives at
+    # $PAYLOAD_ROOT/python$PREFIX, so the dynamic linker needs to be told
+    # where the payload's libs live before any staged binary runs.
+    export LD_LIBRARY_PATH="$PAYLOAD_ROOT/python$PREFIX/lib:$PAYLOAD_ROOT/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    if [ -n "$PAYLOAD_ROOT" ] && [ -x "$STAGED_PY" ]; then
+        PY="$STAGED_PY"
+        log "Using the staged payload python ($PY)"
+    else
+        # No payload staged (or missing): refuse. Building against any
+        # other interpreter (the container's pkg python is 3.14!) ships
+        # wheels the payload venv cannot install. No silent fallback.
+        fail "staged payload python missing at $STAGED_PY -- stage the payload (pm lock rows) before the wheelhouse"
+    fi
+    # BUILD tools come from termux's own apt (the image is a bare
+    # bootstrap). The USER machine never does any of this.
+    if ! command -v clang >/dev/null 2>&1; then
+        log "Provisioning the container build toolchain (termux apt)"
+        export DEBIAN_FRONTEND=noninteractive
+        pkg update \
+            || fail "pkg update failed in the container"
+        pkg install -y clang rust make patchelf binutils pkg-config \
+            libandroid-posix-semaphore libandroid-support libbz2 libffi \
+            libjpeg-turbo libpng freetype libtiff libwebp openjpeg littlecms \
+            libyaml openssl readline zlib liblzma libsqlite ncurses \
+            || fail "pkg install of the build toolchain failed"
+    fi
+    # BINARIES, not package names: the rust package provides rustc/cargo
+    # (there is no `rust` binary).
+    for tool in clang rustc cargo make; do
+        command -v "$tool" >/dev/null 2>&1 \
+            || fail "container lacks $tool after provisioning"
+    done
+    # Serial builds only -- parallel Rust/C builds OOM arm runners.
+    export CARGO_BUILD_JOBS=1
+    export MAKEFLAGS=-j1
+    export UV_CONCURRENT_BUILDS=1
+    log "Payload lib diagnostics"
+    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >&2
+    ls -la "$PAYLOAD_ROOT/python$PREFIX/lib/" >&2 || true
+    readelf -d "$STAGED_PY" 2>/dev/null | grep -i 'needed\|runpath\|rpath' >&2 || true
+    log "Enforcing toolchain pins (payload python)"
+    "$PY" -m pip install "${TOOLCHAIN_PINS[@]}" \
+        || fail "toolchain pin enforcement failed"
+    log "Building the android wheel set from sdist (bionic, payload ABI)"
+    "$PY" "$HERE/build_wheels.py" \
+        --resolved "$RESOLVED" --build-set "$BUILD_SET" \
+        --wheelhouse "$WHEELHOUSE" --retag "$HERE/retag_wheel.py" \
+        --platform-tag "$PLATFORM_TAG" \
+        || fail "wheel building failed"
+    log "Wheelhouse container phase complete"
+    exit 0
+fi
+
+# ===================== HOST HALF (glibc runner) ==========================
 REPO=""
 TAG=""
 OUT=""
@@ -30,34 +107,25 @@ done
 [ -n "$REPO" ] && [ -n "$TAG" ] && [ -n "$OUT" ] || {
     printf 'usage: termux_build.sh --repo <dir> --tag <tag> --out <dir>\n' >&2; exit 2; }
 
-log() { printf '\n==> %s\n' "$*"; }
-fail() { printf 'termux_build: FAILED: %s\n' "$*" >&2; exit 1; }
+for tool in uv git curl docker python3; do
+    command -v "$tool" >/dev/null 2>&1 \
+        || fail "missing tool: $tool (CI must provision the pinned toolchain before running this script)"
+done
 
-# [a] Environment gate -- the build host lies. Refuse anything that is not
-# native aarch64; a wrong-arch wheelhouse poisons every downstream install.
 ARCH="$(uname -m)"
 case "$ARCH" in
     aarch64|arm64) ;;
-    *) fail "refusing to build on non-aarch64 host (uname -m: $ARCH). Run inside the pinned termux-docker container on an arm64 runner." ;;
+    *) fail "refusing to build on non-aarch64 host (uname -m: $ARCH)" ;;
 esac
 
-# [b] FIRST: refuse mutable releases. No building before the tag is proven
-# to exist on the origin remote. An untagged wheelhouse has nothing to pin
-# its lock to.
+# [b] FIRST: refuse mutable releases.
 log "Verifying release tag $TAG exists on origin"
 git -C "$REPO" ls-remote --exit-code --tags origin "$TAG" >/dev/null \
     || fail "tag $TAG not found on origin; refusing to build a mutable release"
 if command -v gh >/dev/null 2>&1; then
-    # Optional cross-check: the release must exist too (CI cuts the release
-    # before building). Absent gh -> tag-exists check above already gated.
     gh release view "$TAG" --repo "$(git -C "$REPO" remote get-url origin | sed -e 's#.*github.com[:/]##' -e 's#\.git$##')" >/dev/null 2>&1 \
         || fail "release $TAG not found; refusing to build before the release exists"
 fi
-
-# Serial builds only -- parallel Rust/C builds OOM arm runners.
-export CARGO_BUILD_JOBS=1
-export MAKEFLAGS=-j1
-export UV_CONCURRENT_BUILDS=1
 
 REPO_ABS="$(cd "$REPO" && pwd)"
 OUT_ABS="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
@@ -66,8 +134,7 @@ WHEELHOUSE="$OUT_ABS/wheelhouse"
 rm -rf "$WORK" "$WHEELHOUSE"
 mkdir -p "$WORK" "$WHEELHOUSE"
 
-# [c] Stage the tag as a gitless tree. Ship no .git (skill principle 1);
-# the tree carries install-stamp.json for provenance instead.
+# [c] Stage the tag as a gitless tree.
 log "Archiving $TAG into $WORK/tree"
 git -C "$REPO_ABS" archive --format=tar "$TAG" | tar -xf - -C "$WORK/tree" 2>/dev/null || {
     mkdir -p "$WORK/tree"
@@ -77,8 +144,7 @@ git -C "$REPO_ABS" archive --format=tar "$TAG" | tar -xf - -C "$WORK/tree" 2>/de
 }
 [ -f "$WORK/tree/pyproject.toml" ] || fail "archived tag tree has no pyproject.toml -- bad tag?"
 
-# [d] Resolve the real graph from the tag's own lock. The build set is
-# derived: resolved minus installable-PyPI-wheel. NEVER a hand list.
+# [d] Resolve the real graph from the tag's own lock.
 log "Resolving dependency graph from the tag's uv.lock"
 ( cd "$WORK/tree" && uv export --frozen --no-emit-project -o "$WORK/req.txt" ) \
     || fail "uv export failed (frozen lock at $TAG)"
@@ -88,190 +154,175 @@ import re, sys
 out = []
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.strip()
+    # uv export wraps long lines with backslash continuations; strip the
+    # trailing continuation BEFORE capturing markers/specs -- a backslash
+    # riding into a marker makes Marker() throw (and a throwing marker
+    # must not silently admit the package into the build set).
+    line = re.sub(r"\\\s*$", "", line)
     if not line or line.startswith("#"):
         continue
-    line = re.sub(r"\s*;.*$", "", line)  # drop environment markers for the probe
-    line = re.sub(r"\s*--.*$", "", line)  # drop option lines entirely below
+    marker = ""
+    m = re.search(r"\s;\s*(.+)$", line)
+    if m:
+        marker = m.group(1).strip()
+        line = line[: m.start()]
+    line = re.sub(r"\s*--.*$", "", line)
     if line.startswith("--") or not line:
         continue
     m = re.match(r"^([A-Za-z0-9._-]+)(\[[^]]*\])?([=<>~!^].*)?$", line)
     if m:
-        out.append((m.group(1), m.group(3) or ""))
+        out.append((m.group(1), m.group(3) or "", marker))
 open(sys.argv[2], "w", encoding="utf-8").write(
-    "\n".join(f"{name} { spec}" for name, spec in out) + "\n"
+    "\n".join(f"{name}\t{spec}\t{marker}" for name, spec, marker in out) + "\n"
 )
 PYEOF
 [ -s "$RESOLVED" ] || fail "resolved dependency list is empty"
 
-# PyPI wheel-coverage probe: build set = resolved - (has an installable
-# wheel). Pure-python deps with universal wheels skip the build entirely.
-log "Probing PyPI wheel coverage"
+# [e] Marker-aware PyPI wheel-coverage probe: build set = resolved deps
+# whose marker admits android AND that have no installable none-any wheel.
+log "Probing PyPI wheel coverage (android markers)"
 BUILD_SET="$WORK/build_set.txt"
 python3 - "$RESOLVED" "$BUILD_SET" <<'PYEOF' || fail "PyPI wheel-coverage probe failed"
-import json, sys, urllib.request
-resolved = [l.split(None, 1) for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
-needs_build = []
-for name, _spec in resolved:
+import json, re, sys, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+# The TARGET environment the wheelhouse must satisfy: Termux's bionic
+# python. TUR 3.11 reports sys.platform "linux" (the android value only
+# arrived in 3.13), so markers keying on linux admit it -- and windows/
+# darwin markers exclude it, which is the whole point.
+TARGET_ENV = {
+    "implementation_name": "cpython",
+    "implementation_version": "3.11.15",
+    "os_name": "posix",
+    "platform_machine": "aarch64",
+    "platform_release": "",
+    "platform_system": "Linux",
+    "platform_version": "",
+    "python_full_version": "3.11.15",
+    "python_version": "3.11",
+    "sys_platform": "linux",
+}
+
+def locked_version(spec: str) -> str | None:
+    m = re.search(r"==\s*([A-Za-z0-9._+!-]+)", spec or "")
+    return m.group(1) if m else None
+
+def marker_admits(marker: str) -> bool:
+    if not marker:
+        return True
+    from packaging.markers import Marker
+    try:
+        return Marker(marker).evaluate(TARGET_ENV)
+    except Exception:
+        # An unevaluable marker is a build-set decision, not a silent
+        # exclude: admit it so the wheel build surfaces the truth loudly.
+        return True
+
+entries = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    if not line.strip():
+        continue
+    name, spec, marker = (line.split("\t", 2) + ["", ""])[:3]
+    entries.append((name, spec, marker))
+
+def probe(item):
+    name, spec, marker = item
+    if not marker_admits(marker):
+        return name, None, None
     try:
         with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/json", timeout=30) as r:
             d = json.load(r)
-        v = d["info"]["version"]
-        files = d["releases"].get(v, [])
-        has_wheel = any(f["filename"].endswith(".whl") for f in files)
+        locked = locked_version(spec) or d["info"]["version"]
+        files = d["releases"].get(locked, [])
+        # Coverage means INSTALLABLE on android/bionic, not "a wheel exists":
+        # only py3-none-any wheels satisfy a package; anything else installs
+        # nowhere on termux and must be built from sdist here.
+        covered = any(
+            f["filename"].endswith(".whl") and "-none-any.whl" in f["filename"]
+            for f in files
+        )
+        return name, covered, None
     except Exception as exc:  # noqa: BLE001 -- a probe miss means BUILD it
-        print(f"  probe miss {name}: {exc} -> building from sdist", file=sys.stderr)
-        has_wheel = False
-    if not has_wheel:
+        return name, False, str(exc)
+
+with ThreadPoolExecutor(max_workers=10) as ex:
+    results = list(ex.map(probe, entries))
+
+needs_build = []
+excluded = 0
+for name, covered, err in results:
+    if covered is None:
+        excluded += 1
+        continue
+    if err is not None:
+        print(f"  probe miss {name}: {err} -> building from sdist", file=sys.stderr)
+    if not covered:
         needs_build.append(name)
 open(sys.argv[2], "w", encoding="utf-8").write("\n".join(needs_build) + "\n")
-print(f"  {len(needs_build)} of {len(resolved)} packages need sdist builds")
+print(f"  {excluded} of {len(entries)} deps are marker-excluded for android")
+print(f"  {len(needs_build)} of {len(entries) - excluded} applicable packages need sdist builds")
 PYEOF
+[ -s "$BUILD_SET" ] || fail "build set is empty -- nothing to build (probe bug?)"
 
-# [e]-[h] Build wheels serially from sdists, patching psutil on the way.
-log "Building wheels from sdist (serial)"
-python3 - "$WORK" "$BUILD_SET" "$WHEELHOUSE" <<'PYEOF' || fail "wheel building failed"
-import subprocess, sys, tarfile, tempfile, os, shutil
-from pathlib import Path, PurePosixPath
+# [f] Container digest comes from pm/lock.json (termux-docker package).
+REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+DIGEST="$(python3 - "$REPO_ROOT" <<'PYD'
+import sys
+sys.path.insert(0, sys.argv[1])
+from pm.lock import Lockfile
+from pm.paths import lockfile_path
+print(Lockfile(lockfile_path()).version("termux-docker"))
+PYD
+)" || fail "failed to read the termux-docker digest from pm/lock.json"
+[ -n "$DIGEST" ] || fail "termux-docker digest missing from pm/lock.json"
+IMAGE="termux/termux-docker@$DIGEST"
 
-work, build_set, wheelhouse = (Path(a) for a in sys.argv[1:4])
-names = [l.strip() for l in build_set.read_text(encoding="utf-8").splitlines() if l.strip()]
+# [g] The build itself runs in the pinned container: the wheels must be
+# bionic, and they are built with THE PAYLOAD'S OWN staged python (the
+# exact TUR .deb pm staged from the lock), so the ABI matches the shipped
+# interpreter by construction. The payload must be staged before this.
+log "Building the wheelhouse inside the pinned container (payload ABI)"
+PAYLOAD_ABS="$OUT_ABS"
+[ -f "$PAYLOAD_ABS/python/data/data/com.termux/files/usr/bin/python3.11" ] \
+    || fail "staged payload python missing -- run build_cpython.sh first (the wheelhouse builds with the payload interpreter)"
+# The container mounts OUT_ABS at /out; translate the host-side work
+# paths before crossing the boundary (host absolutes do not exist inside).
+C_RESOLVED="/out/.work/resolved.txt"
+C_BUILD_SET="/out/.work/build_set.txt"
+C_WHEELHOUSE="/out/wheelhouse"
+docker run --rm --platform linux/arm64 \
+    -v "$REPO_ROOT:/repo" \
+    -v "$OUT_ABS:/out" \
+    "$IMAGE" bash /repo/scripts/termux/termux_build.sh \
+        --in-container "$C_RESOLVED" "$C_BUILD_SET" "$C_WHEELHOUSE" "/out" \
+    || fail "container wheelhouse build failed"
 
-def safe_extract(archive: Path, dest: Path) -> Path:
-    """Safe-extract a tarball, rejecting traversal/symlink/device members.
-
-    Shaped after the deleted hermes_cli/psutil_android.py (git show
-    f8236a2d91~1:hermes_cli/psutil_android.py).
-    """
-    with tarfile.open(archive, "r:gz") as tf:
-        for member in tf.getmembers():
-            path = PurePosixPath(member.name)
-            parts = tuple(p for p in path.parts if p not in ("", "."))
-            if path.is_absolute() or ".." in parts or not parts:
-                raise RuntimeError(f"unsafe archive member path: {member.name!r}")
-            target = dest.joinpath(*parts)
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-                continue
-            if not member.isfile():
-                raise RuntimeError(f"unsupported archive member type: {member.name}")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            extracted = tf.extractfile(member)
-            if extracted is None:
-                raise RuntimeError(f"cannot read archive member: {member.name}")
-            with extracted, open(target, "wb") as dst:
-                shutil.copyfileobj(extracted, dst)
-            try:
-                target.chmod(member.mode & 0o777)
-            except OSError:
-                pass
-    roots = sorted(p for p in dest.iterdir() if p.is_dir() and p.name.startswith("psutil"))
-    return roots[0] if roots else dest
-
-PSUTIL_MARKER = 'LINUX = sys.platform.startswith("linux")'
-PSUTIL_PATCH = 'LINUX = sys.platform.startswith(("linux", "android"))'
-
-def patch_psutil(src_root: Path) -> None:
-    common = src_root / "psutil" / "_common.py"
-    if not common.is_file():
-        return  # not a psutil sdist; nothing to patch
-    content = common.read_text(encoding="utf-8-sig")
-    if PSUTIL_MARKER not in content:
-        raise RuntimeError("psutil android patch marker not found -- update the patch for the pinned psutil pin")
-    common.write_text(content.replace(PSUTIL_MARKER, PSUTIL_PATCH), encoding="utf-8")
-
-for name in names:
-    print(f"==> building {name}")
-    with tempfile.TemporaryDirectory(prefix=f"hermes-build-{name}-") as tmp:
-        tmp = Path(tmp)
-        sdist_dir = tmp / "sdist"
-        sdist_dir.mkdir()
-        # Download the sdist for the pinned version from the req spec.
-        subprocess.run(
-            [sys.executable, "-m", "pip", "download", "--no-deps", "--no-binary", ":all:",
-             "--no-build-isolation", "-d", str(sdist_dir), name],
-            check=True, cwd=tmp,
-        )  # nb: version spec comes from the resolved list; pip resolves it
-        archives = list(sdist_dir.glob("*.tar.gz"))
-        if len(archives) != 1:
-            raise RuntimeError(f"expected exactly one sdist archive for {name}, got {len(archives)}")
-        src = safe_extract(archives[0], tmp / "src")
-        patch_psutil(src)
-        subprocess.run(
-            [sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation",
-             "-w", str(wheelhouse), str(src)],
-            check=True, cwd=tmp,
-        )
-PYEOF
-
-# [i] Retag every built wheel to the PEP 738 android tag.
-log "Retagging wheels to android_24_arm64_v8a"
-find "$WHEELHOUSE" -maxdepth 1 -name '*.whl' -print0 | while IFS= read -r -d '' whl; do
-    python3 scripts/termux/retag_wheel.py "$whl" || exit 1
-done
-RETAGGED="$(find "$WHEELHOUSE" -maxdepth 1 -name '*android_24_arm64_v8a*.whl' | wc -l | tr -d ' ')"
-[ "$RETAGGED" -gt 0 ] || fail "no wheels retagged to android_24_arm64_v8a"
-log "Retagged $RETAGGED wheels"
-
-# [j] Completeness gate: binary-only offline install of the FULL resolved
-# graph (not just the built set) into a clean venv, then import + check.
-log "Completeness gate: --only-binary :all: --no-index install"
-VENV="$WORK/verify-venv"
-uv venv "$VENV" --python "$(command -v python3)" >/dev/null \
-    || fail "uv venv failed for the verification venv"
-uv pip install --python "$VENV/bin/python" \
-    --only-binary=:all: --no-index --find-links "$WHEELHOUSE" \
-    -r "$WORK/req.txt" \
-    || fail "completeness gate FAILED: the wheelhouse does not cover the resolved graph offline"
-uv pip check --python "$VENV/bin/python" \
-    || fail "uv pip check failed after offline install"
-
-log "Importing every native module"
-python3 - "$VENV/bin/python" "$WORK/req.txt" <<'PYEOF' || fail "native import gate failed"
-import importlib, re, subprocess, sys
-vp, req = sys.argv[1], sys.argv[2]
-names = []
-for line in open(req, encoding="utf-8"):
-    line = line.strip()
-    if not line or line.startswith("#") or line.startswith("--"):
-        continue
-    m = re.match(r"^([A-Za-z0-9._-]+)", line)
-    if m:
-        names.append(m.group(1).replace("-", "_"))
-for name in names:
-    r = subprocess.run([vp, "-c", f"import {name}"], capture_output=True, text=True)
-    if r.returncode != 0:
-        raise SystemExit(f"import failed for {name}:\n{r.stderr}")
-    print(f"  imported {name}")
-PYEOF
-
-# [k] Emit the manifest artifacts.
+# [h] Emit the manifest artifacts (host side: pure data over the results).
 log "Emitting index.json, system-packages.txt, SHA256SUMS"
-python3 - "$WHEELHOUSE" "$OUT_ABS" "$TAG" <<'PYEOF' || fail "manifest emission failed"
-import csv, hashlib, json, subprocess, sys
+python3 - "$WHEELHOUSE" "$OUT_ABS" "$TAG" "$PLATFORM_TAG" "$PYTHON_ABI" <<'PYEOF' || fail "manifest emission failed"
+import hashlib, json, subprocess, sys
 from pathlib import Path
 
-wheelhouse, out, tag = sys.argv[1], sys.argv[2], sys.argv[3]
+wheelhouse, out, tag, platform_tag, python_abi = sys.argv[1:6]
 wheels = sorted(Path(wheelhouse).glob("*.whl"))
+digests = {w.name: hashlib.sha256(w.read_bytes()).hexdigest() for w in wheels}
 index = {
     "schemaVersion": 1,
     "tag": tag,
-    "platformTag": "android_24_arm64_v8a",
-    "pythonAbi": "cp314",
-    "wheels": [
-        {"name": w.name, "sha256": hashlib.sha256(w.read_bytes()).hexdigest()}
-        for w in wheels
-    ],
+    "platformTag": platform_tag,
+    "pythonAbi": python_abi,
+    "wheels": [{"name": w.name, "sha256": digests[w.name]} for w in wheels],
 }
 Path(out, "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
 try:
-    syspkgs = subprocess.run(["dpkg-query", "-W", "-f", "${Package} ${Version}\\n"],
+    syspkgs = subprocess.run(["dpkg-query", "-W", "-f", "${Package} ${Version}\n"],
                              capture_output=True, text=True, check=False)
     Path(out, "system-packages.txt").write_text(syspkgs.stdout or "unavailable\n", encoding="utf-8")
 except Exception:
     Path(out, "system-packages.txt").write_text("unavailable\n", encoding="utf-8")
 with open(Path(out, "SHA256SUMS"), "w", encoding="utf-8", newline="\n") as f:
     for w in wheels:
-        f.write(f"{hashlib.sha256(w.read_bytes()).hexdigest()}  {w.name}\n")
+        f.write(f"{digests[w.name]}  {w.name}\n")
 print(f"  {len(wheels)} wheels indexed")
 PYEOF
 

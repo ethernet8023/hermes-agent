@@ -522,7 +522,7 @@ jobs:
 
   termux-deb:
     name: Build + publish the termux .deb (aarch64)
-    needs: [build]
+    needs: [validate]
     if: inputs.upload_release == true
     runs-on: ubuntu-24.04-arm
     environment: release-signing

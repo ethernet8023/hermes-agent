@@ -46,6 +46,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_desktop:
+        description: 'Skip the desktop build matrix (fast termux-only dry runs)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -92,6 +97,7 @@ jobs:
   build:
     name: bundled ${{ matrix.target.label }}
     needs: validate
+    if: inputs.skip_desktop != true
     runs-on: ${{ matrix.target.runner }}
     environment: release-signing
     timeout-minutes: 90
@@ -431,7 +437,7 @@ jobs:
   finalize:
     name: Publish feeds to R2
     needs: [build]
-    if: inputs.upload_release == true
+    if: inputs.upload_release == true && inputs.skip_desktop != true
     runs-on: ubuntu-24.04
     environment: release-signing
     steps:
@@ -459,7 +465,7 @@ jobs:
   msixbundle:
     name: Bundle the win32 MSIX feeds
     needs: [build]
-    if: inputs.upload_release == true
+    if: inputs.upload_release == true && inputs.skip_desktop != true
     runs-on: windows-2025
     environment: release-signing
     timeout-minutes: 45
@@ -520,6 +526,183 @@ jobs:
           # .msix to the tag archive (never a feed dir).
           node scripts/stage-msixbundle.mjs --tag "$HERMES_PAYLOAD_TAG" --variant bundled
 
+  termux-deb:
+    name: Build + publish the termux .deb (aarch64)
+    needs: [validate]
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04-arm
+    environment: release-signing
+    timeout-minutes: 90
+    env:
+      HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+      # termux_build.sh gates on `gh release view <tag>` (refuse to build
+      # before the release exists); gh needs GH_TOKEN or it errors out and
+      # the gate misreads that as "release not found".
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+      CLOUDFLARE_R2_PUBLIC_URL: ${{ vars.CLOUDFLARE_R2_PUBLIC_URL }}
+    steps:
+      # Full checkout: build_deb.sh verifies the tag in-repo and assembles the
+      # .deb from the checkout's app/ tree — a sparse tree would ship a
+      # partial payload.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-tags: true
+
+      - name: Resolve toolchain pins from pm/lock.json
+        id: toolchain_pins
+        shell: bash
+        # Same pin table as the desktop legs: the uv that drives the
+        # wheelhouse resolution is the pinned toolchain uv, not whatever
+        # happens to be on the runner image.
+        run: |
+          python -c '
+          import json
+          pkgs = json.load(open("pm/lock.json"))["packages"]
+          print("uv=" + pkgs["uv"]["version"])
+          ' >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # 9.0.0
+        with:
+          version: ${{ steps.toolchain_pins.outputs.uv }}
+          enable-cache: false
+
+      - name: Derive the channel from the tag
+        id: channel
+        shell: bash
+        # Single source of truth: deb_version.py --channel uses the same
+        # _TAG_RE as the Debian version derivation, so the channel and the
+        # .deb version can never disagree about the tag's shape.
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "channel=$(python3 scripts/termux/deb_version.py --channel "$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Read the termux-docker digest pin
+        id: pins
+        shell: bash
+        # The digest is pinned in pm/lock.json (the termux-docker package)
+        # beside every other third-party pin; the build scripts re-read it
+        # themselves. This step surfaces the effective pin in the run log
+        # and fails fast if the lock row is missing.
+        run: |
+          echo "digest=$(python3 -c '
+          import sys; sys.path.insert(0, ".")
+          from pm.lock import Lockfile
+          from pm.paths import lockfile_path
+          print(Lockfile(lockfile_path()).version("termux-docker"))
+          ')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the CPython + node payload builds
+        # Same tag-dispatch stance as the pm-store cache above: the exact key
+        # is content-only on scripts/termux/pins.json, so it is stable across
+        # tags; the restore-keys prefix rescues the previous pin's builds
+        # when pins DID move. build_cpython.sh / build_node.sh self-validate
+        # a restored tree against the pin and rebuild in place when stale.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            termux-build/payload/python
+            termux-build/payload/node
+          key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_config.sh') }}
+          restore-keys: |
+            termux-payload-
+
+      - name: Build CPython into the payload
+        shell: bash
+        run: bash scripts/termux/build_cpython.sh termux-build/payload
+
+      - name: Build node into the payload
+        shell: bash
+        run: bash scripts/termux/build_node.sh termux-build/payload
+
+      - name: Stage uv into the payload
+        shell: bash
+        # The wheelhouse resolver + runtime lazy-install tool: pm stages
+        # the bionic uv .deb beside python/node (no PATH install; the
+        # payload env composition exposes it, desktop payload model).
+        run: bash scripts/termux/build_uv.sh termux-build/payload
+
+      - name: Build the wheelhouse
+        shell: bash
+        # termux_build.sh lands wheelhouse/ + index.json + SHA256SUMS in the
+        # payload root, where build_deb.sh's --no-index pip install finds it.
+        run: |
+          bash scripts/termux/termux_build.sh \
+            --repo . \
+            --tag "$HERMES_PAYLOAD_TAG" \
+            --out termux-build/payload
+
+      - name: Assemble the .deb
+        shell: bash
+        # build_deb.sh always validates in a fresh pinned container (no
+        # opt-out flag); the channel is derived from the tag inside the
+        # script via deb_version.py.
+        run: |
+          bash scripts/termux/build_deb.sh \
+            --repo . \
+            --tag "$HERMES_PAYLOAD_TAG" \
+            --payload termux-build/payload \
+            --out termux-build/deb
+
+      - name: Upload the .deb as a workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          # Matches the publish jobs' download pattern hermes-bundled-* so
+          # the release leg's artifact sweep sees it.
+          name: hermes-bundled-termux-${{ inputs.tag }}
+          path: termux-build/deb/*.deb
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Write the APT signing key
+        shell: bash
+        env:
+          TERMUX_APT_GPG_KEY: ${{ secrets.TERMUX_APT_GPG_KEY }}
+        run: |
+          if [ -z "$TERMUX_APT_GPG_KEY" ]; then
+            echo "::error::TERMUX_APT_GPG_KEY secret not set — the APT repo would stage unsigned"
+            exit 1
+          fi
+          printf '%s\n' "$TERMUX_APT_GPG_KEY" > "$RUNNER_TEMP/termux-apt-gpg.asc"
+
+      - name: Stage the APT repo and publish to R2
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          # stage_apt_repo.py builds dists/<suite>/ + pool/ under --out and
+          # signs Release/InRelease with the key file. Exit 3 (unsigned
+          # Release) must fail the run.
+          python3 scripts/termux/stage_apt_repo.py \
+            --pool termux-build/deb \
+            --out termux-build/apt \
+            --suite "hermes-$CHANNEL" \
+            --gpg-key-file "$RUNNER_TEMP/termux-apt-gpg.asc"
+
+          # --key-is-full is MANDATORY on every feed-dir upload: without it
+          # r2-release.mjs re-prefixes the key into the tag archive
+          # (releases/tag/<tag>/) and the APT feed never lands at
+          # releases/termux/<channel>/.
+          shopt -s globstar nullglob
+          # cd into the staged repo for the glob, but resolve the r2 client
+          # absolutely first -- after the cd, scripts/ is no longer in the
+          # cwd and a bare `node scripts/r2-release.mjs` would ENOENT.
+          R2="$GITHUB_WORKSPACE/scripts/r2-release.mjs"
+          cd termux-build/apt
+          for f in **/*; do
+            [ -f "$f" ] || continue
+            node "$R2" put \
+              --tag "$HERMES_PAYLOAD_TAG" \
+              --key "releases/termux/$CHANNEL/$f" \
+              --file "$f" \
+              --key-is-full
+          done
+
   builds-pending:
     name: Mark the builds table as in progress
     if: inputs.upload_release == true
@@ -542,7 +725,7 @@ jobs:
 
   builds-table:
     name: Render the release builds table
-    needs: [build, msixbundle, finalize]
+    needs: [build, msixbundle, finalize, termux-deb]
     if: inputs.upload_release == true
     runs-on: ubuntu-24.04
     environment: release-signing
@@ -567,7 +750,7 @@ jobs:
 
   publish-nightly:
     name: Publish the nightly release
-    needs: [build, builds-table, msixbundle, finalize]
+    needs: [build, builds-table, msixbundle, finalize, termux-deb]
     if: |
       always()
       && inputs.upload_release == true
@@ -576,6 +759,7 @@ jobs:
       && needs.builds-table.result == 'success'
       && needs.msixbundle.result == 'success'
       && needs.finalize.result == 'success'
+      && needs.termux-deb.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - name: Publish

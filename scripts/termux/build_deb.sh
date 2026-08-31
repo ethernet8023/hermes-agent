@@ -10,11 +10,11 @@
 #   --payload <dir>       dir containing python/, node/, app/ (git archive of
 #                         the tag) and wheelhouse/ (from termux_build.sh)
 #   --out <dir>           output dir; <out>/hermes-agent_<v>_arm64.deb lands here
-#   --channel stable|nightly
-#   --validate-container  REQUIRED. Present on every invocation including CI.
-#                         The .deb is installed into a fresh run of the pinned
-#                         termux-docker image (digest from pins.json) and
-#                         smoke-tested. docker must be available.
+#
+# No opt-out flags: the .deb is ALWAYS installed into a fresh run of the
+# pinned termux-docker image (digest from pins.json) and smoke-tested.
+# docker must be available. The channel is derived from the tag by
+# deb_version.py (--channel), not passed in.
 #
 # Installed layout: $PREFIX/lib/hermes-agent/{python,node,app,venv,bin} with
 # exactly one leak: $PREFIX/bin/hermes -> lib/hermes-agent/bin/hermes.
@@ -28,10 +28,8 @@ REPO=""
 TAG=""
 PAYLOAD=""
 OUT=""
-CHANNEL=""
-VALIDATE_CONTAINER=""
 
-usage() { printf 'usage: build_deb.sh --repo <dir> --tag <tag> --payload <dir> --out <dir> --channel stable|nightly --validate-container\n' >&2; exit 2; }
+usage() { printf 'usage: build_deb.sh --repo <dir> --tag <tag> --payload <dir> --out <dir>\n' >&2; exit 2; }
 log()  { printf '\n==> %s\n' "$*"; }
 fail() { printf 'build_deb: FAILED: %s\n' "$*" >&2; exit 1; }
 
@@ -41,21 +39,10 @@ while [ "$#" -gt 0 ]; do
         --tag) TAG="${2:?}"; shift 2 ;;
         --payload) PAYLOAD="${2:?}"; shift 2 ;;
         --out) OUT="${2:?}"; shift 2 ;;
-        --channel) CHANNEL="${2:?}"; shift 2 ;;
-        --validate-container) VALIDATE_CONTAINER=1; shift ;;
         *) usage ;;
     esac
 done
-[ -n "$REPO" ] && [ -n "$TAG" ] && [ -n "$PAYLOAD" ] && [ -n "$OUT" ] && [ -n "$CHANNEL" ] || usage
-case "$CHANNEL" in
-    stable|nightly) ;;
-    *) usage ;;
-esac
-# No opt-out: the validation hook is mandatory, not optional. The flag must be
-# present (CI always passes it) and docker must exist.
-[ "$VALIDATE_CONTAINER" = "1" ] || {
-    fail "--validate-container is REQUIRED: the .deb must be proven in a fresh pinned container before it exists"
-}
+[ -n "$REPO" ] && [ -n "$TAG" ] && [ -n "$PAYLOAD" ] && [ -n "$OUT" ] || usage
 
 for tool in python3 docker dpkg-deb jq; do
     command -v "$tool" >/dev/null || fail "missing tool: $tool"
@@ -66,8 +53,9 @@ PAYLOAD_ABS="$(cd "$PAYLOAD" && pwd)"
 OUT_ABS="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
 
 # [0] Provenance: the tag must be real in the checkout; the payload must be
-# the built tree of that checkout, not some other directory.
-git -C "$REPO_ABS" rev-parse --verify --quiet "refs/tags/$TAG^{commit}" >/dev/null \
+# the built tree of that checkout, not some other directory. The commit is
+# captured ONCE here and reused for the install stamp below.
+COMMIT="$(git -C "$REPO_ABS" rev-parse --verify "refs/tags/$TAG^{commit}")" \
     || fail "tag $TAG not found in $REPO_ABS"
 for d in python node app wheelhouse; do
     [ -d "$PAYLOAD_ABS/$d" ] || fail "payload missing $d/ -- run termux_build.sh + build_cpython.sh + build_node.sh first"
@@ -120,22 +108,19 @@ EOF
 chmod 755 "$PAYLOAD_ABS/bin/hermes" "$PAYLOAD_ABS/bin/hermes-agent" "$PAYLOAD_ABS/bin/hermes-acp"
 
 # [4] Install stamp: provenance for the steward contract (distribution
-# apt-termux -> update/uninstall refuse with pkg remediation).
+# apt-termux -> update/uninstall refuse with pkg remediation). Written by the
+# canonical writer (same one docker/nix/desktop use) so the schema stays
+# identical across packagers; the tag rides in via HERMES_PAYLOAD_TAG.
 log "Writing app/install-stamp.json"
-COMMIT="$(git -C "$REPO_ABS" rev-list -n1 "$TAG")"
-python3 - "$PAYLOAD_ABS/app/install-stamp.json" "$COMMIT" "$TAG" <<'PYEOF' || fail "stamp write failed"
-import json, sys
-path, commit, tag = sys.argv[1], sys.argv[2], sys.argv[3]
-stamp = {
-    "schemaVersion": 2,
-    "commit": commit,
-    "distribution": "apt-termux",
-    "source": "bundle",
-    "updateMechanism": "external",
-    "tag": tag,
-}
-open(path, "w", encoding="utf-8").write(json.dumps(stamp, indent=2) + "\n")
-PYEOF
+HERMES_PAYLOAD_TAG="$TAG" \
+HERMES_DESKTOP_VARIANT=bundled \
+python3 "$REPO_ABS/scripts/write_install_stamp.py" \
+    --output "$PAYLOAD_ABS/app/install-stamp.json" \
+    --commit "$COMMIT" \
+    --distribution apt-termux \
+    --update-mechanism external \
+    --source bundle \
+    || fail "stamp write failed"
 
 # [5]+[6] Staging dir: DEBIAN/ control + payload under lib/hermes-agent/.
 log "Staging the package tree"
@@ -147,13 +132,14 @@ cp -a "$PAYLOAD_ABS/python" "$PAYLOAD_ABS/node" "$PAYLOAD_ABS/app" "$PAYLOAD_ABS
 # postinst/prerm: manage the ONE leak, $PREFIX/bin/hermes, idempotently.
 cat > "$STAGE/DEBIAN/postinst" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
-# Create $PREFIX/bin/hermes -> lib/hermes-agent/bin/hermes if missing (idempotent).
+# Ensure $PREFIX/bin/hermes -> lib/hermes-agent/bin/hermes (idempotent).
 LINK="$PREFIX/bin/hermes"
 TARGET="../lib/hermes-agent/bin/hermes"
 mkdir -p "$PREFIX/bin"
-if [ ! -e "$LINK" ] && [ ! -L "$LINK" ]; then
-    ln -s "$TARGET" "$LINK"
-fi
+# Atomic: ln either creates the link or fails (EEXIST); never a
+# check-then-create race. A pre-existing link is fine; any other ln failure
+# is a loud nonzero exit, not a swallowed one.
+ln -s "$TARGET" "$LINK" 2>/dev/null || [ -L "$LINK" ]
 exit 0
 EOF
 cat > "$STAGE/DEBIAN/prerm" <<'EOF'

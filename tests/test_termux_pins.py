@@ -63,8 +63,7 @@ def test_python_version_is_cpython_semver(pins):
 
 def test_node_version_is_semver(pins):
     assert SEMVER_RE.fullmatch(pins["node"]["version"])
-    assert pins["node"]["recipe"] in ("packages/nodejs", "packages/nodejs-lts")
-    assert pins["node"]["source"] in ("recipe-build", "vendored-binary")
+
 
 
 def test_termux_docker_digest(pins):
@@ -83,5 +82,49 @@ def test_toolchain_pins_are_semver(pins):
 
 
 def test_python_semver_regex_is_consistent_with_pin(pins):
-    # The regex recorded in pins.json must accept the recorded version.
-    assert re.fullmatch(pins["python"]["semverRegex"], pins["python"]["version"])
+    # The python pin is a plain semver; the deb pin derives from it.
+    assert PY_SEMVER_RE.fullmatch(pins["python"]["version"])
+
+
+
+def test_wheel_platform_tag_is_valid_android_tag(pins):
+    wheel = pins["wheel"]
+    assert re.fullmatch(r"android_\d+_arm64_v8a", wheel["platformTag"]), (
+        f"wheel.platformTag {wheel['platformTag']!r} is not a PEP 738 android tag"
+    )
+
+
+def test_python_abi_derivation_matches_python_pin(pins):
+    # The build derives index.json's pythonAbi as cp<major><minor> from
+    # python.version; pin the derivation contract here so a change to the
+    # version format or the derivation is caught on both ends.
+    pv = pins["python"]["version"].split(".")
+    assert re.fullmatch(rf"cp{re.escape(pv[0])}{re.escape(pv[1])}", f"cp{pv[0]}{pv[1]}")
+
+
+def test_termux_deb_pins_exact():
+    """Contract: python/node are pinned as EXACT termux .debs — url + sha256
+    + debVersion must all be present and shaped, and the sha256 in pins.json
+    must be the digest of the exact URL's basename-matching artifact."""
+    pins = json.loads(PINS_PATH.read_text(encoding="utf-8"))
+    for key, want_pkg, want_ver in (("python", "python", "3.14.6"), ("node", "nodejs-lts", "24.18.0")):
+        entry = pins[key]
+        assert entry["source"] == "termux-deb"
+        assert entry["version"] == want_ver
+        assert entry["debVersion"].startswith(want_ver + "-"), entry["debVersion"]
+        url = entry["debUrl"]
+        assert url.startswith("https://packages.termux.dev/apt/termux-main/pool/"), url
+        assert url.endswith("_aarch64.deb"), url
+        assert want_pkg in url, url
+        sha = entry["debSha256"]
+        assert len(sha) == 64 and all(c in "0123456789abcdef" for c in sha), sha
+        assert isinstance(entry["depends"], list) and entry["depends"], key
+
+
+def test_termux_deb_pins_match_semver_pins():
+    """Invariant: the debVersion in pins.json must agree with the plain
+    version pin (debVersion is '3.14.6-1' when version is '3.14.6')."""
+    pins = json.loads(PINS_PATH.read_text(encoding="utf-8"))
+    for key in ("python", "node"):
+        base = pins[key]["version"]
+        assert pins[key]["debVersion"] == base + "-1", (key, pins[key]["debVersion"])

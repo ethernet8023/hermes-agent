@@ -118,7 +118,7 @@ jobs:
     needs: validate
     runs-on: ${{ matrix.target.runner }}
     environment: release-signing
-    timeout-minutes: 90
+    timeout-minutes: 900
     strategy:
       fail-fast: false
       matrix:
@@ -376,7 +376,7 @@ jobs:
 
       - name: Build and package
         shell: bash
-        timeout-minutes: 85
+        timeout-minutes: 900
         env:
           PYTHONUTF8: '1'
           CC_aarch64_pc_windows_msvc: ${{ matrix.target.label == 'win32-arm64' && 'clang' || '' }}

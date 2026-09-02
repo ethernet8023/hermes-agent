@@ -40,3 +40,17 @@ jobs:
                           body = e2.read(300)
                           print(f"  body: {body[:300]!r}")
           EOF
+          python3 - <<'EOF'
+          import sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, ".")
+          from pm.downloader import Download, Source
+          url = "https://tur.kcubeterm.com/pool/tur/python3.11_3.11.15_aarch64.deb"
+          sha = "b927d1cbeacffb426d52e4860650caf9afd1945f85eaece26f37ae3327d5fa7c"
+          with tempfile.TemporaryDirectory() as td:
+              src = Source(url, Path(td) / "out.deb", sha)
+              Download([src], partials_dir=Path(td)).run()
+              import hashlib
+              data = (Path(td) / "out.deb").read_bytes()
+              print("FULL DOWNLOAD:", len(data), "bytes | digest:", hashlib.sha256(data).hexdigest() == sha)
+          EOF

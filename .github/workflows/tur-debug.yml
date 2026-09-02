@@ -1,5 +1,7 @@
 name: TUR redirect debug
-on: workflow_dispatch
+on:
+  push:
+    branches: [wt/tur-debug]
 jobs:
   debug:
     runs-on: ubuntu-24.04-arm

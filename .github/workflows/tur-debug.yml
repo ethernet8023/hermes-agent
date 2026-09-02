@@ -41,17 +41,21 @@ jobs:
                           body = e2.read(300)
                           print(f"  body: {body[:300]!r}")
           EOF
+          # Reproduce the DISPATCH stage path exactly: stage_only from the
+          # lock, default store (like the release job), print the failing URL.
           python3 - <<'EOF'
-          import sys, tempfile
-          from pathlib import Path
+          import sys, traceback
           sys.path.insert(0, ".")
-          from pm.downloader import Download, Source
-          url = "https://tur.kcubeterm.com/pool/tur/python3.11_3.11.15_aarch64.deb"
-          sha = "b927d1cbeacffb426d52e4860650caf9afd1945f85eaece26f37ae3327d5fa7c"
-          with tempfile.TemporaryDirectory() as td:
-              src = Source(url, Path(td) / "out.deb", sha)
-              Download([src], partials_dir=Path(td)).run()
-              import hashlib
-              data = (Path(td) / "out.deb").read_bytes()
-              print("FULL DOWNLOAD:", len(data), "bytes | digest:", hashlib.sha256(data).hexdigest() == sha)
+          from pm.ensure import stage_only
+          from pm.lock import Lockfile
+          from pm.paths import lockfile_path
+          lf = Lockfile(lockfile_path())
+          for pkg in ("python", "node"):
+              art = lf.artifacts(pkg, "linux-arm64-bionic")
+              print(f"STAGE {pkg}: url={art[0]['url']}")
+              try:
+                  entry = stage_only(pkg, "linux-arm64-bionic")
+                  print(f"  OK -> {entry}")
+              except Exception as e:
+                  print(f"  FAILED: {type(e).__name__}: {e}")
           EOF

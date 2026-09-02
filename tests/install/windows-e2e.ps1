@@ -594,9 +594,11 @@ function Invoke-PhaseInstallGui {
     Copy-Item -Path (Join-Path $AssetsDir "install-and-launch.ahk"), (Join-Path $AssetsDir "install-button.png"), (Join-Path $AssetsDir "launch-button.png") -Destination $AhkDir -Force
 
     $env:HERMES_HOME = $HermesHome
-    # As shipped: NO dev-root override, no pin override. Ensure a stray
-    # local dev checkout can't hijack resolution.
-    Remove-Item Env:HERMES_SETUP_DEV_REPO_ROOT -ErrorAction SilentlyContinue
+    # TEMP (#100803 verification): serve THIS checkout's install.ps1 to the
+    # bootstrap instead of the live raw.githubusercontent one, simulating
+    # what main serves once the stage-order fix merges. Revert to the
+    # Remove-Item form ("as shipped") after the fix lands upstream.
+    $env:HERMES_SETUP_DEV_REPO_ROOT = $RepoRoot
     New-Item -ItemType Directory -Path $HermesHome -Force | Out-Null
 
     $recorder = Start-DesktopRecorder (Join-Path $proof "desktop-frames")

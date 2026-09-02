@@ -41,21 +41,55 @@ jobs:
                           body = e2.read(300)
                           print(f"  body: {body[:300]!r}")
           EOF
-          # Reproduce the DISPATCH stage path exactly: stage_only from the
-          # lock, default store (like the release job), print the failing URL.
+          # THE ISOLATION TEST: pm's _OPENER (custom redirect+forwarded
+          # headers) vs STOCK urlopen, same URL, same Range, one runner.
           python3 - <<'EOF'
-          import sys, traceback
+          import sys, urllib.request
           sys.path.insert(0, ".")
-          from pm.ensure import stage_only
-          from pm.lock import Lockfile
-          from pm.paths import lockfile_path
-          lf = Lockfile(lockfile_path())
-          for pkg in ("python", "node"):
-              art = lf.artifacts(pkg, "linux-arm64-bionic")
-              print(f"STAGE {pkg}: url={art[0]['url']}")
-              try:
-                  entry = stage_only(pkg, "linux-arm64-bionic")
-                  print(f"  OK -> {entry}")
-              except Exception as e:
-                  print(f"  FAILED: {type(e).__name__}: {e}")
+          from pm.downloader import _OPENER, _UA
+          url = "https://tur.kcubeterm.com/pool/tur/python3.11_3.11.15_aarch64.deb"
+
+          # A: pm's opener with Range (the exact failing combo)
+          try:
+              req = urllib.request.Request(url, headers={**_UA, "Range": "bytes=0-1023"})
+              with _OPENER.open(req, timeout=60) as r:
+                  print(f"A pm-opener+range: {r.status}")
+          except urllib.error.HTTPError as e:
+              print(f"A pm-opener+range: {e.code}")
+
+          # B: STOCK urlopen with Range (no custom handlers)
+          try:
+              req = urllib.request.Request(url, headers={**_UA, "Range": "bytes=0-1023"})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  print(f"B stock+range: {r.status}")
+          except urllib.error.HTTPError as e:
+              print(f"B stock+range: {e.code}")
+
+          # C: pm opener WITHOUT range
+          try:
+              req = urllib.request.Request(url, headers=_UA)
+              with _OPENER.open(req, timeout=60) as r:
+                  print(f"C pm-opener-norange: {r.status}")
+          except urllib.error.HTTPError as e:
+              print(f"C pm-opener-norange: {e.code}")
+
+          # D: dump the redirect chain headers under pm opener
+          class Spy(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  print(f"D hop {code} -> {newurl[:100]}")
+                  print(f"D  sent headers: {dict(req.header_items())}")
+                  return super().redirect_request(req, fp, code, msg, headers, newurl)
+          import pm.downloader as dl
+          saved = dl._HttpsRedirectHandler.redirect_request
+          def spied(self, req, fp, code, msg, headers, newurl):
+              print(f"D hop {code} -> {newurl[:100]}")
+              print(f"D  sent headers: {dict(req.header_items())}")
+              return saved(self, req, fp, code, msg, headers, newurl)
+          dl._HttpsRedirectHandler.redirect_request = spied
+          try:
+              req = urllib.request.Request(url, headers={**_UA, "Range": "bytes=0-1023"})
+              with dl._OPENER.open(req, timeout=60) as r:
+                  print(f"D pm-opener spied: {r.status}")
+          except urllib.error.HTTPError as e:
+              print(f"D pm-opener spied: {e.code}")
           EOF

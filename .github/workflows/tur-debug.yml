@@ -92,4 +92,22 @@ jobs:
                   print(f"D pm-opener spied: {r.status}")
           except urllib.error.HTTPError as e:
               print(f"D pm-opener spied: {e.code}")
+          # E: THE FULL Download path (probe + parallel ranged workers)
+          # against a real store, exactly as stage_only drives it.
+          python3 - <<'EOF'
+          import sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, ".")
+          from pm.store import download
+          url = "https://tur.kcubeterm.com/pool/tur/python3.11_3.11.15_aarch64.deb"
+          sha = "b927d1cbeacffb426d52e4860650caf9afd1945f85eaece26f37ae3327d5fa7c"
+          with tempfile.TemporaryDirectory() as td:
+              try:
+                  archive = download(url, Path(td), sha)
+                  data = archive.read_bytes()
+                  import hashlib
+                  print(f"E full store.download: OK {len(data)} bytes, digest-match={hashlib.sha256(data).hexdigest() == sha}")
+              except Exception as e:
+                  print(f"E full store.download: FAILED {type(e).__name__}: {e}")
+          EOF
           EOF

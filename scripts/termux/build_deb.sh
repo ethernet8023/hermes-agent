@@ -129,12 +129,12 @@ chmod 0777 "$PAYLOAD_ABS/venv"
 # on-device from birth -- a /payload alias would bake container paths in.
 docker run --rm --platform linux/arm64 \
     --user root \
-    -v "$PAYLOAD_ABS/python:/data/data/com.termux/files/usr/python" \
-    -v "$PAYLOAD_ABS/node:/data/data/com.termux/files/usr/node" \
-    -v "$PAYLOAD_ABS/uv:/data/data/com.termux/files/usr/uv" \
-    -v "$PAYLOAD_ABS/wheelhouse:/data/data/com.termux/files/usr/wheelhouse" \
-    -v "$PAYLOAD_ABS/.work:/data/data/com.termux/files/usr/.work" \
-    -v "$PAYLOAD_ABS/venv:/data/data/com.termux/files/usr/venv" \
+    -v "$PAYLOAD_ABS/python:/data/data/com.termux/files/usr/lib/hermes-agent/python" \
+    -v "$PAYLOAD_ABS/node:/data/data/com.termux/files/usr/lib/hermes-agent/node" \
+    -v "$PAYLOAD_ABS/uv:/data/data/com.termux/files/usr/lib/hermes-agent/uv" \
+    -v "$PAYLOAD_ABS/wheelhouse:/data/data/com.termux/files/usr/lib/hermes-agent/wheelhouse" \
+    -v "$PAYLOAD_ABS/.work:/data/data/com.termux/files/usr/lib/hermes-agent/.work" \
+    -v "$PAYLOAD_ABS/venv:/data/data/com.termux/files/usr/lib/hermes-agent/venv" \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr
@@ -142,24 +142,28 @@ docker run --rm --platform linux/arm64 \
         # The staged binary is dynamically linked against its OWN tree lib;
         # the container linker needs to be told where it lives (same fix as
         # the wheelhouse container half).
-        export LD_LIBRARY_PATH="$PREFIX/python$PREFIX/lib:$PREFIX/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
-        PY="$PREFIX/python$PREFIX/bin/python3.11"
-        UV="$PREFIX/uv$PREFIX/bin/uv"
+        PY="$PREFIX/lib/hermes-agent/python$PREFIX/bin/python3.11"
+        UV="$PREFIX/lib/hermes-agent/uv$PREFIX/bin/uv"
                 # Desktop payload canon: the venv holds the DEPENDENCY tree only;
         # the app runs from its own directory via PYTHONPATH (the wheel
         # build is deliberately blocked in setup.py -- Hermes is not a
         # pip-installable package by design).
-        "$UV" venv --python "$PY" --seed "$PREFIX/venv"
+        # The payload is mounted at its ON-DEVICE path ($PREFIX/lib/
+        # hermes-agent) so every absolute path the venv records --
+        # interpreter symlink, pyvenv.cfg home -- is correct after
+        # dpkg installs the tree to exactly that location.
+        "$UV" venv --python "$PY" --seed "$PREFIX/lib/hermes-agent/venv"
         # The dep graph with markers intact (the installer evaluates
         # them on bionic); documented android build misses skipped --
         # nemo-relay is the only casualty (the relay exporter).
-        "$UV" pip install --python "$PREFIX/venv/bin/python" \
-            --no-index --find-links "$PREFIX/wheelhouse" \
-            -r "$PREFIX/.work/resolved-reqs.txt"
-        "$UV" pip check --python "$PREFIX/venv/bin/python"
+        "$UV" pip install --python "$PREFIX/lib/hermes-agent/venv/bin/python" \
+            --no-index --find-links "$PREFIX/lib/hermes-agent/wheelhouse" \
+            -r "$PREFIX/lib/hermes-agent/.work/resolved-reqs.txt"
+        "$UV" pip check --python "$PREFIX/lib/hermes-agent/venv/bin/python"
     ' || fail "venv assembly failed inside the container (offline wheelhouse install)"
 
 # [3] Trampolines: POSIX sh, resolve their own dir, dispatch on the bundled

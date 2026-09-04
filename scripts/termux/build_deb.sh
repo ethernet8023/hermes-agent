@@ -277,7 +277,7 @@ echo "$UPD_OUT" | grep -q "pkg upgrade hermes-agent" \
 echo "VALIDATION OK"
 CHECK
 docker run --rm --platform linux/arm64 \
-    -v "$DEB:/tmp/pkg.deb:ro" \
+    --user root     -v "$DEB:/tmp/pkg.deb:ro" \
     -v "$VD/check.sh:/tmp/check.sh:ro" \
     "$IMAGE" sh /tmp/check.sh \
     || fail "container validation failed"

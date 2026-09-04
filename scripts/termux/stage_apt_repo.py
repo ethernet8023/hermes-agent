@@ -21,6 +21,7 @@ import argparse
 import gzip
 import hashlib
 import io
+import lzma
 import shutil
 import subprocess
 import sys
@@ -81,10 +82,25 @@ def deb_control_fields_and_bytes(deb_path: Path) -> tuple[dict, bytes]:
 
     if name == "control.tar.gz":
         raw = gzip.decompress(payload)
+    elif name == "control.tar.xz":
+        raw = lzma.decompress(payload)
+    elif name == "control.tar.zst":
+        # zstd has no stdlib decoder; dpkg-deb -Zxz (our build default)
+        # keeps control in xz, but tolerate zst debs from elsewhere when
+        # the host has a zstd binary.
+        try:
+            raw = subprocess.run(
+                ["zstd", "-d", "-c"], input=payload, check=True,
+                capture_output=True,
+            ).stdout
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            raise StageError(
+                f"{deb_path.name}: control member is zstd-compressed and no zstd binary is available"
+            ) from e
     elif name == "control.tar":
         raw = payload
     else:
-        raise StageError(f"{deb_path.name}: unsupported control compression {name} (need tar or tar.gz)")
+        raise StageError(f"{deb_path.name}: unsupported control compression {name}")
 
     fields: dict = {}
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tf:

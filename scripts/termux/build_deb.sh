@@ -305,7 +305,8 @@ EOF
 log "Validating in a fresh pinned termux-docker container"
 DEB="$OUT_ABS/${PKG}_${DEB_VERSION}_aarch64.deb"
 rm -f "$DEB"
-dpkg-deb --build --root-owner-group "$STAGE" "$DEB" || fail "dpkg-deb --build failed"
+# -Zxz: uniform xz compression for data AND control. The apt stager
+                        dpkg-deb --build -Zxz --root-owner-group "$STAGE" "$DEB" || fail "dpkg-deb --build failed"
 rm -rf "$STAGE"
 [ -f "$DEB" ] || fail "dpkg-deb did not produce $DEB"
 

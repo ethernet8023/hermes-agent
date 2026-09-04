@@ -24,11 +24,10 @@ Termux's `python` or `nodejs` packages.
 The package is distributed through our signed APT repository (hosted on our
 release storage). Installing means:
 
-1. Adding the repository's `sources.list` entry for the channel you want
+1. Telling `pkg` about the repository for the channel you want
    (see [Channels](#channels) below).
-2. Importing the repository's GPG public key so `pkg` can verify the packages
-   (the key is published alongside the repository - fetch it from the release
-   page and add it to `apt`'s trusted keys).
+2. Importing the repository's GPG public key so `pkg` can verify the
+   packages.
 3. Installing the package:
 
    ```bash
@@ -37,6 +36,35 @@ release storage). Installing means:
 
 The `hermes` command is a symlink in `$PREFIX/bin`, so it is available from any
 Termux shell immediately after install.
+
+### Installing step by step
+
+For the **nightly** channel (aarch64 devices):
+
+```bash
+# 1. Import the repository signing key (published by the repo itself).
+mkdir -p $PREFIX/etc/apt/keyrings
+curl -fsSL \
+  https://hermes-assets.nousresearch.com/releases/termux/nightly/key.asc \
+  -o $PREFIX/etc/apt/keyrings/hermes-agent.asc
+
+# 2. Add the repository.
+echo "deb [signed-by=$PREFIX/etc/apt/keyrings/hermes-agent.asc] https://hermes-assets.nousresearch.com/releases/termux/nightly hermes-nightly main" \
+  > $PREFIX/etc/apt/sources.list.d/hermes-agent.list
+
+# 3. Install.
+pkg update
+pkg install hermes-agent
+```
+
+For the **stable** channel, use `stable` in place of `nightly` in both URLs
+(and the suite name `hermes-stable` in the `deb` line).
+
+:::tip Verify the key by fingerprint first
+If you prefer to check what you are trusting, fetch the key, inspect it with
+`gpg --show-keys <keyfile>`, and compare the fingerprint against the one we
+publish on the [releases page](https://github.com/NousResearch/hermes-agent/releases).
+:::
 
 ## What gets installed
 
@@ -114,7 +142,7 @@ This removes the package and the `$PREFIX/bin/hermes` symlink. Your data in
 | Problem | Solution |
 |---------|----------|
 | `Unable to locate package hermes-agent` | The repository `sources.list` entry is missing or the channel name is wrong - re-check it, then run `pkg update`. |
-| Signature / GPG errors during `pkg update` | The repository public key isn't imported (or is stale) - re-fetch the current key from the release page. |
+| Signature / GPG errors during `pkg update` | The repository public key isn't imported (or is stale) - re-fetch it from the channel's `key.asc` URL and re-run `pkg update`. |
 | `hermes: command not found` | Reinstall the package, or check that `$PREFIX/bin` is on your `PATH`. |
 | Gateway dies when the screen turns off | See the [phantom process killer note](#running-the-gateway) - battery-optimization exemption plus `termux-wake-lock`. |
 

@@ -33,6 +33,7 @@ const CONTENT_TYPES = {
   // too so apt gets text/plain instead of octet-stream.
   '.deb': 'application/vnd.debian.binary-package',
   '.gz': 'application/gzip',
+  '.asc': 'text/plain',
   'release.gpg': 'application/pgp-signature',
   inrelease: 'text/plain',
   release: 'text/plain',

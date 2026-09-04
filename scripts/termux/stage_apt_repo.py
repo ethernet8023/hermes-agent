@@ -341,6 +341,16 @@ def sign(dists: Path, release_path: Path, gpg_key_file: Path) -> None:
         str(release_path),
     )
 
+    # Publish the signing key's public half at the repo root. The published
+    # key is exported from the exact key that signed THIS suite, so the two
+    # can never drift -- a key rotation re-publishes itself on the next
+    # run. Users fetch it from a stable URL (docs point here).
+    root = dists.parent.parent
+    pub = gpg("--armor", "--export", key_id)
+    if not pub.strip():
+        raise StageError("gpg exported an empty public key")
+    (root / "key.asc").write_bytes(pub)
+
 
 def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stage a static APT repo layout.")

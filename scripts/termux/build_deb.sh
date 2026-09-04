@@ -264,9 +264,9 @@ export PATH="$PREFIX/bin:$PATH"
 # real payload extraction, real postinst, real trampolines.
 dpkg-deb -I /tmp/pkg.deb | grep -q "Package: hermes-agent"
 dpkg-deb -x /tmp/pkg.deb "$PREFIX"
-dpkg-deb -e /tmp/pkg.deb /tmp/ctrl
+dpkg-deb -e /tmp/pkg.deb "$PREFIX/tmp/ctrl"
 test -x "$PREFIX/lib/hermes-agent/bin/hermes"
-sh /tmp/ctrl/postinst
+sh "$PREFIX/tmp/ctrl/postinst"
 test -L "$PREFIX/bin/hermes"
 echo "--- hermes --version ---"
 "$PREFIX/bin/hermes" --version
@@ -282,7 +282,7 @@ echo "$UPD_OUT" | grep -q "pkg upgrade hermes-agent" ||
 echo "VALIDATION OK"
 CHECK
 docker run --rm --platform linux/arm64 \
-    --privileged \
+    --user root --privileged \
     -v "$DEB:/tmp/pkg.deb:ro" \
     -v "$VD/check.sh:/tmp/check.sh:ro" \
     "$IMAGE" sh /tmp/check.sh \

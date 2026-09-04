@@ -187,7 +187,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -211,7 +211,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -235,7 +235,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.

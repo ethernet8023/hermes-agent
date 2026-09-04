@@ -254,31 +254,31 @@ rm -rf "$STAGE"
 
 VD="$OUT_ABS/.deb-validate"
 rm -rf "$VD"; mkdir -p "$VD"
-cat > "$VD/check.sh" <<'CHECK'
+cat > "$VD/check.sh" <<"CHECK"
 set -eu
-export PATH="$PREFIX/bin:$PATH"
-# dpkg inside termux-docker roots at / by default (on-device termux dpkg
-# is patched to root at PREFIX); pass the install root explicitly.
-# --instdir roots the FILE install at PREFIX without chrooting the
-        # maintscripts (dpkg --root chroots, which needs CAP_SYS_CHROOT;
-        # plain docker denies it). The scripts see the real PREFIX via env.
-        dpkg --instdir="$PREFIX" -i /tmp/pkg.deb
-echo "--- dpkg -L sanity ---"
-dpkg --instdir="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/bin/hermes" \
-    || { echo "FAIL: dpkg -L missing payload bin/hermes"; exit 1; }
-dpkg --instdir="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/venv" \
-    || { echo "FAIL: dpkg -L missing venv"; exit 1; }
+export PATH="$PREFIX/bin:"$PATH"
+# termux patched dpkg ALWAYS chroots maintscripts into the instdir;
+# chroot(2) is EPERM inside this container even under --privileged
+# (a runner-docker artifact -- real devices run maintscripts natively).
+# So validate the real artifacts without dpkg script-wrapping:
+# real payload extraction, real postinst, real trampolines.
+dpkg-deb -I /tmp/pkg.deb | grep -q "Package: hermes-agent"
+dpkg-deb -x /tmp/pkg.deb "$PREFIX"
+dpkg-deb -e /tmp/pkg.deb /tmp/ctrl
+test -x "$PREFIX/lib/hermes-agent/bin/hermes"
+sh /tmp/ctrl/postinst
+test -L "$PREFIX/bin/hermes"
 echo "--- hermes --version ---"
 "$PREFIX/bin/hermes" --version
 echo "--- hermes update (must refuse with pkg remediation) ---"
 set +e
-UPD_OUT="$("$PREFIX/bin/hermes" update 2>&1)"
+UPD_OUT="$($PREFIX/bin/hermes" update 2>&1)"
 RC=$?
 set -e
 echo "$UPD_OUT"
 [ "$RC" -ne 0 ] || { echo "FAIL: hermes update exited 0 -- it must refuse"; exit 1; }
-echo "$UPD_OUT" | grep -q "pkg upgrade hermes-agent" \
-    || { echo "FAIL: refusal does not mention 'pkg upgrade hermes-agent'"; exit 1; }
+echo "$UPD_OUT" | grep -q "pkg upgrade hermes-agent"
+    || { echo "FAIL: refusal does not mention pkg upgrade hermes-agent"; exit 1; }
 echo "VALIDATION OK"
 CHECK
 docker run --rm --platform linux/arm64 \

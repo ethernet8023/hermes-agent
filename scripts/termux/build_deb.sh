@@ -259,11 +259,14 @@ set -eu
 export PATH="$PREFIX/bin:$PATH"
 # dpkg inside termux-docker roots at / by default (on-device termux dpkg
 # is patched to root at PREFIX); pass the install root explicitly.
-dpkg --root="$PREFIX" -i /tmp/pkg.deb
+# --instdir roots the FILE install at PREFIX without chrooting the
+        # maintscripts (dpkg --root chroots, which needs CAP_SYS_CHROOT;
+        # plain docker denies it). The scripts see the real PREFIX via env.
+        dpkg --instdir="$PREFIX" -i /tmp/pkg.deb
 echo "--- dpkg -L sanity ---"
-dpkg --root="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/bin/hermes" \
+dpkg --instdir="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/bin/hermes" \
     || { echo "FAIL: dpkg -L missing payload bin/hermes"; exit 1; }
-dpkg --root="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/venv" \
+dpkg --instdir="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/venv" \
     || { echo "FAIL: dpkg -L missing venv"; exit 1; }
 echo "--- hermes --version ---"
 "$PREFIX/bin/hermes" --version

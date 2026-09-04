@@ -718,6 +718,8 @@ jobs:
         shell: bash
         env:
           CHANNEL: ${{ steps.channel.outputs.channel }}
+          # Passphrase-protected signing keys only; unset for bare keys.
+          TERMUX_APT_GPG_PASSPHRASE: ${{ secrets.TERMUX_APT_GPG_PASSPHRASE }}
         run: |
           # stage_apt_repo.py builds dists/<suite>/ + pool/ under --out and
           # signs Release/InRelease with the key file. Exit 3 (unsigned

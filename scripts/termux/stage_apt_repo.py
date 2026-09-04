@@ -22,6 +22,7 @@ import gzip
 import hashlib
 import io
 import lzma
+import os
 import shutil
 import subprocess
 import sys
@@ -301,9 +302,16 @@ def stage(pool_dir: Path, out_dir: Path, suite: str, gpg_key_file: Path | None) 
 
 
 def sign(dists: Path, release_path: Path, gpg_key_file: Path) -> None:
+    # Real signing keys are usually passphrase-protected; TERMUX_APT_GPG_PASSPHRASE
+    # (set only when the key needs one) rides in via argv -- never the key material.
+    passphrase = os.environ.get("TERMUX_APT_GPG_PASSPHRASE", "")
+    base = ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback"]
+    if passphrase:
+        base += ["--passphrase", passphrase]
+
     def gpg(*args: str, stdin: bytes | None = None) -> bytes:
         result = subprocess.run(
-            ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback", *args],
+            [*base, *args],
             input=stdin, capture_output=True,
         )
         if result.returncode != 0:

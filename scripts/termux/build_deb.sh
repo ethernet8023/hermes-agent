@@ -140,21 +140,14 @@ docker run --rm --platform linux/arm64 \
         mkdir -p "$PREFIX" 2>/dev/null || true
         PY="/payload/python$PREFIX/bin/python3.11"
         UV="/payload/uv$PREFIX/bin/uv"
-        # The staged python bundled ensurepip fails in this environment;
-        # the STAGED uv creates the venv and installs (the exact pattern
-        # the wheelhouse container proved end-to-end).
+                # Desktop payload canon: the venv holds the DEPENDENCY tree only;
+        # the app runs from its own directory via PYTHONPATH (the wheel
+        # build is deliberately blocked in setup.py -- Hermes is not a
+        # pip-installable package by design).
         "$UV" venv --python "$PY" --seed /payload/venv
-        # /payload/app is READ-ONLY in the mount: dir installs build
-        # egg-info in place. Copy to writable /tmp first.
-        # / is read-only in the termux image: use PREFIX/tmp (the same
-        # writable area the wheelhouse gates use) for the app copy.
-        mkdir -p "$PREFIX/tmp"
-        cp -a /payload/app "$PREFIX/tmp/app"
-        "$UV" pip install --python /payload/venv/bin/python \
-            --no-index --find-links /payload/wheelhouse --no-deps "$PREFIX/tmp/app"
-        # The app graph minus documented misses, markers intact (the
-        # nemo-relay core dep cannot build on android; the deb ships
-        # without the relay exporter).
+        # The dep graph with markers intact (the installer evaluates
+        # them on bionic); documented android build misses skipped --
+        # nemo-relay is the only casualty (the relay exporter).
         "$UV" pip install --python /payload/venv/bin/python \
             --no-index --find-links /payload/wheelhouse \
             -r /payload/.work/resolved-reqs.txt
@@ -169,18 +162,27 @@ cat > "$PAYLOAD_ABS/bin/hermes" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes trampoline -- resolve own dir, exec the bundled venv's entrypoint.
 self_dir="$(cd "$(dirname "$0")" && pwd)"
+# Desktop canon: deps live in the venv, the app runs from its own
+# directory -- put it on PYTHONPATH for the interpreter.
+PYTHONPATH="$self_dir/../app" \
 exec "$self_dir/../venv/bin/python" -m hermes_cli.main "$@"
 EOF
 cat > "$PAYLOAD_ABS/bin/hermes-agent" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes-agent trampoline -- runs the agent entrypoint.
 self_dir="$(cd "$(dirname "$0")" && pwd)"
+# Desktop canon: deps live in the venv, the app runs from its own
+# directory -- put it on PYTHONPATH for the interpreter.
+PYTHONPATH="$self_dir/../app" \
 exec "$self_dir/../venv/bin/python" -m hermes_cli.run_agent "$@"
 EOF
 cat > "$PAYLOAD_ABS/bin/hermes-acp" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes-acp trampoline -- ACP adapter entrypoint.
 self_dir="$(cd "$(dirname "$0")" && pwd)"
+# Desktop canon: deps live in the venv, the app runs from its own
+# directory -- put it on PYTHONPATH for the interpreter.
+PYTHONPATH="$self_dir/../app" \
 exec "$self_dir/../venv/bin/python" -m hermes_cli.acp "$@"
 EOF
 chmod 755 "$PAYLOAD_ABS/bin/hermes" "$PAYLOAD_ABS/bin/hermes-agent" "$PAYLOAD_ABS/bin/hermes-acp"

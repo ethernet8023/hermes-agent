@@ -256,7 +256,7 @@ VD="$OUT_ABS/.deb-validate"
 rm -rf "$VD"; mkdir -p "$VD"
 cat > "$VD/check.sh" <<"CHECK"
 set -eu
-export PATH="$PREFIX/bin:"$PATH"
+export PATH="$PREFIX/bin:$PATH"
 # termux patched dpkg ALWAYS chroots maintscripts into the instdir;
 # chroot(2) is EPERM inside this container even under --privileged
 # (a runner-docker artifact -- real devices run maintscripts natively).
@@ -272,13 +272,13 @@ echo "--- hermes --version ---"
 "$PREFIX/bin/hermes" --version
 echo "--- hermes update (must refuse with pkg remediation) ---"
 set +e
-UPD_OUT="$($PREFIX/bin/hermes" update 2>&1)"
+UPD_OUT="$("$PREFIX/bin/hermes" update 2>&1)"
 RC=$?
 set -e
 echo "$UPD_OUT"
 [ "$RC" -ne 0 ] || { echo "FAIL: hermes update exited 0 -- it must refuse"; exit 1; }
-echo "$UPD_OUT" | grep -q "pkg upgrade hermes-agent"
-    || { echo "FAIL: refusal does not mention pkg upgrade hermes-agent"; exit 1; }
+echo "$UPD_OUT" | grep -q "pkg upgrade hermes-agent" ||
+    { echo "FAIL: refusal does not mention pkg upgrade hermes-agent"; exit 1; }
 echo "VALIDATION OK"
 CHECK
 docker run --rm --platform linux/arm64 \

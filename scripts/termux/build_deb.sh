@@ -89,7 +89,7 @@ log "Package version: $DEB_VERSION"
 # [2] Assemble the venv offline, INSIDE the pinned container: the staged
 # interpreter is bionic/arm64 and cannot run on this host. Completeness is
 # enforced by construction: --no-index means a missing wheel fails loudly.
-# The container sees the payload at /payload; the venv is built beside the
+# The container sees the payload at its real PREFIX path; the venv is built
 # staged trees so the shipped venv's absolute shebangs point at the REAL
 # $PREFIX path they will occupy on-device ($PREFIX is contractual).
 log "Creating venv with the bundled CPython (inside the container)"
@@ -126,7 +126,10 @@ mkdir -p "$PAYLOAD_ABS/venv"
 chmod 0777 "$PAYLOAD_ABS/venv"
 docker run --rm --platform linux/arm64 \
     --user root \
-    -v "$PAYLOAD_ABS:/payload" \
+    # Mount at the REAL $PREFIX path: the venv records absolute paths
+    # (interpreter symlink, pyvenv.cfg) that must be correct on-device
+    # from birth -- a /payload alias would bake container paths in.
+    -v "$PAYLOAD_ABS:$PREFIX" \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr
@@ -134,24 +137,24 @@ docker run --rm --platform linux/arm64 \
         # The staged binary is dynamically linked against its OWN tree lib;
         # the container linker needs to be told where it lives (same fix as
         # the wheelhouse container half).
-        export LD_LIBRARY_PATH="/payload/python$PREFIX/lib:/payload/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export LD_LIBRARY_PATH="$PREFIX/python$PREFIX/lib:$PREFIX/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
-        PY="/payload/python$PREFIX/bin/python3.11"
-        UV="/payload/uv$PREFIX/bin/uv"
+        PY="$PREFIX/python$PREFIX/bin/python3.11"
+        UV="$PREFIX/uv$PREFIX/bin/uv"
                 # Desktop payload canon: the venv holds the DEPENDENCY tree only;
         # the app runs from its own directory via PYTHONPATH (the wheel
         # build is deliberately blocked in setup.py -- Hermes is not a
         # pip-installable package by design).
-        "$UV" venv --python "$PY" --seed /payload/venv
+        "$UV" venv --python "$PY" --seed "$PREFIX/venv"
         # The dep graph with markers intact (the installer evaluates
         # them on bionic); documented android build misses skipped --
         # nemo-relay is the only casualty (the relay exporter).
-        "$UV" pip install --python /payload/venv/bin/python \
-            --no-index --find-links /payload/wheelhouse \
-            -r /payload/.work/resolved-reqs.txt
-        "$UV" pip check --python /payload/venv/bin/python
+        "$UV" pip install --python "$PREFIX/venv/bin/python" \
+            --no-index --find-links "$PREFIX/wheelhouse" \
+            -r "$PREFIX/.work/resolved-reqs.txt"
+        "$UV" pip check --python "$PREFIX/venv/bin/python"
     ' || fail "venv assembly failed inside the container (offline wheelhouse install)"
 
 # [3] Trampolines: POSIX sh, resolve their own dir, dispatch on the bundled

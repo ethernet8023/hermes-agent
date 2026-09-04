@@ -174,6 +174,8 @@ cat > "$PAYLOAD_ABS/bin/hermes" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes trampoline -- resolve own dir, exec the bundled venv's entrypoint.
 # invoked via the $PREFIX/bin symlink: resolve to the real file so
+# Termux always exports PREFIX; hard fallback for exotic shells.
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 self="${0}"
 while [ -L "$self" ]; do
     tgt="$(readlink "$self")"
@@ -183,6 +185,10 @@ while [ -L "$self" ]; do
     esac
 done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
+# The bundled interpreter links its OWN libpython: put the payload
+# lib dirs on the linker path (the image does not rpath them).
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib" \
+export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \
@@ -192,6 +198,8 @@ cat > "$PAYLOAD_ABS/bin/hermes-agent" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes-agent trampoline -- runs the agent entrypoint.
 # invoked via the $PREFIX/bin symlink: resolve to the real file so
+# Termux always exports PREFIX; hard fallback for exotic shells.
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 self="${0}"
 while [ -L "$self" ]; do
     tgt="$(readlink "$self")"
@@ -201,6 +209,10 @@ while [ -L "$self" ]; do
     esac
 done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
+# The bundled interpreter links its OWN libpython: put the payload
+# lib dirs on the linker path (the image does not rpath them).
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib" \
+export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \
@@ -210,6 +222,8 @@ cat > "$PAYLOAD_ABS/bin/hermes-acp" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes-acp trampoline -- ACP adapter entrypoint.
 # invoked via the $PREFIX/bin symlink: resolve to the real file so
+# Termux always exports PREFIX; hard fallback for exotic shells.
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 self="${0}"
 while [ -L "$self" ]; do
     tgt="$(readlink "$self")"
@@ -219,6 +233,10 @@ while [ -L "$self" ]; do
     esac
 done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
+# The bundled interpreter links its OWN libpython: put the payload
+# lib dirs on the linker path (the image does not rpath them).
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib" \
+export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \

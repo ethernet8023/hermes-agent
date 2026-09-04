@@ -15,7 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 import stage_apt_repo  # noqa: E402
 
 
-def make_deb(path: Path, package: str, version: str, arch: str = "arm64") -> None:
+def make_deb(path: Path, package: str, version: str, arch: str = "arm64", compression: str = "gz") -> None:
     """Build a minimal .deb (ar archive with control.tar.gz) using stdlib only."""
     control = (
         f"Package: {package}\n"
@@ -25,7 +25,9 @@ def make_deb(path: Path, package: str, version: str, arch: str = "arm64") -> Non
         f"Description: test package {package}\n"
     )
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+    mode = f"w:{compression}"
+    member = f"control.tar.{compression}" if compression != "tar" else "control.tar"
+    with tarfile.open(fileobj=buf, mode=mode) as tf:
         data = control.encode("utf-8")
         ti = tarfile.TarInfo("control")
         ti.size = len(data)
@@ -35,7 +37,7 @@ def make_deb(path: Path, package: str, version: str, arch: str = "arm64") -> Non
     ar.write(b"!<arch>\n")
     payload = buf.getvalue()
     header = "{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}".format(
-        "control.tar.gz", "0", "0", "0", "100644", str(len(payload))
+        member, "0", "0", "0", "100644", str(len(payload))
     ).encode() + b"`\n"
     ar.write(header)
     ar.write(payload)
@@ -58,6 +60,18 @@ def fake_gpg(monkeypatch, tmp_path):
     key = tmp_path / "signing.asc"
     key.write_text("stub-key\n")
     return key
+
+
+def test_stages_xz_control_deb(tmp_path):
+    """dpkg >= 1.21 emits xz/zst control members; our build uses -Zxz so the
+    stager must read xz controls (gz is covered by every other test)."""
+    pool = tmp_path / "pool"
+    pool.mkdir()
+    make_deb(pool / "hermes-agent_1.0-1_aarch64.deb", "hermes-agent", "1.0-1", compression="xz")
+    out = tmp_path / "out"
+    out.mkdir()
+    rc = stage_apt_repo.stage(pool, out, "hermes-nightly", None)
+    assert rc == 3  # unsigned (no gpg key file) but staged
 
 
 def test_control_field_extraction(tmp_path):

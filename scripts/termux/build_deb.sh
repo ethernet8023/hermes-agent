@@ -124,12 +124,17 @@ PYREQS
 # into a dir the HOST pre-created with open perms (same as the wheelhouse).
 mkdir -p "$PAYLOAD_ABS/venv"
 chmod 0777 "$PAYLOAD_ABS/venv"
+# Mount the payload at its REAL on-device path: the venv records
+# absolute paths (interpreter symlink, pyvenv.cfg) that must be correct
+# on-device from birth -- a /payload alias would bake container paths in.
 docker run --rm --platform linux/arm64 \
     --user root \
-    # Mount at the REAL $PREFIX path: the venv records absolute paths
-    # (interpreter symlink, pyvenv.cfg) that must be correct on-device
-    # from birth -- a /payload alias would bake container paths in.
-    -v "$PAYLOAD_ABS:$PREFIX" \
+    -v "$PAYLOAD_ABS/python:/data/data/com.termux/files/usr/python" \
+    -v "$PAYLOAD_ABS/node:/data/data/com.termux/files/usr/node" \
+    -v "$PAYLOAD_ABS/uv:/data/data/com.termux/files/usr/uv" \
+    -v "$PAYLOAD_ABS/wheelhouse:/data/data/com.termux/files/usr/wheelhouse" \
+    -v "$PAYLOAD_ABS/.work:/data/data/com.termux/files/usr/.work" \
+    -v "$PAYLOAD_ABS/venv:/data/data/com.termux/files/usr/venv" \
     "$IMAGE" bash -c '
         set -euo pipefail
         export PREFIX=/data/data/com.termux/files/usr

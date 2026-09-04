@@ -257,11 +257,13 @@ rm -rf "$VD"; mkdir -p "$VD"
 cat > "$VD/check.sh" <<'CHECK'
 set -eu
 export PATH="$PREFIX/bin:$PATH"
-dpkg -i /tmp/pkg.deb
+# dpkg inside termux-docker roots at / by default (on-device termux dpkg
+# is patched to root at PREFIX); pass the install root explicitly.
+dpkg --root="$PREFIX" -i /tmp/pkg.deb
 echo "--- dpkg -L sanity ---"
-dpkg -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/bin/hermes" \
+dpkg --root="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/bin/hermes" \
     || { echo "FAIL: dpkg -L missing payload bin/hermes"; exit 1; }
-dpkg -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/venv" \
+dpkg --root="$PREFIX" -L hermes-agent | grep -q "$PREFIX/lib/hermes-agent/venv" \
     || { echo "FAIL: dpkg -L missing venv"; exit 1; }
 echo "--- hermes --version ---"
 "$PREFIX/bin/hermes" --version

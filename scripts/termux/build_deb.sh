@@ -142,7 +142,7 @@ docker run --rm --platform linux/arm64 \
         # The staged binary is dynamically linked against its OWN tree lib;
         # the container linker needs to be told where it lives (same fix as
         # the wheelhouse container half).
-        export LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib:$PREFIX/lib/hermes-agent/libsqlite$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
@@ -187,7 +187,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../libsqlite$PREFIX/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -211,7 +211,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../libsqlite$PREFIX/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -235,7 +235,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../libsqlite$PREFIX/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -264,7 +264,7 @@ log "Staging the package tree"
 STAGE="$OUT_ABS/.stage-$DEB_VERSION"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN" "$STAGE/lib/hermes-agent"
-cp -a "$PAYLOAD_ABS/python" "$PAYLOAD_ABS/node" "$PAYLOAD_ABS/app" "$PAYLOAD_ABS/venv" "$PAYLOAD_ABS/bin" "$STAGE/lib/hermes-agent/"
+cp -a "$PAYLOAD_ABS/python" "$PAYLOAD_ABS/node" "$PAYLOAD_ABS/libsqlite" "$PAYLOAD_ABS/app" "$PAYLOAD_ABS/venv" "$PAYLOAD_ABS/bin" "$STAGE/lib/hermes-agent/"
 
 # postinst/prerm: manage the ONE leak, $PREFIX/bin/hermes, idempotently.
 cat > "$STAGE/DEBIAN/postinst" <<'EOF'

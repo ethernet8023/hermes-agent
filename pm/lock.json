@@ -167,6 +167,15 @@
       },
       "version": "2.53.0+3"
     },
+    "libsqlite": {
+      "artifacts": {
+        "linux-arm64-bionic": {
+          "sha256": "0e909ce0d50fe123305446cd22e0c5edf535d40344b9b065fbdcdee52f53198d",
+          "url": "https://packages.termux.dev/apt/termux-main/pool/main/libs/libsqlite/libsqlite_3.53.4_aarch64.deb"
+        }
+      },
+      "version": "3.53.4"
+    },
     "llamacpp-cpu": {
       "artifacts": {
         "darwin-arm64": {

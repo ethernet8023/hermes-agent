@@ -27,7 +27,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-ARCH = "arm64"
+ARCH = "aarch64"
 COMPONENT = "main"
 
 REQUIRED_CONTROL_FIELDS = ["Package", "Version", "Architecture"]

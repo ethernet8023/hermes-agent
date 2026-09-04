@@ -15,7 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 import stage_apt_repo  # noqa: E402
 
 
-def make_deb(path: Path, package: str, version: str, arch: str = "arm64") -> None:
+def make_deb(path: Path, package: str, version: str, arch: str = "aarch64") -> None:
     """Build a minimal .deb (ar archive with control.tar.gz) using stdlib only."""
     control = (
         f"Package: {package}\n"
@@ -66,7 +66,7 @@ def test_control_field_extraction(tmp_path):
     fields = stage_apt_repo.deb_control_fields(deb)
     assert fields["Package"] == "hermes-agent"
     assert fields["Version"] == "1.2.3-1"
-    assert fields["Architecture"] == "arm64"
+    assert fields["Architecture"] == "aarch64"
 
 
 def test_nightly_versions_below_stable():
@@ -83,7 +83,7 @@ def test_nightly_versions_below_stable():
 def test_dists_layout_and_pool_copy(tmp_path, fake_gpg):
     pool = tmp_path / "pool-in"
     pool.mkdir()
-    make_deb(pool / "hermes-agent_1.2.3-1_arm64.deb", "hermes-agent", "1.2.3-1")
+    make_deb(pool / "hermes-agent_1.2.3-1_aarch64.deb", "hermes-agent", "1.2.3-1")
     out = tmp_path / "repo"
     r = stage_apt_repo.main(
         [
@@ -93,18 +93,18 @@ def test_dists_layout_and_pool_copy(tmp_path, fake_gpg):
     )
     assert r == 0
 
-    dists = out / "dists" / "hermes-stable" / "main" / "binary-arm64"
+    dists = out / "dists" / "hermes-stable" / "main" / "binary-aarch64"
     assert (dists / "Packages").exists()
     assert (dists / "Packages.gz").exists()
     assert (out / "dists" / "hermes-stable" / "Release").exists()
 
-    deb_out = out / "pool" / "h" / "hermes-agent_1.2.3-1_arm64.deb"
+    deb_out = out / "pool" / "h" / "hermes-agent_1.2.3-1_aarch64.deb"
     assert deb_out.exists()
 
     text = (dists / "Packages").read_text(encoding="utf-8")
     assert "Package: hermes-agent" in text
     assert "Version: 1.2.3-1" in text
-    assert "Filename: pool/h/hermes-agent_1.2.3-1_arm64.deb" in text
+    assert "Filename: pool/h/hermes-agent_1.2.3-1_aarch64.deb" in text
     assert "SHA256: " in text
 
     gz_text = gzip.decompress((dists / "Packages.gz").read_bytes()).decode()
@@ -119,7 +119,7 @@ def test_dists_layout_and_pool_copy(tmp_path, fake_gpg):
 def test_immutability_refusal(tmp_path, fake_gpg, capsys):
     pool = tmp_path / "pool-in"
     pool.mkdir()
-    make_deb(pool / "hermes-agent_1.2.3-1_arm64.deb", "hermes-agent", "1.2.3-1")
+    make_deb(pool / "hermes-agent_1.2.3-1_aarch64.deb", "hermes-agent", "1.2.3-1")
     out = tmp_path / "repo"
     assert stage_apt_repo.main(
         [
@@ -141,7 +141,7 @@ def test_immutability_refusal(tmp_path, fake_gpg, capsys):
 def test_unsigned_release_exit_3_without_gpg(tmp_path, no_gpg):
     pool = tmp_path / "pool-in"
     pool.mkdir()
-    make_deb(pool / "hermes-agent_1.2.3-1_arm64.deb", "hermes-agent", "1.2.3-1")
+    make_deb(pool / "hermes-agent_1.2.3-1_aarch64.deb", "hermes-agent", "1.2.3-1")
     out = tmp_path / "repo"
     code = stage_apt_repo.main(
         ["--pool", str(pool), "--out", str(out), "--suite", "hermes-nightly"]
@@ -166,7 +166,7 @@ def test_signing_invoked_when_gpg_and_key_present(tmp_path, monkeypatch):
 
     pool = tmp_path / "pool-in"
     pool.mkdir()
-    make_deb(pool / "hermes-agent_1.2.3-1_arm64.deb", "hermes-agent", "1.2.3-1")
+    make_deb(pool / "hermes-agent_1.2.3-1_aarch64.deb", "hermes-agent", "1.2.3-1")
     out = tmp_path / "repo"
     keyfile = tmp_path / "signing.asc"
     keyfile.write_text("-----BEGIN PGP PRIVATE KEY BLOCK-----\n")

@@ -9,7 +9,7 @@
 #   --tag <tag>           immutable release tag (vX.Y.Z or vX.Y.Z-nightly.<ts>)
 #   --payload <dir>       dir containing python/, node/, app/ (git archive of
 #                         the tag) and wheelhouse/ (from termux_build.sh)
-#   --out <dir>           output dir; <out>/hermes-agent_<v>_arm64.deb lands here
+#   --out <dir>           output dir; <out>/hermes-agent_<v>_aarch64.deb lands here
 #
 # No opt-out flags: the .deb is ALWAYS installed into a fresh run of the
 # pinned termux-docker image (digest pinned in pm/lock.json) and smoke-tested.
@@ -236,7 +236,7 @@ chmod 755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/prerm"
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: $PKG
 Version: $DEB_VERSION
-Architecture: arm64
+Architecture: aarch64
 Maintainer: Nous Research
 Description: Hermes Agent CLI for Termux (self-contained bundled python/node/venv)
 Installed-Size: $(du -sk "$STAGE/lib" | cut -f1)
@@ -246,7 +246,7 @@ EOF
 # [7] Validation hook: install into a FRESH container of the pinned image and
 # smoke-test the exact binaries the phone will run. No opt-out.
 log "Validating in a fresh pinned termux-docker container"
-DEB="$OUT_ABS/${PKG}_${DEB_VERSION}_arm64.deb"
+DEB="$OUT_ABS/${PKG}_${DEB_VERSION}_aarch64.deb"
 rm -f "$DEB"
 dpkg-deb --build --root-owner-group "$STAGE" "$DEB" || fail "dpkg-deb --build failed"
 rm -rf "$STAGE"

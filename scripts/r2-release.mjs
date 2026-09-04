@@ -8,7 +8,7 @@
 //   node scripts/r2-release.mjs put --tag vX.Y.Z --key <filename> --file <path>
 //   node scripts/r2-release.mjs finalize --tag vX.Y.Z --dir <staging-dir>
 //   node scripts/r2-release.mjs list [--prefix <p>]
-//   node scripts/r2-release.mjs prune-nightlies --keep-days 14 [--dry-run]
+//   node scripts/r2-release.mjs prune-canaries --keep-days 14 [--dry-run]
 //
 // Env (all required except where noted):
 //   CLOUDFLARE_R2_ACCOUNT_ID       → S3 endpoint https://<account>.r2.cloudflarestorage.com
@@ -20,11 +20,13 @@
 //   releases/tag/<tag>/<filename>          immutable per-release staging/archive
 //   releases/win32/<channel>/<channel>.appinstaller   App Installer feed
 //     releases/win32/<channel>/*.msixbundle           (produced by the
-//                                                     msixbundle job)
+//                                                     publish-win32-updater job)
 //   releases/darwin/<channel>/<channel>-mac.yml   electron-updater feed
 //     releases/darwin/<channel>/*.{dmg,zip,blockmap}
-// where <channel> is stable | nightly (from the tag: -nightly. → nightly).
-// The finalize job merges the matrix legs' staging into these feeds.
+// where <channel> is stable | canary (from the tag: -canary. → canary).
+// The publish-win32-updater job merges the win32 legs' staging into the
+// win32 feed; the darwin feed merge (r2 finalize) is currently DISABLED
+// (no macOS updater arm).
 
 import { createHash, createHmac } from 'node:crypto'
 import fs from 'node:fs'
@@ -68,8 +70,15 @@ export function canonicalQuery(params) {
  */
 export function canonicalRequest(method, path, query, headers, payloadHash) {
   const names = Object.keys(headers).map((n) => n.toLowerCase()).sort()
+  // Header values are read case-insensitively: keys may be mixed-case
+  // ('Content-Type'), but SigV4 canonicalizes the NAME to lowercase, so
+  // `headers[lowerName]` would miss the value. Find the original-key match.
+  const valueFor = (name) => {
+    const key = Object.keys(headers).find((k) => k.toLowerCase() === name)
+    return key == null ? undefined : headers[key]
+  }
   const canonicalHeaders = names
-    .map((n) => `${n}:${String(headers[n]).trim().replace(/\s+/g, ' ')}`)
+    .map((n) => `${n}:${String(valueFor(n)).trim().replace(/\s+/g, ' ')}`)
     .join('\n')
   return [
     method,
@@ -140,7 +149,7 @@ function requiredEnv(name) {
   return value
 }
 
-function r2Headers(method, host, path, query, bodyHash, now, creds, contentType) {
+function r2Headers(method, host, path, query, bodyHash, now, creds, contentType, contentLength) {
   const headers = {
     host,
     'x-amz-date': now,
@@ -150,6 +159,9 @@ function r2Headers(method, host, path, query, bodyHash, now, creds, contentType)
   // added BEFORE the Authorization header is computed, so it lands in the
   // SigV4 canonical headers + SignedHeaders exactly like host / x-amz-*.
   if (contentType) headers['Content-Type'] = contentType
+  // Stream bodies (files >2GiB) need an explicit Content-Length — R2
+  // rejects a bodyless-length PUT with 411 MissingContentLength.
+  if (contentLength != null) headers['Content-Length'] = String(contentLength)
   headers.authorization = authHeader({
     method,
     host,
@@ -164,14 +176,16 @@ function r2Headers(method, host, path, query, bodyHash, now, creds, contentType)
   return headers
 }
 
-async function signedFetch(method, url, { body, bodyHash, creds, now, contentType }) {
+async function signedFetch(method, url, { body, bodyHash, creds, now, contentType, contentLength }) {
   const { host, pathname, search } = new URL(url)
   const query = search.replace(/^\?/, '')
-  const headers = r2Headers(method, host, pathname, query, bodyHash, now, creds, contentType)
+  const headers = r2Headers(method, host, pathname, query, bodyHash, now, creds, contentType, contentLength)
   const res = await fetch(url, {
     method,
     headers,
     body: body ?? undefined,
+    // Stream bodies (files >2GiB) require the duplex option on Node's fetch.
+    ...(body != null && typeof body.pipe === 'function' ? { duplex: 'half' } : {}),
   })
   const text = await res.text()
   if (!res.ok) {
@@ -179,10 +193,6 @@ async function signedFetch(method, url, { body, bodyHash, creds, now, contentTyp
     if (text) console.error(text.slice(0, 2000))
   }
   return { res, text }
-}
-
-function sha256hex(buffer) {
-  return createHash('sha256').update(buffer).digest('hex')
 }
 
 async function retry(fn, tries = 3) {
@@ -202,9 +212,9 @@ async function retry(fn, tries = 3) {
 // Layout helpers (pure)
 // ---------------------------------------------------------------------------
 
-/** 'stable' for a stable tag, 'nightly' for a -nightly.<ts> tag. */
+/** 'stable' for a stable tag, 'canary' for a -canary.<ts> tag. */
 export function channelForTag(tag) {
-  return /-nightly\.20\d{6}(?:\d{6})?$/.test(tag) ? 'nightly' : 'stable'
+  return /-canary\.20\d{6}(?:\d{6})?$/.test(tag) ? 'canary' : 'stable'
 }
 
 // Content-Type for MSIX / App Installer artifacts lives in msix-shared.mjs
@@ -222,7 +232,7 @@ export function feedDirFor(platform, channel) {
 
 /**
  * Merge per-leg electron-updater feed ymls (same channel + platform) into one.
- * Each leg's yml (mac: latest-mac.yml / nightly-mac.yml) lists only its own
+ * Each leg's yml (mac: latest-mac.yml / canary-mac.yml) lists only its own
  * arch's files[]; the merged yml keeps the top-level fields of the first leg
  * (version/releaseDate) and the trailing top-level path/sha512, with the
  * files[] entries concatenated and deduped by url. Idempotent: merging an
@@ -326,11 +336,29 @@ export function rewriteFeedPaths(ymlText, absKey) {
 // Commands
 // ---------------------------------------------------------------------------
 
-async function putObject(creds, base, bucket, key, buffer, now, contentType) {
-  const bodyHash = sha256hex(buffer)
+async function putObject(creds, base, bucket, key, payload, now, contentType) {
+  // `payload` is either a small in-memory Buffer (feed manifests from
+  // finalize) or a FILE PATH (binaries via `put`). The msixbundle is
+  // ~2.7GB so path payloads stream from disk (fs.readFileSync throws
+  // ERR_FS_FILE_TOO_LARGE past 2GiB); buffers upload directly.
+  const isPath = typeof payload === 'string'
+  const size = isPath ? (await fs.promises.stat(payload)).size : payload.length
+  const bodyHash = isPath
+    ? await new Promise((resolve, reject) => {
+        const hash = createHash('sha256')
+        const stream = fs.createReadStream(payload)
+        stream.on('data', (c) => hash.update(c))
+        stream.on('end', () => resolve(hash.digest('hex')))
+        stream.on('error', reject)
+      })
+    : createHash('sha256').update(payload).digest('hex')
   const url = `${base}/${bucket}/${encodeKeyPath(key)}`
   await retry(async () => {
-    const { res, text } = await signedFetch('PUT', url, { body: buffer, bodyHash, creds, now, contentType })
+    // Path payloads get a fresh stream per attempt: a consumed
+    // ReadableStream cannot be replayed for the retry ("body object
+    // should not be disturbed").
+    const body = isPath ? fs.createReadStream(payload) : payload
+    const { res, text } = await signedFetch('PUT', url, { body, bodyHash, contentLength: size, creds, now, contentType })
     if (!res.ok) throw new Error(`PUT ${key} -> ${res.status}${text ? `: ${text.slice(0, 300)}` : ''}`)
   })
   const { res: headRes, text: headText } = await retry(async () => {
@@ -339,11 +367,11 @@ async function putObject(creds, base, bucket, key, buffer, now, contentType) {
     return r
   })
   const remoteSize = headRes.headers.get('content-length')
-  if (remoteSize === null || String(remoteSize) !== String(buffer.length)) {
-    console.error(`::error::R2 HEAD ${key}: size mismatch (remote ${remoteSize}, local ${buffer.length})`)
+  if (remoteSize === null || String(remoteSize) !== String(size)) {
+    console.error(`::error::R2 HEAD ${key}: size mismatch (remote ${remoteSize}, local ${size})`)
     process.exit(1)
   }
-  console.log(`✓ r2: ${key} (${buffer.length} bytes)`)
+  console.log(`✓ r2: ${key} (${size} bytes)`)
 }
 
 async function cmdPut({ tag, key, file, keyIsFull = false }) {
@@ -354,13 +382,9 @@ async function cmdPut({ tag, key, file, keyIsFull = false }) {
   const creds = { accessKeyId, secretKey }
   const base = s3Endpoint(accountId)
 
-  const buffer = fs.readFileSync(file)
   const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
-  // Feed-dir uploads (win32/<ch>/…, darwin/<ch>/…) pass the FULL object key
-  // (keyIsFull) so they land under releases/win32/…, NOT inside the immutable
-  // per-tag archive (releases/tag/<tag>/…).
   const keyPath = keyIsFull ? key : stagingKeyFor(tag, key)
-  await putObject(creds, base, bucket, keyPath, buffer, now, contentTypeFor(key))
+  await putObject(creds, base, bucket, keyPath, file, now, contentTypeFor(key))
 }
 
 /**
@@ -451,10 +475,10 @@ async function cmdList({ prefix }) {
   for (const key of await listObjects(prefix)) console.log(key)
 }
 
-/** Keys whose own nightly date (YYYYMMDD in the name) is before `cutoff`. */
-export function nightlyDoomedKeys(keys, cutoff) {
+/** Keys whose own canary date (YYYYMMDD in the name) is before `cutoff`. */
+export function canaryDoomedKeys(keys, cutoff) {
   return keys.filter((key) => {
-    const m = key.match(/-nightly\.(\d{8})/)
+    const m = key.match(/-canary\.(\d{8})/)
     return m && m[1] < cutoff
   })
 }
@@ -467,13 +491,13 @@ async function cmdPrune({ keepDays, dryRun }) {
   const creds = { accessKeyId, secretKey }
   const base = s3Endpoint(accountId)
 
-  // Cutoff dated by the nightly suffix in the KEY (like release.py's
-  // --prune-nightlies: a re-uploaded old tag never resets its clock).
+  // Cutoff dated by the canary suffix in the KEY (like release.py's
+  // --prune-canaries: a re-uploaded old tag never resets its clock).
   const cutoff = new Date(Date.now() - keepDays * 86400_000).toISOString().slice(0, 10).replace(/-/g, '')
   const keys = await listObjects()
-  const doomed = nightlyDoomedKeys(keys, cutoff)
+  const doomed = canaryDoomedKeys(keys, cutoff)
   if (doomed.length === 0) {
-    console.log(`✓ r2: no nightly objects older than ${keepDays} days`)
+    console.log(`✓ r2: no canary objects older than ${keepDays} days`)
     return
   }
   const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
@@ -498,7 +522,7 @@ function usage() {
   node scripts/r2-release.mjs put --tag vX.Y.Z --key <filename> --file <path> [--key-is-full]
   node scripts/r2-release.mjs finalize --tag vX.Y.Z --dir <staging-dir>
   node scripts/r2-release.mjs list [--prefix <p>]
-  node scripts/r2-release.mjs prune-nightlies --keep-days <n> [--dry-run]
+  node scripts/r2-release.mjs prune-canaries --keep-days <n> [--dry-run]
 
   --key-is-full: the --key is a FULL object key (e.g. releases/win32/stable/…),
                  not a filename to archive under releases/tag/<tag>/.`)
@@ -531,7 +555,7 @@ export async function main(argv = process.argv.slice(2)) {
     await cmdFinalize({ tag: args.tag, dir: args.dir })
   } else if (cmd === 'list') {
     await cmdList({ prefix: args.prefix ?? '' })
-  } else if (cmd === 'prune-nightlies') {
+  } else if (cmd === 'prune-canaries') {
     const keepDays = Number(args['keep-days'])
     if (!Number.isFinite(keepDays) || keepDays <= 0) usage()
     await cmdPrune({ keepDays, dryRun: Boolean(args.dryRun) })

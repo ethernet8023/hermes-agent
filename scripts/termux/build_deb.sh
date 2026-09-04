@@ -161,7 +161,16 @@ mkdir -p "$PAYLOAD_ABS/bin"
 cat > "$PAYLOAD_ABS/bin/hermes" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes trampoline -- resolve own dir, exec the bundled venv's entrypoint.
-self_dir="$(cd "$(dirname "$0")" && pwd)"
+# invoked via the $PREFIX/bin symlink: resolve to the real file so
+self="${0}"
+while [ -L "$self" ]; do
+    tgt="$(readlink "$self")"
+    case "$tgt" in
+        /*) self="$tgt" ;;
+        *) self="$(dirname "$self")/$tgt" ;;
+    esac
+done
+self_dir="$(cd "$(dirname "$self")" && pwd)"
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \
@@ -170,7 +179,16 @@ EOF
 cat > "$PAYLOAD_ABS/bin/hermes-agent" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes-agent trampoline -- runs the agent entrypoint.
-self_dir="$(cd "$(dirname "$0")" && pwd)"
+# invoked via the $PREFIX/bin symlink: resolve to the real file so
+self="${0}"
+while [ -L "$self" ]; do
+    tgt="$(readlink "$self")"
+    case "$tgt" in
+        /*) self="$tgt" ;;
+        *) self="$(dirname "$self")/$tgt" ;;
+    esac
+done
+self_dir="$(cd "$(dirname "$self")" && pwd)"
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \
@@ -179,7 +197,16 @@ EOF
 cat > "$PAYLOAD_ABS/bin/hermes-acp" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/sh
 # hermes-acp trampoline -- ACP adapter entrypoint.
-self_dir="$(cd "$(dirname "$0")" && pwd)"
+# invoked via the $PREFIX/bin symlink: resolve to the real file so
+self="${0}"
+while [ -L "$self" ]; do
+    tgt="$(readlink "$self")"
+    case "$tgt" in
+        /*) self="$tgt" ;;
+        *) self="$(dirname "$self")/$tgt" ;;
+    esac
+done
+self_dir="$(cd "$(dirname "$self")" && pwd)"
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \

@@ -53,7 +53,8 @@ describe('isUnderInstallRoot', () => {
   })
 
   it('does not match another vendor, an unreadable path, or an empty root', () => {
-    const other = 'C:\\Program Files\\WindowsApps\\8bitSolutionsLLC.bitwardendesktop_2026.7.0.0_arm64__x\\app\\Bitwarden.exe'
+    const other =
+      'C:\\Program Files\\WindowsApps\\8bitSolutionsLLC.bitwardendesktop_2026.7.0.0_arm64__x\\app\\Bitwarden.exe'
 
     expect(isUnderInstallRoot(other, ROOT)).toBe(false)
     expect(isUnderInstallRoot(null, ROOT)).toBe(false)
@@ -154,10 +155,13 @@ describe('reapPackageRootedProcesses', () => {
   })
 
   it('skips pids the graceful backend teardown already owns', () => {
-    const { outcome } = reap([
-      { pid: 30, path: MAIN_EXE },
-      { pid: 31, path: PAYLOAD_PYTHON }
-    ], { excludePids: [30] })
+    const { outcome } = reap(
+      [
+        { pid: 30, path: MAIN_EXE },
+        { pid: 31, path: PAYLOAD_PYTHON }
+      ],
+      { excludePids: [30] }
+    )
 
     expect(outcome.killed).toEqual([31])
   })
@@ -237,12 +241,7 @@ describe('listWindowsProcesses', () => {
   it('parses Get-Process output, mapping an unreadable path to null', () => {
     // The real shape: `.Path` throws for processes we cannot open, so the
     // script emits an empty tail for those.
-    const stdout = [
-      `48236|${GPG_AGENT}`,
-      `22660|${MAIN_EXE}`,
-      '4|',
-      ''
-    ].join('\r\n')
+    const stdout = [`48236|${GPG_AGENT}`, `22660|${MAIN_EXE}`, '4|', ''].join('\r\n')
 
     const parsed = listWindowsProcesses(() => stdout)
 
@@ -270,11 +269,7 @@ describe('listWindowsProcesses', () => {
   it('runs hidden and bounded so it cannot stall or flash a console on quit', () => {
     const calls: Array<{ file: string; options: { timeout: number; windowsHide: boolean } }> = []
 
-    const execFile = (
-      file: string,
-      _args: string[],
-      options: { timeout: number; windowsHide: boolean }
-    ): string => {
+    const execFile = (file: string, _args: string[], options: { timeout: number; windowsHide: boolean }): string => {
       calls.push({ file, options })
 
       return ''

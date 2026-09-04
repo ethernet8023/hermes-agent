@@ -104,8 +104,7 @@ export const zh: Translations = {
       back: '返回',
       openLogs: '打开日志',
       repairHint: '修复会重新运行安装器，在新机器上可能需要几分钟。',
-      bundledReinstallHint:
-        '捆绑安装无法从应用内部自修复——重新安装 Hermes Desktop 以恢复其后端。',
+      bundledReinstallHint: '捆绑安装无法从应用内部自修复——重新安装 Hermes Desktop 以恢复其后端。',
       reinstallApp: '重新安装 Hermes Desktop',
       remoteSignInHint: signInLabel =>
         `先退出已保存的远程浏览器会话，然后打开${signInLabel}。也可以使用本地网关切换到随应用提供的后端。`,
@@ -916,7 +915,7 @@ export const zh: Translations = {
       minAgo: count => `${count} 分钟前`,
       hoursAgo: count => `${count} 小时前`,
       daysAgo: count => `${count} 天前`,
-      availableBodyRelease: (tag: string) => `版本 ${tag} 已可安装。`,
+      availableBodyRelease: (tag: string) => `版本 ${tag} 已可安装。`
     },
     config: {
       none: '无',
@@ -2976,8 +2975,7 @@ export const zh: Translations = {
       notAvailable: '此后端无法更新。',
       failed: '后端更新失败。',
       noReturn: '后端未恢复在线。更新可能未完成——请检查后端主机。'
-    }
-    ,
+    },
     // Update-status overlay + version-details (mechanism-aware update UI).
     appName: 'Hermes',
     version: value => `版本 ${value}`,
@@ -3000,14 +2998,12 @@ export const zh: Translations = {
     daysAgo: count => `${count} 天前`,
     justNowSuffix: ' · 刚刚',
     bundleOutOfSync: '应用版本过旧',
-    bundleOutOfSyncDesc:
-      'Hermes 运行时已更新，但桌面应用仍是较旧的构建。请更新以获取最新修复。',
+    bundleOutOfSyncDesc: 'Hermes 运行时已更新，但桌面应用仍是较旧的构建。请更新以获取最新修复。',
     bundleOutOfSyncAction: '获取安装程序',
     checkingShort: '检查中…',
     releaseAvailable: tag => `版本 ${tag} 可用。`,
     versionDetailsTitle: '版本详情',
-    versionDetailsBody:
-      '此安装在应用外部管理。请使用与安装时相同的方式更新。',
+    versionDetailsBody: '此安装在应用外部管理。请使用与安装时相同的方式更新。',
     versionDetailsVersion: '版本',
     versionDetailsCommit: '提交',
     versionDetailsBuildOrigin: '构建来源',
@@ -3041,8 +3037,7 @@ export const zh: Translations = {
     connectExistingTitle: '连接到现有 Hermes',
     connectExistingShort: '连接现有环境',
     connectExistingDesc: '使用会话令牌或浏览器登录连接远程后端。不会启动本地安装。',
-    setupChoiceDescLocal:
-      '在这台电脑上安装 Hermes，或连接到已在运行的 Hermes 网关。',
+    setupChoiceDescLocal: '在这台电脑上安装 Hermes，或连接到已在运行的 Hermes 网关。',
 
     installLocalTitle: '本地安装 Hermes',
     installLocalDesc: '下载 Hermes，创建 Python 环境，并在这台电脑上运行后端。',
@@ -3050,8 +3045,7 @@ export const zh: Translations = {
     useLocalDesc: '此电脑已安装 Hermes 运行时——一键启动，无需下载。',
     bundledLocalDesc: '此应用自带 Hermes 运行时——捆绑后端即本地安装。',
     bundledDamagedTitle: '捆绑后端不可用',
-    bundledDamagedDesc:
-      '此应用捆绑的 Hermes 运行时未能加载。重新安装 Hermes Desktop 以恢复。',
+    bundledDamagedDesc: '此应用捆绑的 Hermes 运行时未能加载。重新安装 Hermes Desktop 以恢复。',
     reinstallApp: '重新安装 Hermes Desktop',
     localStartUnavailable: '无法启动本地安装。请重启 Hermes Desktop 后重试。',
     remoteSetupTitle: '连接到现有 Hermes',

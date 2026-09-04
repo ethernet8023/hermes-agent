@@ -41,9 +41,7 @@ describe('deriveSyncStatusSummary', () => {
 
     const summary = deriveSyncStatusSummary(receipt)
     expect(summary.level).toBe('warn')
-    expect(summary.disabledPlugins).toEqual([
-      { plugin: 'bad-plug', reason: 'conflicts with core pin' }
-    ])
+    expect(summary.disabledPlugins).toEqual([{ plugin: 'bad-plug', reason: 'conflicts with core pin' }])
     expect(summary.headline).toContain('disabled')
   })
 
@@ -64,9 +62,7 @@ describe('deriveSyncStatusSummary', () => {
     expect(summary.level).toBe('warn')
     expect(summary.headline).toContain('update-url')
     expect(summary.needsFixing).toHaveLength(1)
-    expect(summary.updatesAvailable).toEqual([
-      { name: 'other', current: '1.0', latest: '2.0' }
-    ])
+    expect(summary.updatesAvailable).toEqual([{ name: 'other', current: '1.0', latest: '2.0' }])
   })
 
   test('plain updates-available is info, not warn', () => {

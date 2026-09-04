@@ -17,12 +17,7 @@
 // tested — and every strategy reports it on the wire so the renderer can
 // tailor copy per mechanism without probing the install shape itself.
 
-export type UpdaterMechanism =
-  | 'app-installer'
-  | 'external'
-  | 'windows-handoff'
-  | 'posix-handoff'
-  | 'manual'
+export type UpdaterMechanism = 'app-installer' | 'external' | 'windows-handoff' | 'posix-handoff' | 'manual'
 
 /** The facts the mechanism dispatch keys on. Pure data — injectable for tests. */
 export interface MechanismFacts {

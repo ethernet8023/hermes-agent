@@ -72,7 +72,7 @@ function desktopConfig(): Record<string, unknown> {
   assert.ok(fs.existsSync(DESKTOP_CONFIG), `missing ${DESKTOP_CONFIG}`)
 
   // The config is a .cjs module (CommonJS); require it like the builder does.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+   
   return require(DESKTOP_CONFIG) as Record<string, unknown>
 }
 
@@ -98,6 +98,7 @@ function extendInfo(): Record<string, string> {
     if (!key.startsWith('NS') || !key.endsWith('UsageDescription')) {
       continue
     }
+
     assert.equal(
       typeof value,
       'string',
@@ -201,6 +202,7 @@ test('every extendInfo value is free of leading/trailing whitespace and newlines
     if (typeof value !== 'string') {
       continue
     }
+
     assert.equal(
       value,
       value.trim(),

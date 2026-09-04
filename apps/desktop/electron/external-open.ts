@@ -16,9 +16,7 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 
 export type ExternalOpenResult =
-  | { ok: true }
-  | { ok: false; reason: 'invalid' }
-  | { ok: false; reason: 'failed'; message: string }
+  { ok: true } | { ok: false; reason: 'invalid' } | { ok: false; reason: 'failed'; message: string }
 
 export interface ExternalOpenDeps {
   isWsl: boolean
@@ -41,10 +39,7 @@ export function externalOpenErrorMessage(error: unknown): string {
  * failure is logged + reported through notifyFailure and resolves `failed`,
  * so fire-and-forget callers can `void` the result safely.
  */
-export async function openExternalUrl(
-  rawUrl: string,
-  deps: ExternalOpenDeps
-): Promise<ExternalOpenResult> {
+export async function openExternalUrl(rawUrl: string, deps: ExternalOpenDeps): Promise<ExternalOpenResult> {
   const raw = String(rawUrl || '').trim()
 
   if (!raw) {

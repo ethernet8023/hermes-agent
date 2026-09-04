@@ -1,8 +1,4 @@
-export function composerPromptText(
-  prompt: string,
-  profileName?: null | string,
-  shellMode = false
-): string {
+export function composerPromptText(prompt: string, profileName?: null | string, shellMode = false): string {
   if (shellMode) {
     return '$'
   }

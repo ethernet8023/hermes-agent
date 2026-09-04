@@ -276,7 +276,9 @@ describe('BootFailureOverlay', () => {
       expect(screen.getByText(/reinstall the app to restore/i)).toBeTruthy()
 
       fireEvent.click(screen.getByRole('button', { name: /reinstall the app/i }))
-      await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://hermes-agent.nousresearch.com/docs/user-guide/desktop'))
+      await waitFor(() =>
+        expect(openExternal).toHaveBeenCalledWith('https://hermes-agent.nousresearch.com/docs/user-guide/desktop')
+      )
     } finally {
       restore()
     }

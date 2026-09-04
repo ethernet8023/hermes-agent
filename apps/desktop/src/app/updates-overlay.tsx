@@ -432,11 +432,7 @@ function ApplyingView({
   const label = u.stages[apply.stage as DesktopUpdateStage] ?? u.stages.idle
   const isAppInstaller = statusMechanism === 'app-installer'
 
-  const body = isAppInstaller
-    ? u.applyingBodyAppInstaller
-    : isBackend
-      ? u.applyingBodyBackend
-      : u.applyingBody
+  const body = isAppInstaller ? u.applyingBodyAppInstaller : isBackend ? u.applyingBodyBackend : u.applyingBody
 
   const currentMessage = apply.message.trim()
   const recentLog = apply.log.slice(-4)

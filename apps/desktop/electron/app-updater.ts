@@ -49,10 +49,7 @@ export const PLACEHOLDER_FEED_BASE_URL = 'https://updates.invalid/hermes-desktop
  * from its own subtree so the two variants can never serve each other's
  * packages.
  */
-export function win32AppInstallerFeedPath(
-  channel: 'stable' | 'canary',
-  light: boolean
-): string {
+export function win32AppInstallerFeedPath(channel: 'stable' | 'canary', light: boolean): string {
   const variant = light ? 'light/' : ''
 
   return `win32/${variant}${channel}/`
@@ -88,9 +85,7 @@ export interface PayloadPythonRunner {
  * The OS compares the package's registered .appinstaller source against the
  * installed version; it does NOT download anything.
  */
-export async function checkAppInstallerUpdate(
-  runner: PayloadPythonRunner
-): Promise<AppInstallerCheck> {
+export async function checkAppInstallerUpdate(runner: PayloadPythonRunner): Promise<AppInstallerCheck> {
   const { code, stdout } = await runner.run(runner.python, runner.script)
   const text = stdout.trim()
   let parsed: { available?: boolean | null; availability?: string; error?: string; reason?: string } | null = null
@@ -134,8 +129,7 @@ export async function triggerAppInstallerUpdate(
     await beforeInstall()
   }
 
-  const appinstallerUrl =
-    `${feedBaseUrl.replace(/\/+$/, '')}/${win32AppInstallerFeedPath(channel, light)}${channel}.appinstaller`
+  const appinstallerUrl = `${feedBaseUrl.replace(/\/+$/, '')}/${win32AppInstallerFeedPath(channel, light)}${channel}.appinstaller`
 
   await shell.openExternal(`ms-appinstaller:?source=${encodeURIComponent(appinstallerUrl)}`)
 

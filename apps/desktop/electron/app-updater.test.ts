@@ -97,5 +97,8 @@ test('win32 trigger light+canary targets the light canary feed dir', async () =>
 
   await triggerAppInstallerUpdate('https://updates.example.com', 'canary', true, shell as any)
 
-  assert.equal(calls[0], 'ms-appinstaller:?source=https%3A%2F%2Fupdates.example.com%2Fwin32%2Flight%2Fcanary%2Fcanary.appinstaller')
+  assert.equal(
+    calls[0],
+    'ms-appinstaller:?source=https%3A%2F%2Fupdates.example.com%2Fwin32%2Flight%2Fcanary%2Fcanary.appinstaller'
+  )
 })

@@ -138,7 +138,9 @@ test('a bundled-unusable continueLocal never reaches an installer — the local 
     assert.equal(backend.kind, 'bundled-unusable')
     assert.equal(backend.local, 'bundled-damaged')
 
-    throw new Error('This app bundles its own Hermes runtime, but the runtime files are missing or damaged. Reinstall Hermes Desktop to restore it.')
+    throw new Error(
+      'This app bundles its own Hermes runtime, but the runtime files are missing or damaged. Reinstall Hermes Desktop to restore it.'
+    )
   })
 
   const pendingConnection = runPrimaryBackendStartup({

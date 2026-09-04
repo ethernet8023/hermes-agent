@@ -151,8 +151,7 @@ export const en: Translations = {
     updateReadyTitle: 'Update ready',
     updateReadyMessage: count => `${count} new change${count === 1 ? '' : 's'} available.`,
     updateReadyMessageUnknown: 'A new update is available.',
-    updateReadyMessageAppInstaller:
-      'A new version of Hermes is ready. Update now and Windows will finish it for you.',
+    updateReadyMessageAppInstaller: 'A new version of Hermes is ready. Update now and Windows will finish it for you.',
     seeWhatsNew: "See what's new",
     mcp: {
       needsAuthTitle: 'MCP server needs re-authentication',
@@ -706,7 +705,7 @@ export const en: Translations = {
       tapCheck: 'Tap "Check now" to look for updates.',
       updateReady: count => `A new update is ready (${count} change${count === 1 ? '' : 's'} included).`,
       updateReadyUnknown: 'A new update is ready.',
-    availableBodyRelease: tag => `Version ${tag} is ready to install.`,
+      availableBodyRelease: tag => `Version ${tag} is ready to install.`,
       lastChecked: age => `Last checked ${age}`,
       justNowSuffix: ' · just now',
       automaticUpdates: 'Automatic updates',
@@ -2850,8 +2849,7 @@ export const en: Translations = {
     checkingShort: 'Checking…',
     releaseAvailable: tag => `Version ${tag} is available.`,
     versionDetailsTitle: 'Version details',
-    versionDetailsBody:
-      'This install is managed outside the app. Update it the same way you installed it.',
+    versionDetailsBody: 'This install is managed outside the app. Update it the same way you installed it.',
     versionDetailsVersion: 'Version',
     versionDetailsCommit: 'Commit',
     versionDetailsBuildOrigin: 'Build Origin',
@@ -2883,8 +2881,7 @@ export const en: Translations = {
     setupChoiceTitle: 'Set up Hermes Desktop',
     setupChoiceDesc:
       'Connect this app to a Hermes gateway you already run, or install Hermes locally on this computer.',
-    setupChoiceDescLocal:
-      'Install Hermes on this computer, or connect to a Hermes gateway you already run.',
+    setupChoiceDescLocal: 'Install Hermes on this computer, or connect to a Hermes gateway you already run.',
     connectExistingTitle: 'Connect to existing Hermes',
     connectExistingShort: 'Connect existing',
     connectExistingDesc: 'Use a remote backend with a session token or browser sign-in. No local install will start.',
@@ -2895,7 +2892,7 @@ export const en: Translations = {
     bundledLocalDesc: 'Use the Hermes runtime included with this app — the bundled backend is the local install.',
     bundledDamagedTitle: 'Use Hermes bundled with this app',
     bundledDamagedDesc:
-      "The Hermes backend bundled with this app is missing or damaged — reinstall the app to restore it.",
+      'The Hermes backend bundled with this app is missing or damaged — reinstall the app to restore it.',
     reinstallApp: 'Reinstall the app',
     localStartUnavailable: 'Local installation could not start. Restart Hermes Desktop and try again.',
     remoteSetupTitle: 'Connect to existing Hermes',

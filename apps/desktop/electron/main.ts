@@ -278,7 +278,13 @@ import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
 import { LEGACY_OAUTH_PARTITION, resolveOauthPartition } from './oauth-partition'
 import { listWindowsProcesses, reapPackageRootedProcesses } from './package-process-reap'
 import { createParentStartMarkerResolver, parentWatchdogEnv } from './parent-process-identity'
-import { adoptPayloadVenv, installIdForRoot, isBundledInstall, type PayloadInfo, resolvePayload } from './payload-backend'
+import {
+  adoptPayloadVenv,
+  installIdForRoot,
+  isBundledInstall,
+  type PayloadInfo,
+  resolvePayload
+} from './payload-backend'
 import { registerPetOverlayIpc } from './pet-overlay-ipc'
 import {
   pendingNotice as pendingPluginCompatNotice,
@@ -434,11 +440,7 @@ import {
   MIN_WIDTH as WINDOW_MIN_WIDTH
 } from './window-state'
 import { hiddenWindowsChildOptions } from './windows-child-options'
-import {
-  buildPathExtCandidates,
-  chooseUpdaterArgs,
-  resolveVenvHermesCommand
-} from './windows-hermes-path'
+import { buildPathExtCandidates, chooseUpdaterArgs, resolveVenvHermesCommand } from './windows-hermes-path'
 import {
   connectWindowsRemote,
   detectRemotePlatform,
@@ -3358,10 +3360,14 @@ function isWindowsStore(): boolean {
 function resolveDesktopFeedBaseUrl(): string {
   const configured = readUpdatesFeedBaseFromConfig()
 
-  if (configured) {return configured}
+  if (configured) {
+    return configured
+  }
   const env = process.env.HERMES_DESKTOP_FEED_BASE_URL
 
-  if (env) {return env}
+  if (env) {
+    return env
+  }
 
   return PLACEHOLDER_FEED_BASE_URL
 }
@@ -3371,11 +3377,15 @@ function readUpdatesFeedBaseFromConfig(): string {
   try {
     const configPath = path.join(HERMES_HOME, 'config.yaml')
 
-    if (!fileExists(configPath)) {return ''}
+    if (!fileExists(configPath)) {
+      return ''
+    }
     const raw = fs.readFileSync(configPath, 'utf8')
     const match = raw.match(/^\s*desktop_feed_base_url\s*:\s*(.+)\s*$/m)
 
-    if (!match) {return ''}
+    if (!match) {
+      return ''
+    }
     const value = match[1].trim().replace(/^['"]|['"]$/g, '')
 
     return value
@@ -3409,7 +3419,7 @@ async function runPayloadPython(python: string, script: string): Promise<{ code:
     env.PYTHONPATH = payload.sitePackages
   }
 
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const child = spawn(python, [script], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -3418,11 +3428,17 @@ async function runPayloadPython(python: string, script: string): Promise<{ code:
 
     let stdout = ''
     let stderr = ''
-    child.stdout.on('data', chunk => { stdout += chunk.toString() })
-    child.stderr.on('data', chunk => { stderr += chunk.toString() })
-    child.on('error', (error) => resolve({ code: 1, stdout: JSON.stringify({ available: null, error: error.message }) }))
-    child.on('close', (code) => {
-      if (stderr) {console.error(`[app-installer] checker stderr: ${stderr.slice(0, 400)}`)}
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString()
+    })
+    child.on('error', error => resolve({ code: 1, stdout: JSON.stringify({ available: null, error: error.message }) }))
+    child.on('close', code => {
+      if (stderr) {
+        console.error(`[app-installer] checker stderr: ${stderr.slice(0, 400)}`)
+      }
       resolve({ code: code ?? 1, stdout })
     })
   })
@@ -7042,6 +7058,7 @@ async function showPluginCompatNoticeOnce() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return
   }
+
   let notice
 
   try {
@@ -7055,6 +7072,7 @@ async function showPluginCompatNoticeOnce() {
   if (!notice) {
     return
   }
+
   pluginCompatNoticeShown = true
   rememberLog(`[plugins] compat notice shown (${notice.key})`)
 
@@ -13010,10 +13028,14 @@ function reapInstallRootedStragglers(excludePids: number[]): void {
   try {
     reapPackageRootedProcesses({
       installRoots: [payloadRoot, managedStore],
-      listProcesses: () => listWindowsProcesses((file, args, options) => execFileSync(file, args, {
-        ...hiddenWindowsChildOptions({ encoding: 'utf8', timeout: options.timeout }),
-        windowsHide: options.windowsHide
-      }) as unknown as string),
+      listProcesses: () =>
+        listWindowsProcesses(
+          (file, args, options) =>
+            execFileSync(file, args, {
+              ...hiddenWindowsChildOptions({ encoding: 'utf8', timeout: options.timeout }),
+              windowsHide: options.windowsHide
+            }) as unknown as string
+        ),
       killProcess: pid => process.kill(pid, 'SIGKILL'),
       selfPid: process.pid,
       excludePids,
@@ -17981,12 +18003,7 @@ ipcMain.handle('hermes:app:relaunch', async () => {
  *  pm syncs (bisect disables, failed rebuilds), plugin update checks,
  *  and (embedded) updates. */
 function readLatestSyncReceipt(): Record<string, unknown> | null {
-  const receiptPath = path.join(
-    HERMES_HOME,
-    'logs',
-    'update_receipts',
-    'latest.json'
-  )
+  const receiptPath = path.join(HERMES_HOME, 'logs', 'update_receipts', 'latest.json')
 
   try {
     const text = fs.readFileSync(receiptPath, 'utf8')

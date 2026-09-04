@@ -97,7 +97,12 @@ export function resolvePayload(
     // fall through to the existence checks below
   }
 
-  if (!deps.directoryExists(repoDir) || !deps.fileExists(storePython) || !deps.directoryExists(sitePackages) || !deps.fileExists(shim)) {
+  if (
+    !deps.directoryExists(repoDir) ||
+    !deps.fileExists(storePython) ||
+    !deps.directoryExists(sitePackages) ||
+    !deps.fileExists(shim)
+  ) {
     return null
   }
 

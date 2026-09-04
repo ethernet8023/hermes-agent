@@ -193,4 +193,3 @@ test('installIdForRoot matches the Python install id (sha16 of the canonical pat
     installIdForRoot('/real/hermes-agent')
   )
 })
-

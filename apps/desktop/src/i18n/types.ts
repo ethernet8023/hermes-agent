@@ -587,7 +587,7 @@ export interface Translations {
       tapCheck: string
       updateReady: (count: number) => string
       updateReadyUnknown: string
-    availableBodyRelease: (tag: string) => string
+      availableBodyRelease: (tag: string) => string
       lastChecked: (age: string) => string
       justNowSuffix: string
       automaticUpdates: string

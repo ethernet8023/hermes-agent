@@ -32,6 +32,8 @@ RUN printf '%s\n' "deb https://packages.termux.dev/apt/termux-main stable main" 
       autoconf automake libtool \
       libandroid-posix-semaphore libandroid-support libbz2 libffi \
       libjpeg-turbo libpng freetype libtiff libwebp openjpeg littlecms \
-      libyaml openssl readline zlib liblzma libsqlite ncurses \
- && mkdir -p /bin \
- && ln -sf "${PREFIX}/bin/sh" /bin/sh
+      libyaml openssl readline zlib liblzma libsqlite ncurses
+
+# No /bin/sh link here: uid 1000 cannot write /, and the runtime wheelhouse
+# phase links it itself (termux_build.sh) inside its --tmpfs /bin, which
+# docker mounts owned by the image USER.

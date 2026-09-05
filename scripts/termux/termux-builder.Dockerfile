@@ -13,7 +13,11 @@
 ARG BASE
 FROM ${BASE}
 
-USER root
+# The termux rootfs is owned by uid 1000 (the `system` user) and the
+# termux-patched apt REFUSES to run as uid 0. The base image's ENTRYPOINT
+# normally drops root to system via su -- but docker build bypasses the
+# entrypoint, so we must become the owning user ourselves.
+USER 1000:1000
 SHELL ["/data/data/com.termux/files/usr/bin/bash", "-c"]
 ENV PREFIX=/data/data/com.termux/files/usr
 ENV PATH="${PREFIX}/bin:/usr/bin:/bin"

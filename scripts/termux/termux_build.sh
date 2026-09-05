@@ -355,20 +355,44 @@ PAYLOAD_ABS="$OUT_ABS"
 # pre-create the dir with open perms (the build writes wheels there).
 mkdir -p "$OUT_ABS/wheelhouse"
 chmod 0777 "$OUT_ABS/wheelhouse"
-C_RESOLVED="/out/.work/resolved.txt"
-C_BUILD_SET="/out/.work/build_set.txt"
-C_WHEELHOUSE="/out/wheelhouse"
-# --user root: the build must create /bin/sh (autotools config.sub,
-# configure shebangs expect the standard path); termux binaries run
-# fine as root in the build container (no phone-uid semantics here).
-docker run --rm --platform linux/arm64 \
-    --user root \
-    --tmpfs /bin \
-    -v "$REPO_ROOT:/repo" \
-    -v "$OUT_ABS:/out" \
-    "$IMAGE" bash /repo/scripts/termux/termux_build.sh \
-        --in-container "$C_RESOLVED" "$C_BUILD_SET" "$C_WHEELHOUSE" "/out" \
-    || fail "container wheelhouse build failed"
+
+# Cache-hit fast path: the wheelhouse cache key covers uv.lock + the build
+# scripts, so a restored wheelhouse is BY CONSTRUCTION the exact graph the
+# gates proved on the run that saved it. If every indexed wheel is present
+# with a matching sha256, the 20-minute container phase (toolchain
+# provisioning + native builds) has nothing left to do -- skip it.
+if python3 - "$OUT_ABS/index.json" "$OUT_ABS/wheelhouse" <<'PYCHK' 2>/dev/null
+import hashlib, json, sys
+from pathlib import Path
+
+index_file, wheelhouse = Path(sys.argv[1]), Path(sys.argv[2])
+if not index_file.is_file():
+    sys.exit(1)
+index = json.loads(index_file.read_text(encoding="utf-8"))
+for wheel in index.get("wheels", []):
+    f = wheelhouse / wheel["name"]
+    if not f.is_file() or hashlib.sha256(f.read_bytes()).hexdigest() != wheel["sha256"]:
+        sys.exit(1)
+sys.exit(0)
+PYCHK
+then
+    log "Wheelhouse cache restored complete -- skipping the container build phase"
+else
+    C_RESOLVED="/out/.work/resolved.txt"
+    C_BUILD_SET="/out/.work/build_set.txt"
+    C_WHEELHOUSE="/out/wheelhouse"
+    # --user root: the build must create /bin/sh (autotools config.sub,
+    # configure shebangs expect the standard path); termux binaries run
+    # fine as root in the build container (no phone-uid semantics here).
+    docker run --rm --platform linux/arm64 \
+        --user root \
+        --tmpfs /bin \
+        -v "$REPO_ROOT:/repo" \
+        -v "$OUT_ABS:/out" \
+        "$IMAGE" bash /repo/scripts/termux/termux_build.sh \
+            --in-container "$C_RESOLVED" "$C_BUILD_SET" "$C_WHEELHOUSE" "/out" \
+        || fail "container wheelhouse build failed"
+fi
 
 # [h+] Stage the archived tag tree as the payload's app/ -- build_deb.sh
 # assembles the .deb from payload/{python,node,app,venv,bin}.

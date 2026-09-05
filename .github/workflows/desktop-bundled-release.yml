@@ -657,7 +657,10 @@ jobs:
         # native compile phase into a cache-hit verification.
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: termux-build/payload/wheelhouse
+          path: |
+            termux-build/payload/wheelhouse
+            termux-build/payload/index.json
+            termux-build/payload/SHA256SUMS
           key: termux-wheelhouse-${{ hashFiles('uv.lock', 'scripts/termux/build_wheels.py', 'scripts/termux/termux_build.sh') }}
           restore-keys: |
             termux-wheelhouse-
@@ -678,7 +681,10 @@ jobs:
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: termux-build/payload/wheelhouse
+          path: |
+            termux-build/payload/wheelhouse
+            termux-build/payload/index.json
+            termux-build/payload/SHA256SUMS
           key: termux-wheelhouse-${{ hashFiles('uv.lock', 'scripts/termux/build_wheels.py', 'scripts/termux/termux_build.sh') }}
 
       - name: Assemble the .deb

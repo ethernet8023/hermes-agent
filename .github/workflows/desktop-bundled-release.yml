@@ -662,7 +662,11 @@ jobs:
         # instead of the bare base, skipping the ~10-min toolchain apt.
         run: |
           mkdir -p termux-build
-          img="$(bash scripts/termux/build_builder_image.sh)"
+          # The builder script prints progress (build logs, smoke output)
+          # plus the image ref on the LAST line -- command substitution
+          # would swallow all of it into one $GITHUB_OUTPUT value.
+          bash scripts/termux/build_builder_image.sh | tee termux-build/.builder-image.log
+          img="$(tail -n1 termux-build/.builder-image.log)"
           echo "builder image: $img"
           echo "image=$img" >> "$GITHUB_OUTPUT"
 

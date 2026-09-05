@@ -263,8 +263,14 @@ python3 "$REPO_ABS/scripts/write_install_stamp.py" \
 log "Staging the package tree"
 STAGE="$OUT_ABS/.stage-$DEB_VERSION"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/DEBIAN" "$STAGE/lib/hermes-agent"
-cp -a "$PAYLOAD_ABS/python" "$PAYLOAD_ABS/node" "$PAYLOAD_ABS/libsqlite" "$PAYLOAD_ABS/app" "$PAYLOAD_ABS/venv" "$PAYLOAD_ABS/bin" "$STAGE/lib/hermes-agent/"
+# Termux debs store their payload at the ANDROID-fs-rooted on-device
+# path (data/data/com.termux/files/usr/...): on-device dpkg extracts
+# at / and only /data/data is writable -- a ./lib staging would make
+# dpkg try to create /lib and fail on the read-only root.
+ROOT_IN_DEB=data/data/com.termux/files/usr
+DEST="$STAGE/$ROOT_IN_DEB/lib/hermes-agent"
+mkdir -p "$STAGE/DEBIAN" "$DEST"
+cp -a "$PAYLOAD_ABS/python" "$PAYLOAD_ABS/node" "$PAYLOAD_ABS/libsqlite" "$PAYLOAD_ABS/app" "$PAYLOAD_ABS/venv" "$PAYLOAD_ABS/bin" "$DEST/"
 
 # postinst/prerm: manage the ONE leak, $PREFIX/bin/hermes, idempotently.
 cat > "$STAGE/DEBIAN/postinst" <<'EOF'
@@ -296,7 +302,7 @@ Version: $DEB_VERSION
 Architecture: aarch64
 Maintainer: Nous Research
 Description: Hermes Agent CLI for Termux (self-contained bundled python/node/venv)
-Installed-Size: $(du -sk "$STAGE/lib" | cut -f1)
+Installed-Size: $(du -sk "$STAGE/$ROOT_IN_DEB" | cut -f1)
 EOF
 # Self-contained: no Depends line at all. Our python, node and venv ship inside.
 
@@ -321,7 +327,14 @@ export PATH="$PREFIX/bin:$PATH"
 # So validate the real artifacts without dpkg script-wrapping:
 # real payload extraction, real postinst, real trampolines.
 dpkg-deb -I /tmp/pkg.deb | grep -q "Package: hermes-agent"
-dpkg-deb -x /tmp/pkg.deb "$PREFIX"
+mkdir -p "$PREFIX/tmp/deb-x"
+dpkg-deb -x /tmp/pkg.deb "$PREFIX/tmp/deb-x"
+# Layout contract: the payload must sit exactly at the on-device
+# path (android-fs-rooted) so a real-device dpkg -i extracts it
+# into the writable /data/data region without touching /.
+XROOT="$PREFIX/tmp/deb-x/data/data/com.termux/files/usr"
+[ -d "$XROOT/lib/hermes-agent" ] || { echo "FAIL: deb payload not staged at data/data/com.termux/files/usr"; exit 1; }
+cp -a "$XROOT/." "$PREFIX/"
 dpkg-deb -e /tmp/pkg.deb "$PREFIX/tmp/ctrl"
 test -x "$PREFIX/lib/hermes-agent/bin/hermes"
 sh "$PREFIX/tmp/ctrl/postinst"

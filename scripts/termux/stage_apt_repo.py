@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 ARCH = "aarch64"
@@ -269,6 +270,10 @@ def stage(pool_dir: Path, out_dir: Path, suite: str, gpg_key_file: Path | None) 
     with gzip.GzipFile(filename="", mode="wb", fileobj=open(binary_dir / "Packages.gz", "wb"), mtime=0) as gz:
         gz.write(packages_text.encode("utf-8"))
 
+    # Date is REQUIRED by apt (it refuses a Release without one) and the
+    # checksum sections must stay INSIDE the same deb822 stanza: a blank
+    # line ends the record, and apt then never sees the hashes ("weak
+    # security information"). One paragraph, no blank lines.
     release_fields = [
         "Origin: Hermes Agent",
         "Label: hermes-agent",
@@ -277,6 +282,7 @@ def stage(pool_dir: Path, out_dir: Path, suite: str, gpg_key_file: Path | None) 
         f"Architectures: {ARCH}",
         f"Components: {COMPONENT}",
         f"Description: Hermes Agent apt repository ({suite})",
+        "Date: " + time.strftime("%a, %d %b %Y %H:%M:%S UTC", time.gmtime()),
     ]
     checksums = []
     sha512 = []
@@ -288,8 +294,8 @@ def stage(pool_dir: Path, out_dir: Path, suite: str, gpg_key_file: Path | None) 
         checksums.append(f" {hashlib.sha256(data).hexdigest()} {size:8d} {rel}")
         sha512.append(f" {hashlib.sha512(data).hexdigest()} {size:8d} {rel}")
     release = "\n".join(release_fields) + "\n"
-    release += "\nSHA256:\n" + "\n".join(checksums) + "\n"
-    release += "\nSHA512:\n" + "\n".join(sha512) + "\n"
+    release += "SHA256:\n" + "\n".join(checksums) + "\n"
+    release += "SHA512:\n" + "\n".join(sha512) + "\n"
 
     release_path = dists / "Release"
     release_path.write_text(release, encoding="utf-8")

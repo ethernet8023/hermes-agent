@@ -128,6 +128,15 @@ def test_dists_layout_and_pool_copy(tmp_path, fake_gpg):
     assert "Suite: hermes-stable" in release
     assert "SHA256:" in release
     assert "SHA512:" in release
+    # apt contract (learned from a real device rejecting our first repo):
+    # Date is mandatory, and the checksum sections must live in the SAME
+    # deb822 stanza as the header fields -- a blank line ends the record,
+    # after which apt "provides only weak security information" and
+    # disables the repository.
+    assert "Date: " in release
+    assert "\n\n" not in release, "blank line splits the Release stanza"
+    head, _, checksums_block = release.partition("SHA256:\n")
+    assert "Date: " in head, "Date must precede the checksum sections"
 
 
 def test_immutability_refusal(tmp_path, fake_gpg, capsys):

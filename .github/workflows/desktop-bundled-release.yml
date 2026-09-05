@@ -610,8 +610,8 @@ jobs:
             termux-build/payload/python
             termux-build/payload/node
             termux-build/payload/uv
-            termux-build/payload/libsqlite
-          key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_cpython.sh', 'scripts/termux/build_node.sh', 'scripts/termux/build_uv.sh', 'scripts/termux/build_libsqlite.sh') }}
+            termux-build/payload/runtime-libs
+          key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_cpython.sh', 'scripts/termux/build_node.sh', 'scripts/termux/build_uv.sh', 'scripts/termux/runtime_libs.json', 'scripts/termux/stage_runtime_libs.py') }}
           restore-keys: |
             termux-payload-
 
@@ -623,6 +623,14 @@ jobs:
         shell: bash
         run: bash scripts/termux/build_node.sh termux-build/payload
 
+      - name: Stage the runtime libs into the payload
+        shell: bash
+        # The payload interpreters' runtime libs (python's C-extension deps,
+        # node's, uv's zstd) ship INSIDE the sealed deb: the device's termux
+        # tree may have none of them installed. Pin table derived from the
+        # suppliers' own Depends metadata (see runtime_libs.json).
+        run: python3 scripts/termux/stage_runtime_libs.py termux-build/payload
+
       - name: Stage uv into the payload
         shell: bash
         # The wheelhouse resolver + runtime lazy-install tool: pm stages
@@ -630,12 +638,6 @@ jobs:
         # payload env composition exposes it, desktop payload model).
         run: bash scripts/termux/build_uv.sh termux-build/payload
 
-      - name: Stage libsqlite into the payload
-        shell: bash
-        # The payload python's sqlite3 module dlopens libsqlite3.so; the
-        # sealed deb carries it (the device termux tree may not have the
-        # libsqlite package installed).
-        run: bash scripts/termux/build_libsqlite.sh termux-build/payload
 
       - name: Save the payload builds
         # Save regardless of the wheelhouse/deb phases' outcome: the staged
@@ -648,8 +650,8 @@ jobs:
             termux-build/payload/python
             termux-build/payload/node
             termux-build/payload/uv
-            termux-build/payload/libsqlite
-          key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_cpython.sh', 'scripts/termux/build_node.sh', 'scripts/termux/build_uv.sh', 'scripts/termux/build_libsqlite.sh') }}
+            termux-build/payload/runtime-libs
+          key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_cpython.sh', 'scripts/termux/build_node.sh', 'scripts/termux/build_uv.sh', 'scripts/termux/runtime_libs.json', 'scripts/termux/stage_runtime_libs.py') }}
 
       - name: Ensure the derived builder image (toolchain pre-baked)
         id: builder_image

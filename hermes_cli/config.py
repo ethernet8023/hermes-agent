@@ -464,7 +464,7 @@ def _install_method_project_root(project_root: Optional[Path] = None) -> Path:
 
 
 def detect_install_method(project_root: Optional[Path] = None) -> str:
-    """Detect how Hermes was installed: 'docker', 'nix', 'nixos',
+    """Detect how Hermes was installed: 'apt', 'docker', 'nix', 'nixos',
     'home-manager', 'git', or 'unknown'.
 
     Resolution order:
@@ -509,13 +509,14 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     See issue #34397.
     """
     root = _install_method_project_root(project_root)
+    # "apt" is the Termux APT distribution identifier, not a generic
+    # Debian/Ubuntu APT signal. If another APT-managed distribution is
+    # added, give it a distinct install method or make update-command
+    # selection platform-aware instead of silently reusing Termux's `pkg`.
     # "home-manager" is here because step 3 can return it. A stamp must name
     # every method that this function returns. Without it, the stamp of a
     # home-manager install gives "unknown".
-    # A legacy "apt" (Termux) stamp is deliberately no longer in this set:
-    # it falls through to "unknown", which routes the user to the generic
-    # "hermes update" path.
-    supported_methods = {"docker", "nix", "nixos", "home-manager", "git", "unknown"}
+    supported_methods = {"apt", "docker", "nix", "nixos", "home-manager", "git", "unknown"}
 
     # 1. Code-scoped stamp — authoritative, immune to shared $HERMES_HOME.
     try:
@@ -619,6 +620,10 @@ def recommended_update_command_for_method(method: str) -> str:
         return _NIX_UPDATE_MSG
     if method == "docker":
         return "docker pull nousresearch/hermes-agent:latest"
+    if method == "apt":
+        # By contract, the current "apt" install method is the Termux APT
+        # distribution. It deliberately uses Termux's `pkg` frontend.
+        return "pkg upgrade hermes-agent"
     return "hermes update"
 
 

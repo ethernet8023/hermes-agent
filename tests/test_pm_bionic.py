@@ -82,16 +82,6 @@ def test_bionic_fetch_urls_resolve():
     )
 
 
-def test_libsqlite_bionic_row_matches_supplier(lock):
-    """The libsqlite bionic row must agree with the lock version and the
-    termux-main pool naming convention (libsqlite_<version>_aarch64.deb)."""
-    row = lock["packages"]["libsqlite"]["artifacts"].get("linux-arm64-bionic")
-    assert row, "libsqlite has no linux-arm64-bionic artifact"
-    version = lock["packages"]["libsqlite"]["version"]
-    assert row["url"].endswith(f"/libsqlite/libsqlite_{version}_aarch64.deb")
-    assert len(row["sha256"]) == 64
-
-
 def test_uv_bionic_row_matches_supplier(lock):
     """The uv bionic row must agree with the lock version and the termux-main
     pool naming convention (uv_<version>_aarch64.deb)."""

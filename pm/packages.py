@@ -107,33 +107,6 @@ class BinaryPackage(Package):
 
 
 @register
-class Libsqlite(DebPackage):
-    """The termux libsqlite runtime lib for bionic: the payload python's
-    sqlite3 module dlopens libsqlite3.so at import time. The deb is
-    sealed/self-contained, so the lib ships INSIDE the payload (a real
-    device's termux tree may not have the libsqlite package installed)."""
-
-    name = "libsqlite"
-    internal = True
-    deb_package = "libsqlite"
-    prefix_rel: str = "data/data/com.termux/files/usr"
-
-    def fetch_url(self, version: str, target: str) -> str:
-        if target != "linux-arm64-bionic":
-            raise ValueError(f"libsqlite is bionic-only, got {target}")
-        return (
-            "https://packages.termux.dev/apt/termux-main/pool/main/libs/"
-            f"libsqlite/libsqlite_{version}_aarch64.deb"
-        )
-
-    def verify(self, entry: Path, target: str) -> str:
-        expected = entry / self.prefix_rel / "lib/libsqlite3.so"
-        if not (expected.is_file() or expected.is_symlink()):
-            return f"libsqlite3.so missing under {self.prefix_rel}/lib"
-        return ""
-
-
-@register
 class Uv(BinaryPackage, DebPackage):
     """astral's prebuilt tarballs for glibc/mac/win; the Termux main-repo
     uv .deb for bionic (termux builds uv from source -- no astral bionic

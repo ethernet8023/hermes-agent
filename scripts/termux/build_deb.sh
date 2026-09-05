@@ -135,6 +135,7 @@ docker run --rm --platform linux/arm64 \
     -v "$PAYLOAD_ABS/python:/data/data/com.termux/files/usr/lib/hermes-agent/python" \
     -v "$PAYLOAD_ABS/node:/data/data/com.termux/files/usr/lib/hermes-agent/node" \
     -v "$PAYLOAD_ABS/uv:/data/data/com.termux/files/usr/lib/hermes-agent/uv" \
+    -v "$PAYLOAD_ABS/runtime-libs:/data/data/com.termux/files/usr/lib/hermes-agent/runtime-libs" \
     -v "$PAYLOAD_ABS/wheelhouse:/data/data/com.termux/files/usr/lib/hermes-agent/wheelhouse" \
     -v "$PAYLOAD_ABS/.work:/data/data/com.termux/files/usr/lib/hermes-agent/.work" \
     -v "$PAYLOAD_ABS/venv:/data/data/com.termux/files/usr/lib/hermes-agent/venv" \
@@ -145,7 +146,7 @@ docker run --rm --platform linux/arm64 \
         # The staged binary is dynamically linked against its OWN tree lib;
         # the container linker needs to be told where it lives (same fix as
         # the wheelhouse container half).
-        export LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib:$PREFIX/lib/hermes-agent/libsqlite$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib:$PREFIX/lib/hermes-agent/runtime-libs/lib$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         # The staged tree is mounted at its REAL $PREFIX path so the venv
         # recorded absolute paths are correct on-device from birth.
         mkdir -p "$PREFIX" 2>/dev/null || true
@@ -169,6 +170,11 @@ docker run --rm --platform linux/arm64 \
         "$UV" pip check --python "$PREFIX/lib/hermes-agent/venv/bin/python"
     ' || fail "venv assembly failed inside the container (offline wheelhouse install)"
 
+# The install-method stamp (code-scoped, next to hermes_cli/): the deb IS
+# the Termux apt distribution, and detect_install_method reads this marker
+# to route hermes update -> pkg upgrade remediation.
+printf 'apt\n' > "$PAYLOAD_ABS/app/.install_method"
+
 # [3] Trampolines: POSIX sh, resolve their own dir, dispatch on the bundled
 # python. Installed under $PREFIX/lib/hermes-agent/bin; ../python is a sibling.
 log "Writing trampolines"
@@ -190,7 +196,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../libsqlite$PREFIX/lib:$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../runtime-libs/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -214,7 +220,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../libsqlite$PREFIX/lib:$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../runtime-libs/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -238,7 +244,7 @@ done
 self_dir="$(cd "$(dirname "$self")" && pwd)"
 # The bundled interpreter links its OWN libpython: put the payload
 # lib dirs on the linker path (the image does not rpath them).
-LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../libsqlite$PREFIX/lib:$PREFIX/lib" \
+LD_LIBRARY_PATH="$self_dir/../python$PREFIX/lib:$self_dir/../node$PREFIX/lib:$self_dir/../runtime-libs/lib:$PREFIX/lib" \
 export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
@@ -273,7 +279,7 @@ rm -rf "$STAGE"
 ROOT_IN_DEB=data/data/com.termux/files/usr
 DEST="$STAGE/$ROOT_IN_DEB/lib/hermes-agent"
 mkdir -p "$STAGE/DEBIAN" "$DEST"
-cp -a "$PAYLOAD_ABS/python" "$PAYLOAD_ABS/node" "$PAYLOAD_ABS/libsqlite" "$PAYLOAD_ABS/app" "$PAYLOAD_ABS/venv" "$PAYLOAD_ABS/bin" "$DEST/"
+cp -a "$PAYLOAD_ABS/python" "$PAYLOAD_ABS/node" "$PAYLOAD_ABS/runtime-libs" "$PAYLOAD_ABS/app" "$PAYLOAD_ABS/venv" "$PAYLOAD_ABS/bin" "$DEST/"
 
 # postinst/prerm: manage the ONE leak, $PREFIX/bin/hermes, idempotently.
 cat > "$STAGE/DEBIAN/postinst" <<'EOF'
@@ -344,6 +350,19 @@ sh "$PREFIX/tmp/ctrl/postinst"
 test -L "$PREFIX/bin/hermes"
 echo "--- hermes --version ---"
 "$PREFIX/bin/hermes" --version
+# C-extension gate: every stdlib module that dlopens a runtime lib must
+# import. This is the bug class the first real-device install hit
+# (ctypes -> libffi.so): catch a missing payload lib BEFORE shipping.
+echo "--- python C-extension imports ---"
+LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib:$PREFIX/lib/hermes-agent/runtime-libs/lib" \
+PYTHONPATH="$PREFIX/lib/hermes-agent/app" \
+"$PREFIX/lib/hermes-agent/venv/bin/python" -c 'import ctypes, ssl, sqlite3, bz2, lzma, zlib, hashlib, readline; print("C extensions OK")'
+echo "--- bundled node ---"
+LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/runtime-libs/lib" \
+"$PREFIX/lib/hermes-agent/node$PREFIX/bin/node" --version
+echo "--- install method (must be apt) ---"
+LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib:$PREFIX/lib/hermes-agent/runtime-libs/lib" \
+PYTHONPATH="$PREFIX/lib/hermes-agent/app" "$PREFIX/lib/hermes-agent/venv/bin/python" -c 'import hermes_cli.config as c; m = c.detect_install_method(); print("install method:", m); exit(0 if m == "apt" else 1)'
 echo "--- hermes update (must refuse with pkg remediation) ---"
 set +e
 UPD_OUT="$("$PREFIX/bin/hermes" update 2>&1)"
@@ -355,11 +374,15 @@ echo "$UPD_OUT" | grep -q "pkg upgrade hermes-agent" ||
     { echo "FAIL: refusal does not mention pkg upgrade hermes-agent"; exit 1; }
 echo "VALIDATION OK"
 CHECK
+# The validation must run the BARE pinned base, never the builder image:
+# the builder carries the whole toolchain (libffi among it), which hid
+# the missing-payload-lib bug class from CI while a real phone hit it.
+# The base rootfs matches a first-boot termux device.
 docker run --rm --platform linux/arm64 \
     --user root --privileged \
     -v "$DEB:/tmp/pkg.deb:ro" \
     -v "$VD/check.sh:/tmp/check.sh:ro" \
-    "$IMAGE" sh /tmp/check.sh \
+    "termux/termux-docker@$DIGEST" sh /tmp/check.sh \
     || fail "container validation failed"
 rm -rf "$VD"
 

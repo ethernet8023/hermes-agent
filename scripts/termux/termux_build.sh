@@ -339,7 +339,10 @@ print(Lockfile(lockfile_path()).version("termux-docker"))
 PYD
 )" || fail "failed to read the termux-docker digest from pm/lock.json"
 [ -n "$DIGEST" ] || fail "termux-docker digest missing from pm/lock.json"
-IMAGE="termux/termux-docker@$DIGEST"
+# The derived builder image (toolchain pre-baked) when CI provides it;
+# the bare pinned base otherwise. Its tag IS this lock digest (short
+# form), so a lock bump rolls the builder image with the base.
+IMAGE="${TERMUX_BUILDER_IMAGE:-termux/termux-docker@$DIGEST}"
 
 # [g] The build itself runs in the pinned container: the wheels must be
 # bionic, and they are built with THE PAYLOAD'S OWN staged python (the

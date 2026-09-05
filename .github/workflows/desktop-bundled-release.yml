@@ -55,6 +55,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  packages: write
 
 concurrency:
   group: desktop-bundled-release-${{ inputs.tag }}
@@ -650,6 +651,21 @@ jobs:
             termux-build/payload/libsqlite
           key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_cpython.sh', 'scripts/termux/build_node.sh', 'scripts/termux/build_uv.sh', 'scripts/termux/build_libsqlite.sh') }}
 
+      - name: Ensure the derived builder image (toolchain pre-baked)
+        id: builder_image
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        # Content-addressed off the pm lock digest: builds once per lock
+        # bump, then no-ops. The wheelhouse container phase boots this
+        # instead of the bare base, skipping the ~10-min toolchain apt.
+        run: |
+          mkdir -p termux-build
+          img="$(bash scripts/termux/build_builder_image.sh)"
+          echo "builder image: $img"
+          echo "image=$img" >> "$GITHUB_OUTPUT"
+
       - name: Restore the wheelhouse
         # The manufactured native wheels are the expensive artifact of this
         # job. build_wheels.py skips any dist whose exact-pinned wheel is
@@ -667,6 +683,8 @@ jobs:
 
       - name: Build the wheelhouse
         shell: bash
+        env:
+          TERMUX_BUILDER_IMAGE: ${{ steps.builder_image.outputs.image }}
         # termux_build.sh lands wheelhouse/ + index.json + SHA256SUMS in the
         # payload root, where build_deb.sh's --no-index pip install finds it.
         run: |
@@ -689,6 +707,8 @@ jobs:
 
       - name: Assemble the .deb
         shell: bash
+        env:
+          TERMUX_BUILDER_IMAGE: ${{ steps.builder_image.outputs.image }}
         # build_deb.sh always validates in a fresh pinned container (no
         # opt-out flag); the channel is derived from the tag inside the
         # script via deb_version.py.

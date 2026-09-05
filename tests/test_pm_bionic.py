@@ -92,6 +92,16 @@ def test_libsqlite_bionic_row_matches_supplier(lock):
     assert len(row["sha256"]) == 64
 
 
+def test_uv_bionic_row_matches_supplier(lock):
+    """The uv bionic row must agree with the lock version and the termux-main
+    pool naming convention (uv_<version>_aarch64.deb)."""
+    row = lock["packages"]["uv"]["artifacts"].get("linux-arm64-bionic")
+    assert row, "uv has no linux-arm64-bionic artifact"
+    version = lock["packages"]["uv"]["version"]
+    assert row["url"].endswith(f"/u/uv/uv_{version}_aarch64.deb")
+    assert len(row["sha256"]) == 64
+
+
 def _build_fake_deb(path: Path, control: dict[str, str], files: dict[str, bytes]) -> None:
     def ar_member(name: str, data: bytes) -> bytes:
         hdr = (

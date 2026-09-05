@@ -147,9 +147,7 @@ class Uv(BinaryPackage, DebPackage):
 
     def fetch_url(self, version: str, target: str) -> str:
         if target == "linux-arm64-bionic":
-            # termux re-released 0.12.9 WITH a -1 revision suffix in the
-            # pool filename (upstream file layout, not a version bump)
-            return f"https://packages.termux.dev/apt/termux-main/pool/main/u/uv/uv_{version}-1_aarch64.deb"
+            return f"https://packages.termux.dev/apt/termux-main/pool/main/u/uv/uv_{version}_aarch64.deb"
         triple = _RUST_TRIPLE[target]
         ext = "zip" if target.startswith("win32") else "tar.gz"
         return f"https://github.com/astral-sh/uv/releases/download/{version}/uv-{triple}.{ext}"

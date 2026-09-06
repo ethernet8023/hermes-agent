@@ -201,6 +201,13 @@ export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \
+export PYTHONPATH
+# The prebuilt TUI bundle ships inside the deb: hand its launchers
+# the payload node (HERMES_NODE) and this venv (HERMES_PYTHON) so they
+# never fall back to PATH lookups the phone cannot satisfy.
+HERMES_NODE="$self_dir/../node$PREFIX/bin/node"
+HERMES_PYTHON="$self_dir/../venv/bin/python"
+export HERMES_NODE HERMES_PYTHON
 exec "$self_dir/../venv/bin/python" -m hermes_cli.main "$@"
 EOF
 cat > "$PAYLOAD_ABS/bin/hermes-agent" <<'EOF'
@@ -225,6 +232,13 @@ export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \
+export PYTHONPATH
+# The prebuilt TUI bundle ships inside the deb: hand its launchers
+# the payload node (HERMES_NODE) and this venv (HERMES_PYTHON) so they
+# never fall back to PATH lookups the phone cannot satisfy.
+HERMES_NODE="$self_dir/../node$PREFIX/bin/node"
+HERMES_PYTHON="$self_dir/../venv/bin/python"
+export HERMES_NODE HERMES_PYTHON
 exec "$self_dir/../venv/bin/python" -m hermes_cli.run_agent "$@"
 EOF
 cat > "$PAYLOAD_ABS/bin/hermes-acp" <<'EOF'
@@ -249,6 +263,13 @@ export LD_LIBRARY_PATH
 # Desktop canon: deps live in the venv, the app runs from its own
 # directory -- put it on PYTHONPATH for the interpreter.
 PYTHONPATH="$self_dir/../app" \
+export PYTHONPATH
+# The prebuilt TUI bundle ships inside the deb: hand its launchers
+# the payload node (HERMES_NODE) and this venv (HERMES_PYTHON) so they
+# never fall back to PATH lookups the phone cannot satisfy.
+HERMES_NODE="$self_dir/../node$PREFIX/bin/node"
+HERMES_PYTHON="$self_dir/../venv/bin/python"
+export HERMES_NODE HERMES_PYTHON
 exec "$self_dir/../venv/bin/python" -m hermes_cli.acp "$@"
 EOF
 chmod 755 "$PAYLOAD_ABS/bin/hermes" "$PAYLOAD_ABS/bin/hermes-agent" "$PAYLOAD_ABS/bin/hermes-acp"
@@ -360,7 +381,13 @@ PYTHONPATH="$PREFIX/lib/hermes-agent/app" \
 echo "--- bundled node ---"
 LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/runtime-libs/lib" \
 "$PREFIX/lib/hermes-agent/node$PREFIX/bin/node" --version
-echo "--- install method (must be apt) ---"
+# The deb ships the prebuilt TUI: the bundle must be present in the
+# installed tree and parseable by the payload node (hermes --tui runs
+# it directly; there is no npm on-device to rebuild it).
+TUI="$PREFIX/lib/hermes-agent/app/hermes_cli/tui_dist/entry.js"
+test -f "$TUI" || { echo "FAIL: prebuilt TUI bundle missing from the deb"; exit 1; }
+LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/runtime-libs/lib" \
+"$PREFIX/lib/hermes-agent/node$PREFIX/bin/node" --check "$TUI"echo "--- install method (must be apt) ---"
 LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib:$PREFIX/lib/hermes-agent/runtime-libs/lib" \
 PYTHONPATH="$PREFIX/lib/hermes-agent/app" "$PREFIX/lib/hermes-agent/venv/bin/python" -c 'import hermes_cli.config as c; m = c.detect_install_method(); print("install method:", m); exit(0 if m == "apt" else 1)'
 echo "--- hermes update (must refuse with pkg remediation) ---"

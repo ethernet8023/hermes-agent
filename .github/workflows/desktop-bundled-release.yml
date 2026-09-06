@@ -711,6 +711,19 @@ jobs:
             termux-build/payload/SHA256SUMS
           key: termux-wheelhouse-${{ hashFiles('uv.lock', 'scripts/termux/build_wheels.py', 'scripts/termux/termux_build.sh') }}
 
+      - name: Build the TUI bundle for the deb
+        shell: bash
+        # The deb ships the PREBUILT TUI (hermes --tui runs it directly via
+        # the payload node; there is no npm on a phone). Same shape as the
+        # desktop payload: git archive never carries built dists, so plant
+        # the just-built entry.js into the staged app tree.
+        run: |
+          npm ci --workspace ui-tui --include=dev --no-fund --no-audit --silent
+          npm run build --workspace ui-tui
+          test -f ui-tui/dist/entry.js
+          mkdir -p termux-build/payload/app/hermes_cli/tui_dist
+          cp ui-tui/dist/entry.js termux-build/payload/app/hermes_cli/tui_dist/entry.js
+
       - name: Assemble the .deb
         shell: bash
         env:

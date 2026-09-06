@@ -387,7 +387,8 @@ LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/runtime-libs/lib" \
 TUI="$PREFIX/lib/hermes-agent/app/hermes_cli/tui_dist/entry.js"
 test -f "$TUI" || { echo "FAIL: prebuilt TUI bundle missing from the deb"; exit 1; }
 LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/runtime-libs/lib" \
-"$PREFIX/lib/hermes-agent/node$PREFIX/bin/node" --check "$TUI"echo "--- install method (must be apt) ---"
+"$PREFIX/lib/hermes-agent/node$PREFIX/bin/node" --check "$TUI"
+echo "--- install method (must be apt) ---"
 LD_LIBRARY_PATH="$PREFIX/lib/hermes-agent/python$PREFIX/lib:$PREFIX/lib/hermes-agent/node$PREFIX/lib:$PREFIX/lib/hermes-agent/runtime-libs/lib" \
 PYTHONPATH="$PREFIX/lib/hermes-agent/app" "$PREFIX/lib/hermes-agent/venv/bin/python" -c 'import hermes_cli.config as c; m = c.detect_install_method(); print("install method:", m); exit(0 if m == "apt" else 1)'
 echo "--- hermes update (must refuse with pkg remediation) ---"

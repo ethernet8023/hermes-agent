@@ -149,7 +149,7 @@ function requiredEnv(name) {
   return value
 }
 
-function r2Headers(method, host, path, query, bodyHash, now, creds, contentType, contentLength) {
+function r2Headers(method, host, path, query, bodyHash, now, creds, contentType, contentLength, extraHeaders) {
   const headers = {
     host,
     'x-amz-date': now,
@@ -162,6 +162,9 @@ function r2Headers(method, host, path, query, bodyHash, now, creds, contentType,
   // Stream bodies (files >2GiB) need an explicit Content-Length — R2
   // rejects a bodyless-length PUT with 411 MissingContentLength.
   if (contentLength != null) headers['Content-Length'] = String(contentLength)
+  // Extra request headers (e.g. Range) join BEFORE signing so they are
+  // covered by SignedHeaders like every other header we send.
+  if (extraHeaders) Object.assign(headers, extraHeaders)
   headers.authorization = authHeader({
     method,
     host,
@@ -176,10 +179,10 @@ function r2Headers(method, host, path, query, bodyHash, now, creds, contentType,
   return headers
 }
 
-async function signedFetch(method, url, { body, bodyHash, creds, now, contentType, contentLength }) {
+async function signedFetch(method, url, { body, bodyHash, creds, now, contentType, contentLength, extraHeaders }) {
   const { host, pathname, search } = new URL(url)
   const query = search.replace(/^\?/, '')
-  const headers = r2Headers(method, host, pathname, query, bodyHash, now, creds, contentType, contentLength)
+  const headers = r2Headers(method, host, pathname, query, bodyHash, now, creds, contentType, contentLength, extraHeaders)
   const res = await fetch(url, {
     method,
     headers,
@@ -193,6 +196,12 @@ async function signedFetch(method, url, { body, bodyHash, creds, now, contentTyp
     if (text) console.error(text.slice(0, 2000))
   }
   return { res, text }
+}
+
+/** Signed ranged GET: HEAD responses lose content-length through some
+ * proxies; Content-Range on a 1-byte GET is the reliable size oracle. */
+async function signedFetchRange(method, url, rangeHeaders, creds, now) {
+  return signedFetch(method, url, { bodyHash: EMPTY_SHA, creds, now, extraHeaders: rangeHeaders })
 }
 
 async function retry(fn, tries = 3) {
@@ -361,13 +370,31 @@ async function putObject(creds, base, bucket, key, payload, now, contentType) {
     const { res, text } = await signedFetch('PUT', url, { body, bodyHash, contentLength: size, creds, now, contentType })
     if (!res.ok) throw new Error(`PUT ${key} -> ${res.status}${text ? `: ${text.slice(0, 300)}` : ''}`)
   })
-  const { res: headRes, text: headText } = await retry(async () => {
+  // HEAD can come back without content-length (intermediaries strip it on
+  // HEAD more readily than on ranged GETs). Fall back to a 1-byte ranged
+  // GET, whose Content-Range carries the authoritative total size.
+  const { res: headRes } = await retry(async () => {
     const r = await signedFetch('HEAD', url, { bodyHash: EMPTY_SHA, creds, now })
     if (!r.res.ok) throw new Error(`HEAD ${key} -> ${r.res.status}`)
     return r
   })
-  const remoteSize = headRes.headers.get('content-length')
-  if (remoteSize === null || String(remoteSize) !== String(size)) {
+  let remoteSize = headRes.headers.get('content-length')
+  if (remoteSize === null) {
+    const rangeHeaders = { range: 'bytes=0-0' }
+    const range = await retry(async () => {
+      const r = await signedFetchRange('GET', url, rangeHeaders, creds, now)
+      if (!r.res.ok) throw new Error(`GET range ${key} -> ${r.res.status}`)
+      return r
+    })
+    const contentRange = range.res.headers.get('content-range')
+    const total = contentRange ? contentRange.match(/bytes 0-0\/(\d+)/) : null
+    if (!total) {
+      console.error(`::error::R2 ${key}: could not determine remote size (HEAD had no content-length, ranged GET had no content-range: ${contentRange})`)
+      process.exit(1)
+    }
+    remoteSize = total[1]
+  }
+  if (String(remoteSize) !== String(size)) {
     console.error(`::error::R2 HEAD ${key}: size mismatch (remote ${remoteSize}, local ${size})`)
     process.exit(1)
   }

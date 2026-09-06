@@ -6,7 +6,7 @@ and copies .debs into pool/<first-char>/.
 
 Usage:
   python stage_apt_repo.py --pool POOL_DIR --out OUT_DIR \
-      --suite hermes-stable|hermes-nightly [--gpg-key-file PATH]
+      --suite hermes-stable|hermes-canary [--gpg-key-file PATH]
 
 Exit codes:
   0 - success
@@ -258,7 +258,7 @@ def stage(pool_dir: Path, out_dir: Path, suite: str, gpg_key_file: Path | None) 
             }
         )
 
-    # Packages sorted by version, nightly (~) below stable
+    # Packages sorted by version, canary (~) below stable
     stanzas.sort(
         key=lambda s: (s["Package"], deb_version_key(s["Version"]))
     )
@@ -362,7 +362,7 @@ def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stage a static APT repo layout.")
     ap.add_argument("--pool", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
-    ap.add_argument("--suite", required=True, choices=["hermes-stable", "hermes-nightly"])
+    ap.add_argument("--suite", required=True, choices=["hermes-stable", "hermes-canary"])
     ap.add_argument("--gpg-key-file", type=Path, default=None)
     args = ap.parse_args(argv)
 

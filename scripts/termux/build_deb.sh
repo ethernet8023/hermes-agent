@@ -6,7 +6,7 @@
 #
 # Inputs (all required):
 #   --repo <dir>          hermes-agent checkout (tag must exist; provenance)
-#   --tag <tag>           immutable release tag (vX.Y.Z or vX.Y.Z-nightly.<ts>)
+#   --tag <tag>           immutable release tag (vX.Y.Z or vX.Y.Z-canary.<ts>)
 #   --payload <dir>       dir containing python/, node/, app/ (git archive of
 #                         the tag) and wheelhouse/ (from termux_build.sh)
 #   --out <dir>           output dir; <out>/hermes-agent_<v>_aarch64.deb lands here

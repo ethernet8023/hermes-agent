@@ -6,7 +6,7 @@ tests/test_termux_deb_version.py (Task 4 of .hermes/plans/2026-08-31_termux-deb.
 
 Mapping:
     v1.2.3                     -> 1.2.3-1
-    v1.2.3-nightly.2026083112  -> 1.2.3~nightly.2026083112-1
+    v1.2.3-canary.2026083112  -> 1.2.3~canary.2026083112-1
 
 The ``~`` ranks the nightly below the corresponding stable in dpkg's version
 ordering. The major version is capped at 3 digits (CalVer-style cap): a tag
@@ -23,13 +23,13 @@ from __future__ import annotations
 import re
 import sys
 
-# The nightly timestamp shape MUST match the canonical _NIGHTLY_TAG_RE in
+# The canary timestamp shape MUST match the canonical _CANARY_TAG_RE in
 # hermes_cli/update_channel.py (exactly 8 or 14 digits, 20-prefixed) and
 # channelForTag in scripts/r2-release.mjs. Cross-referenced by
-# tests/test_termux_deb_version.py::test_nightly_tag_shape_matches_canonical.
+# tests/test_termux_deb_version.py::test_canary_tag_shape_matches_canonical.
 _TAG_RE = re.compile(
-    r"^v(?P<major>\d{1,3})\.(?P<minor>\d{1,3})\.(?P<patch>\d{1,3})"
-    r"(?:-nightly\.(?P<ts>20\d{6}(?:\d{6})?))?$"
+    r"^v(?P<major>0|[1-9]\d{0,2})\.(?P<minor>\d+)\.(?P<patch>\d+)"
+    r"(?:-canary\.(?P<ts>20\d{6}(?:\d{6})?))?$"
 )
 
 
@@ -38,7 +38,7 @@ def _match_tag(tag: str) -> re.Match[str]:
     if m is None:
         raise ValueError(
             f"malformed release tag {tag!r}: expected v<MAJOR>.<MINOR>.<PATCH> "
-            "or v<MAJOR>.<MINOR>.<PATCH>-nightly.<timestamp>"
+            "or v<MAJOR>.<MINOR>.<PATCH>-canary.<timestamp>"
         )
     return m
 
@@ -50,18 +50,18 @@ def deb_version_for_tag(tag: str) -> str:
     ts = m.group("ts")
     if ts is None:
         return f"{base}-1"
-    return f"{base}~nightly.{ts}-1"
+    return f"{base}~canary.{ts}-1"
 
 
 def channel_for_tag(tag: str) -> str:
-    """Map a release tag to its channel: 'nightly' or 'stable'.
+    """Map a release tag to its channel: 'canary' or 'stable'.
 
     Derived from the same _TAG_RE as deb_version_for_tag, so the two can never
-    drift: a tag that yields a '~nightly' deb version is nightly, and the
+    drift: a tag that yields a '~canary' deb version is canary, and the
     malformed-tag rejection is identical.
     """
     m = _match_tag(tag)
-    return "nightly" if m.group("ts") is not None else "stable"
+    return "canary" if m.group("ts") is not None else "stable"
 
 
 def main(argv: list[str]) -> int:

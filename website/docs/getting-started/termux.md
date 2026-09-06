@@ -39,17 +39,17 @@ Termux shell immediately after install.
 
 ### Installing step by step
 
-For the **nightly** channel (aarch64 devices):
+For the **canary** channel (aarch64 devices):
 
 ```bash
 # 1. Import the repository signing key (published by the repo itself).
 mkdir -p $PREFIX/etc/apt/keyrings
 curl -fsSL \
-  https://hermes-assets.nousresearch.com/releases/termux/nightly/key.asc \
+  https://hermes-assets.nousresearch.com/releases/termux/canary/key.asc \
   -o $PREFIX/etc/apt/keyrings/hermes-agent.asc
 
 # 2. Add the repository.
-echo "deb [signed-by=$PREFIX/etc/apt/keyrings/hermes-agent.asc] https://hermes-assets.nousresearch.com/releases/termux/nightly hermes-nightly main" \
+echo "deb [signed-by=$PREFIX/etc/apt/keyrings/hermes-agent.asc] https://hermes-assets.nousresearch.com/releases/termux/canary hermes-canary main" \
   > $PREFIX/etc/apt/sources.list.d/hermes-agent.list
 
 # 3. Install.
@@ -57,7 +57,7 @@ pkg update
 pkg install hermes-agent
 ```
 
-For the **stable** channel, use `stable` in place of `nightly` in both URLs
+For the **stable** channel, use `stable` in place of `canary` in both URLs
 (and the suite name `hermes-stable` in the `deb` line).
 
 :::tip Verify the key by fingerprint first
@@ -87,10 +87,10 @@ and is separate from the package.
 Two channels are published, mirroring the desktop release channels:
 
 - **stable** - tagged releases.
-- **nightly** - built from the latest development state.
+- **canary** - built from the latest development state.
 
 Point the repository `sources.list` entry at the channel you want
-(`hermes-stable` or `hermes-nightly` distribution). Version strings for
+(`hermes-stable` or `hermes-canary` distribution). Version strings for
 nightlies sort below stable, so switching back to stable always upgrades.
 
 ## Updating

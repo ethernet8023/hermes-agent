@@ -70,7 +70,7 @@ def test_stages_xz_control_deb(tmp_path):
     make_deb(pool / "hermes-agent_1.0-1_aarch64.deb", "hermes-agent", "1.0-1", compression="xz")
     out = tmp_path / "out"
     out.mkdir()
-    rc = stage_apt_repo.stage(pool, out, "hermes-nightly", None)
+    rc = stage_apt_repo.stage(pool, out, "hermes-canary", None)
     assert rc == 3  # unsigned (no gpg key file) but staged
 
 
@@ -83,13 +83,13 @@ def test_control_field_extraction(tmp_path):
     assert fields["Architecture"] == "aarch64"
 
 
-def test_nightly_versions_below_stable():
-    versions = ["1.2.3-1", "1.2.3~nightly.20260831120000-1", "1.2.4~nightly.1-1", "1.2.4-1"]
+def test_canary_versions_below_stable():
+    versions = ["1.2.3-1", "1.2.3~canary.20260831120000-1", "1.2.4~canary.1-1", "1.2.4-1"]
     ordered = sorted(versions, key=stage_apt_repo.deb_version_key)
     assert ordered == [
-        "1.2.3~nightly.20260831120000-1",
+        "1.2.3~canary.20260831120000-1",
         "1.2.3-1",
-        "1.2.4~nightly.1-1",
+        "1.2.4~canary.1-1",
         "1.2.4-1",
     ]
 
@@ -167,12 +167,12 @@ def test_unsigned_release_exit_3_without_gpg(tmp_path, no_gpg):
     make_deb(pool / "hermes-agent_1.2.3-1_aarch64.deb", "hermes-agent", "1.2.3-1")
     out = tmp_path / "repo"
     code = stage_apt_repo.main(
-        ["--pool", str(pool), "--out", str(out), "--suite", "hermes-nightly"]
+        ["--pool", str(pool), "--out", str(out), "--suite", "hermes-canary"]
     )
     assert code == 3
-    assert (out / "dists" / "hermes-nightly" / "Release").exists()
-    assert not (out / "dists" / "hermes-nightly" / "InRelease").exists()
-    assert not (out / "dists" / "hermes-nightly" / "Release.gpg").exists()
+    assert (out / "dists" / "hermes-canary" / "Release").exists()
+    assert not (out / "dists" / "hermes-canary" / "InRelease").exists()
+    assert not (out / "dists" / "hermes-canary" / "Release.gpg").exists()
 
 
 def test_signing_invoked_when_gpg_and_key_present(tmp_path, monkeypatch):

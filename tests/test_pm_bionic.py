@@ -40,26 +40,37 @@ def test_all_targets_includes_bionic():
     assert ALL_TARGETS.count("linux-arm64-bionic") == 1
 
 
+def _assert_pinned_bionic_row(lock, pkg, url_suffix_re):
+    """The bionic rows are DELIBERATE explicit pins: the version axis follows
+    main (the desktop artifacts), while the termux/TUR suppliers rotate or
+    lag, so the bionic row pins whatever the supplier actually ships today.
+    The stage path consumes the row's url+sha256 directly. The contract:
+    the row exists, is https, matches the supplier's filename shape, and
+    fetch_url AGREES with the pinned row for this target."""
+    import re as _re
+
+    row = lock["packages"][pkg]["artifacts"].get("linux-arm64-bionic")
+    assert row, f"{pkg} has no linux-arm64-bionic artifact"
+    assert row["url"].startswith("https://"), f"{pkg} bionic row not https"
+    m = _re.search(url_suffix_re, row["url"])
+    assert m, f"{pkg} bionic url shape: {row['url']}"
+    assert _re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
+    from pm.registry import get_package
+
+    cls = get_package(pkg)
+    # fetch_url must reproduce the pinned row exactly for this target
+    # (the pinned version is recovered from the URL itself).
+    assert cls.fetch_url(m.group("ver"), "linux-arm64-bionic") == row["url"]
+
+
 def test_python_bionic_row_matches_supplier(lock):
-    """The python bionic row must agree with the lock version key and the
-    TUR .deb naming convention (python3.11_<version>_aarch64.deb)."""
-    row = lock["packages"]["python"]["artifacts"].get("linux-arm64-bionic")
-    assert row, "python has no linux-arm64-bionic artifact"
-    version = lock["packages"]["python"]["version"].partition("+")[0]
-    assert row["url"] == f"https://tur.kcubeterm.com/pool/tur/python3.11_{version}_aarch64.deb"
-    assert len(row["sha256"]) == 64
-
-
+    """The python bionic row is an explicit pin of the TUR .deb; the row and
+    Python.fetch_url(bionic arm) must agree on the same pinned artifact."""
+    _assert_pinned_bionic_row(lock, "python", r"python3\.11_(?P<ver>[0-9.]+)_aarch64\.deb$")
 def test_node_bionic_row_matches_supplier(lock):
-    """The node bionic row must agree with the lock version key and the
-    termux nodejs .deb naming convention (nodejs_<version>-1)."""
-    row = lock["packages"]["node"]["artifacts"].get("linux-arm64-bionic")
-    assert row, "node has no linux-arm64-bionic artifact"
-    version = lock["packages"]["node"]["version"]
-    assert row["url"].endswith(f"/nodejs/nodejs_{version}-1_aarch64.deb")
-    assert len(row["sha256"]) == 64
-
-
+    """The node bionic row is an explicit pin of the termux-main nodejs .deb;
+    the row and Nodejs.fetch_url(bionic arm) must agree."""
+    _assert_pinned_bionic_row(lock, "node", r"nodejs_(?P<ver>[0-9.]+)-1_aarch64\.deb$")
 def test_termux_docker_row_pins_digest(lock):
     row = lock["packages"]["termux-docker"]["artifacts"]["linux-arm64-bionic"]
     version = lock["packages"]["termux-docker"]["version"]
@@ -83,15 +94,9 @@ def test_bionic_fetch_urls_resolve():
 
 
 def test_uv_bionic_row_matches_supplier(lock):
-    """The uv bionic row must agree with the lock version and the termux-main
-    pool naming convention (uv_<version>_aarch64.deb)."""
-    row = lock["packages"]["uv"]["artifacts"].get("linux-arm64-bionic")
-    assert row, "uv has no linux-arm64-bionic artifact"
-    version = lock["packages"]["uv"]["version"]
-    assert row["url"].endswith(f"/u/uv/uv_{version}_aarch64.deb")
-    assert len(row["sha256"]) == 64
-
-
+    """The uv bionic row is an explicit pin of the termux-main pool .deb;
+    the row and Uv.fetch_url(bionic arm) must agree."""
+    _assert_pinned_bionic_row(lock, "uv", r"/u/uv/uv_(?P<ver>[0-9.]+)_aarch64\.deb$")
 def _build_fake_deb(path: Path, control: dict[str, str], files: dict[str, bytes]) -> None:
     def ar_member(name: str, data: bytes) -> bytes:
         hdr = (

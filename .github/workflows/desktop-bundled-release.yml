@@ -79,6 +79,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
   id-token: write
 
 concurrency:
@@ -784,6 +785,274 @@ jobs:
         shell: bash
         run: echo "::notice::macOS updater feed publish is disabled for now — no macOS updater arm; re-enable with r2-release.mjs finalize when the darwin updater returns"
 
+  termux-deb:
+    name: Build + publish the termux .deb (aarch64)
+    needs: [validate]
+    if: inputs.upload_release == true
+    runs-on: ubuntu-24.04-arm
+    environment: release-signing
+    timeout-minutes: 90
+    env:
+      HERMES_PAYLOAD_TAG: ${{ inputs.tag }}
+      # termux_build.sh gates on `gh release view <tag>` (refuse to build
+      # before the release exists); gh needs GH_TOKEN or it errors out and
+      # the gate misreads that as "release not found".
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_R2_ACCOUNT_ID }}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_R2_BUCKET: ${{ vars.CLOUDFLARE_R2_BUCKET }}
+      CLOUDFLARE_R2_PUBLIC_URL: ${{ vars.CLOUDFLARE_R2_PUBLIC_URL }}
+    steps:
+      # Full checkout: build_deb.sh verifies the tag in-repo and assembles the
+      # .deb from the checkout's app/ tree — a sparse tree would ship a
+      # partial payload.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-tags: true
+
+      - name: Resolve toolchain pins from pm/lock.json
+        id: toolchain_pins
+        shell: bash
+        # Same pin table as the desktop legs: the uv that drives the
+        # wheelhouse resolution is the pinned toolchain uv, not whatever
+        # happens to be on the runner image.
+        run: |
+          python -c '
+          import json
+          pkgs = json.load(open("pm/lock.json"))["packages"]
+          print("uv=" + pkgs["uv"]["version"])
+          ' >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # 9.0.0
+        with:
+          version: ${{ steps.toolchain_pins.outputs.uv }}
+          enable-cache: false
+
+      - name: Derive the channel from the tag
+        id: channel
+        shell: bash
+        # Single source of truth: deb_version.py --channel uses the same
+        # _TAG_RE as the Debian version derivation, so the channel and the
+        # .deb version can never disagree about the tag's shape.
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "channel=$(python3 scripts/termux/deb_version.py --channel "$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: Read the termux-docker digest pin
+        id: pins
+        shell: bash
+        # The digest is pinned in pm/lock.json (the termux-docker package)
+        # beside every other third-party pin; the build scripts re-read it
+        # themselves. This step surfaces the effective pin in the run log
+        # and fails fast if the lock row is missing.
+        run: |
+          echo "digest=$(python3 -c '
+          import sys; sys.path.insert(0, ".")
+          from pm.lock import Lockfile
+          from pm.paths import lockfile_path
+          print(Lockfile(lockfile_path()).version("termux-docker"))
+          ')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the CPython + node + uv payload builds
+        # Restore/save are split: the save runs right after staging (with
+        # `always()`), so a later phase's failure cannot throw away 20+
+        # minutes of builds. The exact key is content-only on pm/lock.json +
+        # the stagers, so it is stable across dispatches; the restore-keys
+        # prefix rescues the previous pin's builds when the lock moved.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            termux-build/payload/python
+            termux-build/payload/node
+            termux-build/payload/uv
+            termux-build/payload/runtime-libs
+          key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_cpython.sh', 'scripts/termux/build_node.sh', 'scripts/termux/build_uv.sh', 'scripts/termux/runtime_libs.json', 'scripts/termux/stage_runtime_libs.py') }}
+          restore-keys: |
+            termux-payload-
+
+      - name: Build CPython into the payload
+        shell: bash
+        run: bash scripts/termux/build_cpython.sh termux-build/payload
+
+      - name: Build node into the payload
+        shell: bash
+        run: bash scripts/termux/build_node.sh termux-build/payload
+
+      - name: Stage the runtime libs into the payload
+        shell: bash
+        # The payload interpreters' runtime libs (python's C-extension deps,
+        # node's, uv's zstd) ship INSIDE the sealed deb: the device's termux
+        # tree may have none of them installed. Pin table derived from the
+        # suppliers' own Depends metadata (see runtime_libs.json).
+        run: python3 scripts/termux/stage_runtime_libs.py termux-build/payload
+
+      - name: Stage uv into the payload
+        shell: bash
+        # The wheelhouse resolver + runtime lazy-install tool: pm stages
+        # the bionic uv .deb beside python/node (no PATH install; the
+        # payload env composition exposes it, desktop payload model).
+        run: bash scripts/termux/build_uv.sh termux-build/payload
+
+
+      - name: Save the payload builds
+        # Save regardless of the wheelhouse/deb phases' outcome: the staged
+        # tool payload is only stale when the lock or a stager changes, and
+        # losing it to a downstream failure re-pays the full stage cost.
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            termux-build/payload/python
+            termux-build/payload/node
+            termux-build/payload/uv
+            termux-build/payload/runtime-libs
+          key: termux-payload-${{ hashFiles('pm/lock.json', 'scripts/termux/build_cpython.sh', 'scripts/termux/build_node.sh', 'scripts/termux/build_uv.sh', 'scripts/termux/runtime_libs.json', 'scripts/termux/stage_runtime_libs.py') }}
+
+      - name: Ensure the derived builder image (toolchain pre-baked)
+        id: builder_image
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        # Content-addressed off the pm lock digest: builds once per lock
+        # bump, then no-ops. The wheelhouse container phase boots this
+        # instead of the bare base, skipping the ~10-min toolchain apt.
+        run: |
+          mkdir -p termux-build
+          # The builder script prints progress (build logs, smoke output)
+          # plus the image ref on the LAST line -- command substitution
+          # would swallow all of it into one $GITHUB_OUTPUT value.
+          bash scripts/termux/build_builder_image.sh | tee termux-build/.builder-image.log
+          img="$(tail -n1 termux-build/.builder-image.log)"
+          echo "builder image: $img"
+          echo "image=$img" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the wheelhouse
+        # The manufactured native wheels are the expensive artifact of this
+        # job. build_wheels.py skips any dist whose exact-pinned wheel is
+        # already present, so a restored wheelhouse turns the 20-minute
+        # native compile phase into a cache-hit verification.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            termux-build/payload/wheelhouse
+            termux-build/payload/index.json
+            termux-build/payload/SHA256SUMS
+            termux-build/payload/.work/resolved.txt
+          key: termux-wheelhouse-${{ hashFiles('uv.lock', 'scripts/termux/build_wheels.py', 'scripts/termux/termux_build.sh') }}
+          restore-keys: |
+            termux-wheelhouse-
+
+      - name: Build the wheelhouse
+        shell: bash
+        env:
+          TERMUX_BUILDER_IMAGE: ${{ steps.builder_image.outputs.image }}
+        # termux_build.sh lands wheelhouse/ + index.json + SHA256SUMS in the
+        # payload root, where build_deb.sh's --no-index pip install finds it.
+        run: |
+          bash scripts/termux/termux_build.sh \
+            --repo . \
+            --tag "$HERMES_PAYLOAD_TAG" \
+            --out termux-build/payload
+
+      - name: Save the wheelhouse
+        # Save even when the deb assembly/validation later fails: the gates
+        # have already proven the wheels by this point.
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            termux-build/payload/wheelhouse
+            termux-build/payload/index.json
+            termux-build/payload/SHA256SUMS
+            termux-build/payload/.work/resolved.txt
+          key: termux-wheelhouse-${{ hashFiles('uv.lock', 'scripts/termux/build_wheels.py', 'scripts/termux/termux_build.sh') }}
+
+      - name: Build the TUI bundle for the deb
+        shell: bash
+        # The deb ships the PREBUILT TUI (hermes --tui runs it directly via
+        # the payload node; there is no npm on a phone). Same shape as the
+        # desktop payload: git archive never carries built dists, so plant
+        # the just-built entry.js into the staged app tree.
+        run: |
+          npm ci --workspace ui-tui --include=dev --no-fund --no-audit --silent
+          npm run build --workspace ui-tui
+          test -f ui-tui/dist/entry.js
+          mkdir -p termux-build/payload/app/hermes_cli/tui_dist
+          cp ui-tui/dist/entry.js termux-build/payload/app/hermes_cli/tui_dist/entry.js
+
+      - name: Assemble the .deb
+        shell: bash
+        env:
+          TERMUX_BUILDER_IMAGE: ${{ steps.builder_image.outputs.image }}
+        # build_deb.sh always validates in a fresh pinned container (no
+        # opt-out flag); the channel is derived from the tag inside the
+        # script via deb_version.py.
+        run: |
+          bash scripts/termux/build_deb.sh \
+            --repo . \
+            --tag "$HERMES_PAYLOAD_TAG" \
+            --payload termux-build/payload \
+            --out termux-build/deb
+
+      - name: Upload the .deb as a workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          # Matches the publish jobs' download pattern hermes-bundled-* so
+          # the release leg's artifact sweep sees it.
+          name: hermes-bundled-termux-${{ inputs.tag }}
+          path: termux-build/deb/*.deb
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Write the APT signing key
+        shell: bash
+        env:
+          TERMUX_APT_GPG_KEY: ${{ secrets.TERMUX_APT_GPG_KEY }}
+        run: |
+          if [ -z "$TERMUX_APT_GPG_KEY" ]; then
+            echo "::error::TERMUX_APT_GPG_KEY secret not set — the APT repo would stage unsigned"
+            exit 1
+          fi
+          printf '%s\n' "$TERMUX_APT_GPG_KEY" > "$RUNNER_TEMP/termux-apt-gpg.asc"
+
+      - name: Stage the APT repo and publish to R2
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          # Passphrase-protected signing keys only; unset for bare keys.
+          TERMUX_APT_GPG_PASSPHRASE: ${{ secrets.TERMUX_APT_GPG_PASSPHRASE }}
+        run: |
+          # stage_apt_repo.py builds dists/<suite>/ + pool/ under --out and
+          # signs Release/InRelease with the key file. Exit 3 (unsigned
+          # Release) must fail the run.
+          python3 scripts/termux/stage_apt_repo.py \
+            --pool termux-build/deb \
+            --out termux-build/apt \
+            --suite "hermes-$CHANNEL" \
+            --gpg-key-file "$RUNNER_TEMP/termux-apt-gpg.asc"
+
+          # --key-is-full is MANDATORY on every feed-dir upload: without it
+          # r2-release.mjs re-prefixes the key into the tag archive
+          # (releases/tag/<tag>/) and the APT feed never lands at
+          # releases/termux/<channel>/.
+          shopt -s globstar nullglob
+          # cd into the staged repo for the glob, but resolve the r2 client
+          # absolutely first -- after the cd, scripts/ is no longer in the
+          # cwd and a bare `node scripts/r2-release.mjs` would ENOENT.
+          R2="$GITHUB_WORKSPACE/scripts/r2-release.mjs"
+          cd termux-build/apt
+          for f in **/*; do
+            [ -f "$f" ] || continue
+            node "$R2" put \
+              --tag "$HERMES_PAYLOAD_TAG" \
+              --key "releases/termux/$CHANNEL/$f" \
+              --file "$f" \
+              --key-is-full
+          done
   builds-pending:
     name: Mark the builds table as in progress
     if: inputs.upload_release == true
@@ -806,7 +1075,7 @@ jobs:
 
   builds-table:
     name: Render the release builds table
-    needs: [validate, build-win32, build-darwin, build-linux, publish-win32-updater, publish-darwin-updater]
+    needs: [validate, build-win32, build-darwin, build-linux, publish-win32-updater, publish-darwin-updater, termux-deb]
     if: inputs.upload_release == true
     runs-on: ubuntu-24.04
     environment: release-signing

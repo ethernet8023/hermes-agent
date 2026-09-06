@@ -265,6 +265,10 @@
           "sha256": "afc7a004018485092ac8985b817b0d5684472bd9472e0b57d2ab88737e50090d",
           "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-linux-arm64.tar.xz"
         },
+        "linux-arm64-bionic": {
+          "sha256": "eaf3ed8a6e4b72ebaa8c2cb3bad778c577cdf9ea87ca91761213d8a3940fc090",
+          "url": "https://packages.termux.dev/apt/termux-main/pool/main/n/nodejs/nodejs_26.4.0-1_aarch64.deb"
+        },
         "linux-x64": {
           "sha256": "982aa24dd8be4c889c6a8ab337ddff3b0896645b20f4239356e80552c16277ee",
           "url": "https://nodejs.org/dist/v26.7.0/node-v26.7.0-linux-x64.tar.xz"
@@ -302,6 +306,10 @@
         "linux-arm64": {
           "sha256": "9142c12dd3559eaac58a18d8905b99a293979d5e5a1b4fb5cf4cebbf82ef6f33",
           "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260814/cpython-3.11.16+20260814-aarch64-unknown-linux-gnu-install_only.tar.gz"
+        },
+        "linux-arm64-bionic": {
+          "sha256": "b927d1cbeacffb426d52e4860650caf9afd1945f85eaece26f37ae3327d5fa7c",
+          "url": "https://tur.kcubeterm.com/pool/tur/python3.11_3.11.15_aarch64.deb"
         },
         "linux-x64": {
           "sha256": "33994fad90145ba559ebbe8a18d69fa7e56653502f7ba14ba07199b52cde3775",
@@ -347,6 +355,14 @@
       },
       "version": "15.2.0"
     },
+    "termux-docker": {
+      "artifacts": {
+        "linux-arm64-bionic": {
+          "url": "docker://termux/termux-docker@sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303"
+        }
+      },
+      "version": "sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303"
+    },
     "uv": {
       "artifacts": {
         "darwin-arm64": {
@@ -360,6 +376,10 @@
         "linux-arm64": {
           "sha256": "bb66cb52e7b1823aed1183630d8d8e5c958840d584a4c55ec10a4cfc168dcca2",
           "url": "https://github.com/astral-sh/uv/releases/download/0.12.3/uv-aarch64-unknown-linux-gnu.tar.gz"
+        },
+        "linux-arm64-bionic": {
+          "sha256": "64f9ac688b399e7ad4fef8eb7f00000816cf7f6f5b957503e4c2485e6db2470e",
+          "url": "https://packages.termux.dev/apt/termux-main/pool/main/u/uv/uv_0.12.10_aarch64.deb"
         },
         "linux-x64": {
           "sha256": "600cf9a742aca00d292673b16b5acffaa7b8c269a364ad0c2e79498dcb1fe101",

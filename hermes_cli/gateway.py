@@ -6169,6 +6169,12 @@ def _cmd_migrate_legacy(args):
     remove_legacy_hermes_units(interactive=not yes, dry_run=dry_run)
 
 
+def _cmd_service(args):
+    """Windows SCM frontend (MSIX HermesGateway service): translate the SCM
+    protocol onto the payload launcher (sealed-install surface)."""
+    _windows_scm_service_command(getattr(args, "gateway_service_action", None))
+
+
 _GATEWAY_SUBCOMMANDS = {
     None: _cmd_run, "run": _cmd_run, "setup": _cmd_setup, "install": _cmd_install,
     "uninstall": _cmd_uninstall, "start": _cmd_start, "stop": _cmd_stop, "restart": _cmd_restart,
@@ -6391,9 +6397,4 @@ def _windows_scm_service_command(action: str | None) -> None:
         return
 
     print_error(f"Unknown service action: {action!r} (on|off|status)")
-
-def _cmd_service(args):
-    """Windows SCM frontend (MSIX HermesGateway service): translate the SCM
-    protocol onto the payload launcher (sealed-install surface)."""
-    _windows_scm_service_command(getattr(args, "gateway_service_action", None))
 

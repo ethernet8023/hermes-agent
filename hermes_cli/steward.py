@@ -29,6 +29,7 @@ BUILD_INFO_NAME = "install-stamp.json"
 STEWARD_DESKTOP = "desktop-app"
 STEWARD_DOCKER = "docker"
 STEWARD_NIX = "nix"
+STEWARD_APT_TERMUX = "apt-termux"
 
 # What `hermes update` says in a sealed tree, per steward — the refusal
 # table shared by the update admission gate. The fallback covers stewards
@@ -48,6 +49,20 @@ STEWARD_UPDATE_MESSAGES = {
         "The store path is immutable. Update through your flake:\n"
         "  nix flake update && rebuild your profile or system"
     ),
+    STEWARD_APT_TERMUX: (
+        "✗ This Hermes runs from a Termux APT package.\n"
+        "\n"
+        "The package manager owns the code tree. Update with:\n"
+        "  pkg upgrade hermes-agent"
+    ),
+}
+
+# What `hermes update` runs instead, per steward. Only stewards whose
+# remediation is a fixed command string live here; stewards whose command
+# derives elsewhere (nix, via ``recommended_update_command_for_method``)
+# stay out — their refusal text above already names the flake steps.
+STEWARD_UPDATE_COMMANDS = {
+    STEWARD_APT_TERMUX: "pkg upgrade hermes-agent",
 }
 
 _STEWARD_UPDATE_FALLBACK = (
@@ -71,6 +86,15 @@ _STEWARD_UNINSTALL_MESSAGES = {
         "\n"
         "There is no code to uninstall — remove the container and image:\n"
         "  docker rm <container> && docker rmi nousresearch/hermes-agent\n"
+        "\n" +
+        _STEWARD_DELETE_DATA_PREAMBLE +
+        _STEWARD_DELETE_DATA_CLI
+    ),
+    STEWARD_APT_TERMUX: (
+        "✗ This Hermes was installed by a Termux APT package.\n"
+        "\n"
+        "The package manager owns the code tree — uninstall it with:\n"
+        "  pkg uninstall hermes-agent\n"
         "\n" +
         _STEWARD_DELETE_DATA_PREAMBLE +
         _STEWARD_DELETE_DATA_CLI

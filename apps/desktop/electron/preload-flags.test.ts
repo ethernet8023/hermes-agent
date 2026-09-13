@@ -3,9 +3,9 @@ import { expect, it, vi } from 'vitest'
 const host = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
   send: vi.fn<(channel: string, line: string) => void>(),
-  sendSync: vi.fn((channel: string): unknown => channel === 'hermes:feature-flags'
-    ? { localModels: true, guestOnboarding: true, skipIntro: true }
-    : {})
+  sendSync: vi.fn((channel: string): unknown =>
+    channel === 'hermes:feature-flags' ? { localModels: true, guestOnboarding: true, skipIntro: true } : {}
+  )
 }))
 
 vi.mock('electron', () => ({

@@ -9,7 +9,6 @@ import { connectionScoped, profileScoped } from '@/api/client'
 import type {
   DesktopUpdateApplyOptions,
   DesktopUpdateApplyResult,
-
   DesktopUpdateProgress,
   DesktopUpdateStage,
   DesktopUpdateStatus,
@@ -220,7 +219,8 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, t
 
   // The package update owner reports availability without a commit SHA.
   // Git checks must still identify their target commit.
-  const hasTargetIdentity = Boolean(status.targetSha) || status.mechanism === 'app-installer' || status.mechanism === 'microsoft-store'
+  const hasTargetIdentity =
+    Boolean(status.targetSha) || status.mechanism === 'app-installer' || status.mechanism === 'microsoft-store'
 
   if (!hasTargetIdentity) {
     return
@@ -365,7 +365,9 @@ export async function refreshDesktopVersion(): Promise<DesktopVersionInfo | null
     const connection = $connection.get()
     const next = await window.hermesDesktop?.getVersion?.({ ...connectionScoped(), ...profileScoped() })
 
-    if ($connection.get() !== connection) { return null }
+    if ($connection.get() !== connection) {
+      return null
+    }
 
     if (next) {
       $desktopVersion.set(next)
@@ -540,7 +542,9 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
         setUpdateOverlayOpen(false)
         resetUpdateApplyState()
 
-        if (result.updateAvailable === false) { return result }
+        if (result.updateAvailable === false) {
+          return result
+        }
         notify({
           durationMs: 8000,
           id: UPDATE_TOAST_ID,

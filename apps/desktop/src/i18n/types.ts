@@ -56,7 +56,7 @@ export interface Translations {
     message: string
     copyUrl: string
     close: string
-  };
+  }
   connectors: {
     title: string
     connect: string

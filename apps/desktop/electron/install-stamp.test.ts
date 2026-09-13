@@ -46,6 +46,4 @@ describe('installShape', () => {
   test('a dev run (null stamp) is a checkout', () => {
     expect(installShape(null)).toBe('checkout')
   })
-
-
 })

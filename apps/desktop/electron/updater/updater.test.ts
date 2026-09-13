@@ -7,7 +7,14 @@ import { buildStampPayload } from '../../scripts/write-build-stamp.mjs'
 
 import { appInstallerCheckToStatus, parseCheckOutput } from './app-installer'
 import { buildManualUpdateCommand } from './checkout'
-import { type ConsumedRelaunch, consumePendingRelaunch, PENDING_RELAUNCH_FILENAME, registerUpdateRelaunch, type RelaunchRegistration, writePendingRelaunch } from './relaunch'
+import {
+  type ConsumedRelaunch,
+  consumePendingRelaunch,
+  PENDING_RELAUNCH_FILENAME,
+  registerUpdateRelaunch,
+  type RelaunchRegistration,
+  writePendingRelaunch
+} from './relaunch'
 
 import { resolveUpdaterMechanism } from './index'
 
@@ -15,8 +22,11 @@ describe('build stamp → update ownership', () => {
   const provenance = { commit: 'a'.repeat(40), branch: 'main', dirty: false, source: 'ci' }
 
   const runtime = {
-    repoDir: 'app', toolsDir: 'tools', storePython: 'tools/python/python',
-    sitePackages: 'deps', commands: { hermes: 'bin/hermes' }
+    repoDir: 'app',
+    toolsDir: 'tools',
+    storePython: 'tools/python/python',
+    sitePackages: 'deps',
+    commands: { hermes: 'bin/hermes' }
   }
 
   it.each([
@@ -39,8 +49,9 @@ describe('build stamp → update ownership', () => {
   })
 
   it.each(['win32', 'darwin', 'linux'] as const)('unstamped %s development uses source updates', platform => {
-    expect(resolveUpdaterMechanism({ platform, updateMechanism: undefined }))
-      .toBe(platform === 'win32' ? 'windows-handoff' : 'posix-handoff')
+    expect(resolveUpdaterMechanism({ platform, updateMechanism: undefined })).toBe(
+      platform === 'win32' ? 'windows-handoff' : 'posix-handoff'
+    )
   })
 })
 
@@ -73,7 +84,11 @@ describe('parseCheckOutput', () => {
       availability: 'Available',
       error: undefined
     })
-    expect(parseCheckOutput(0, '{"available": false}')).toEqual({ available: false, availability: undefined, error: undefined })
+    expect(parseCheckOutput(0, '{"available": false}')).toEqual({
+      available: false,
+      availability: undefined,
+      error: undefined
+    })
   })
 
   it('available null surfaces the checker error', () => {
@@ -112,18 +127,25 @@ describe('pending relaunch marker', () => {
 
     return {
       existsSync: (f: string) => has(f),
-      readFileSync: (f: string) => files[Object.keys(files).find(k => k.replace(/\\/g, '/') === f.replace(/\\/g, '/')) ?? f],
+      readFileSync: (f: string) =>
+        files[Object.keys(files).find(k => k.replace(/\\/g, '/') === f.replace(/\\/g, '/')) ?? f],
       unlinkSync: (f: string) => {
         const key = Object.keys(files).find(k => k.replace(/\\/g, '/') === f.replace(/\\/g, '/'))
 
-        if (key) {delete files[key]}
+        if (key) {
+          delete files[key]
+        }
       }
     }
   }
 
   it('write then consume on a different version = update relaunch', () => {
     const files: Record<string, string> = {}
-    expect(writePendingRelaunch({ getPath: (): string => '/home' }, '0.18.2', (f: string, c: string): void => { files[f] = c })).toBe(true)
+    expect(
+      writePendingRelaunch({ getPath: (): string => '/home' }, '0.18.2', (f: string, c: string): void => {
+        files[f] = c
+      })
+    ).toBe(true)
     expect(JSON.parse(Object.values(files)[0]).fromVersion).toBe('0.18.2')
 
     const r: ConsumedRelaunch = consumePendingRelaunch({ getPath: (): string => '/home' }, '0.18.3', fakeFs(files))
@@ -135,7 +157,9 @@ describe('pending relaunch marker', () => {
 
   it('same version = update never landed; marker consumed silently', () => {
     const files: Record<string, string> = {}
-    writePendingRelaunch({ getPath: (): string => '/home' }, '0.18.2', (f: string, c: string): void => { files[f] = c })
+    writePendingRelaunch({ getPath: (): string => '/home' }, '0.18.2', (f: string, c: string): void => {
+      files[f] = c
+    })
 
     const r: ConsumedRelaunch = consumePendingRelaunch({ getPath: (): string => '/home' }, '0.18.2', fakeFs(files))
     expect(r.wasUpdateRelaunch).toBe(false)
@@ -143,15 +167,21 @@ describe('pending relaunch marker', () => {
   })
 
   it('no marker = normal launch', () => {
-    expect(consumePendingRelaunch({ getPath: (): string => '/home' }, '0.18.3', fakeFs({})).wasUpdateRelaunch).toBe(false)
+    expect(consumePendingRelaunch({ getPath: (): string => '/home' }, '0.18.3', fakeFs({})).wasUpdateRelaunch).toBe(
+      false
+    )
   })
 
   it('corrupt marker is consumed and treated as unknown', () => {
     const files: Record<string, string> = {}
-    writePendingRelaunch({ getPath: (): string => '/home' }, '0.18.2', (f: string, c: string): void => { files[f] = c })
+    writePendingRelaunch({ getPath: (): string => '/home' }, '0.18.2', (f: string, c: string): void => {
+      files[f] = c
+    })
 
     // corrupt the contents under the same key
-    for (const k of Object.keys(files)) {files[k] = 'not json'}
+    for (const k of Object.keys(files)) {
+      files[k] = 'not json'
+    }
 
     const r: ConsumedRelaunch = consumePendingRelaunch({ getPath: (): string => '/home' }, '0.18.3', fakeFs(files))
     expect(r.wasUpdateRelaunch).toBe(false)
@@ -167,10 +197,16 @@ describe('registerUpdateRelaunch — the mechanism, not just the marker', () => 
     const ok: RelaunchRegistration = await registerUpdateRelaunch(
       { getPath: (): string => '/home' },
       '0.18.2',
-      { relaunch: () => { started += 1;
+      {
+        relaunch: () => {
+          started += 1
 
- return { cancel: async () => {} } } },
-      (f: string, c: string): void => { files[f] = c }
+          return { cancel: async () => {} }
+        }
+      },
+      (f: string, c: string): void => {
+        files[f] = c
+      }
     )
 
     expect(ok.automatic).toBe(true)
@@ -185,11 +221,12 @@ describe('registerUpdateRelaunch — the mechanism, not just the marker', () => 
       { getPath: (): string => '/home' },
       '0.18.2',
       { relaunch: async () => undefined },
-      (f: string, c: string): void => { files[f] = c }
+      (f: string, c: string): void => {
+        files[f] = c
+      }
     )
 
     expect(ok.automatic).toBe(false)
     expect(Object.keys(files)).toHaveLength(1)
   })
-
 })

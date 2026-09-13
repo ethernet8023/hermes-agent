@@ -106,8 +106,13 @@ describe('resolveVersionStatus', () => {
   })
 
   it('stable channel never names a branch (a stable checkout sits on a tag)', () => {
-    const tooltip = client({ behind: 1, branch: 'main', channel: 'stable', latestTag: 'v0.18.0', version: '0.4.2' })
-      .tooltip
+    const tooltip = client({
+      behind: 1,
+      branch: 'main',
+      channel: 'stable',
+      latestTag: 'v0.18.0',
+      version: '0.4.2'
+    }).tooltip
 
     expect(tooltip).not.toContain('main')
     expect(tooltip).toContain(`${copy.releaseAvailable('v0.18.0')}`)

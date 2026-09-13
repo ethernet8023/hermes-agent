@@ -59,7 +59,7 @@ export function runAppInstallerChecker(
     stdout: JSON.stringify({ available: null, error: `checker timed out after ${timeoutMs}ms` })
   })
 
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     let settled = false
 
     const finish = (result: AppInstallerCheckResult): void => {
@@ -79,7 +79,7 @@ export function runAppInstallerChecker(
     try {
       exec(
         python,
-        [script, ...deps.args ?? []],
+        [script, ...(deps.args ?? [])],
         { encoding: 'utf8', timeout: timeoutMs, windowsHide: true, env: deps.env },
         (error, stdout, stderr) => {
           if (stderr) {

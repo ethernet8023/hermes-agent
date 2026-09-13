@@ -711,7 +711,6 @@ export type RuntimeSource =
   | { type: 'system-python'; command: string } // pip-installed hermes_cli on system Python
   | { type: 'bootstrap' } // nothing usable yet; the first-launch installer runs
 
-
 export type DesktopUninstallMode = 'full' | 'gui' | 'lite'
 
 export interface DesktopUninstallSummary {
@@ -746,13 +745,7 @@ export interface DesktopUpdateCommit {
 }
 
 export type UpdaterMechanismClient =
-  | 'app-installer'
-  | 'electron-updater'
-  | 'external'
-  | 'microsoft-store'
-  | 'windows-handoff'
-  | 'posix-handoff'
-  | 'manual'
+  'app-installer' | 'electron-updater' | 'external' | 'microsoft-store' | 'windows-handoff' | 'posix-handoff' | 'manual'
 
 export interface DesktopUpdateStatus {
   supported: boolean
@@ -784,10 +777,8 @@ export interface DesktopUpdateStatus {
 
 export type DesktopUpdateDirtyStrategy = 'abort' | 'stash' | 'force'
 
-
 export interface DesktopUpdateApplyOptions {
   dirtyStrategy?: DesktopUpdateDirtyStrategy
-
 }
 
 export interface DesktopUpdateApplyResult {

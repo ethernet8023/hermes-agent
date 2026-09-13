@@ -152,7 +152,11 @@ describe('gateway version refresh', () => {
     setApiRequestProfile('work')
 
     const version: DesktopVersionInfo = {
-      appVersion: '4.5.6', electronVersion: '40', nodeVersion: '26', platform: 'win32', hermesRoot: ''
+      appVersion: '4.5.6',
+      electronVersion: '40',
+      nodeVersion: '26',
+      platform: 'win32',
+      hermesRoot: ''
     }
 
     const getVersion = vi.fn().mockResolvedValue(version)
@@ -164,7 +168,12 @@ describe('gateway version refresh', () => {
       expect(getVersion).toHaveBeenCalledWith({ connectionId: 'remote-box', profile: 'work' })
       expect($desktopVersion.get()?.appVersion).toBe('4.5.6')
       let finish!: (value: DesktopVersionInfo) => void
-      getVersion.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      getVersion.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            finish = resolve
+          })
+      )
       const pending = refreshDesktopVersion()
       setRemote(false)
       $desktopVersion.set(null)
@@ -214,10 +223,20 @@ describe('maybeNotifyUpdateAvailable', () => {
   })
 
   it('notifies for a Store update without a commit and never for an unknown check', () => {
-    maybeNotifyUpdateAvailable(status({ mechanism: 'microsoft-store', targetSha: undefined, behind: null, updateAvailable: true }))
+    maybeNotifyUpdateAvailable(
+      status({ mechanism: 'microsoft-store', targetSha: undefined, behind: null, updateAvailable: true })
+    )
     expect(notifySpy).toHaveBeenCalledTimes(1)
     notifySpy.mockClear()
-    maybeNotifyUpdateAvailable(status({ mechanism: 'microsoft-store', targetSha: undefined, behind: null, updateAvailable: false, error: 'Store unavailable' }))
+    maybeNotifyUpdateAvailable(
+      status({
+        mechanism: 'microsoft-store',
+        targetSha: undefined,
+        behind: null,
+        updateAvailable: false,
+        error: 'Store unavailable'
+      })
+    )
     expect(notifySpy).not.toHaveBeenCalled()
   })
 
@@ -932,7 +951,6 @@ describe('applyUpdates terminal state', () => {
     expect($updateApply.get().stage).toBe('error')
     expect($updateApply.get().error).toBe('rebuild-failed')
   })
-
 
   it('keeps the manual command state for CLI installs with no staged updater', async () => {
     applyMock.mockResolvedValue({ ok: true, manual: true, command: 'hermes update' })

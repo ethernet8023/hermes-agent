@@ -9,7 +9,8 @@ import { test } from 'vitest'
 import { canImportHermesCli } from './backend-probes'
 
 const REPO: string = path.resolve(import.meta.dirname, '../../..')
-const PYTHON: string = process.env.HERMES_PYTHON || process.env.UV_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+const PYTHON: string =
+  process.env.HERMES_PYTHON || process.env.UV_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
 
 interface RuntimeFixture {
   python: string
@@ -61,27 +62,44 @@ print(json.dumps({'python': str(python), 'site': str(site), 'dependencies': str(
 `
 
   try {
-    const fixture: RuntimeFixture = JSON.parse(execFileSync(PYTHON, ['-I', '-c', setup, REPO, temp], {
-      cwd: temp, env, encoding: 'utf8', timeout: 90_000, windowsHide: true
-    })) as RuntimeFixture
+    const fixture: RuntimeFixture = JSON.parse(
+      execFileSync(PYTHON, ['-I', '-c', setup, REPO, temp], {
+        cwd: temp,
+        env,
+        encoding: 'utf8',
+        timeout: 90_000,
+        windowsHide: true
+      })
+    ) as RuntimeFixture
 
     assert.equal(canImportHermesCli(fixture.python, { cwd: REPO, env }), true)
-    assert.equal(canImportHermesCli(fixture.python, {
-      cwd: REPO,
-      env: { ...env, PYTHONHOME: path.join(temp, 'foreign-home') }
-    }), true, 'Python home overrides must be scrubbed before the interpreter starts')
+    assert.equal(
+      canImportHermesCli(fixture.python, {
+        cwd: REPO,
+        env: { ...env, PYTHONHOME: path.join(temp, 'foreign-home') }
+      }),
+      true,
+      'Python home overrides must be scrubbed before the interpreter starts'
+    )
 
     fs.unlinkSync(path.join(fixture.site, 'selected-dependencies.pth'))
     const foreign: string = path.join(temp, 'foreign-packages')
     fs.symlinkSync(fixture.dependencies, foreign, process.platform === 'win32' ? 'junction' : 'dir')
-    assert.equal(canImportHermesCli(fixture.python, {
-      cwd: REPO,
-      env: { ...env, PYTHONPATH: foreign }
-    }), false, 'foreign dependencies must not conceal an empty selected environment')
-    assert.equal(canImportHermesCli(fixture.python, {
-      cwd: REPO,
-      env: { ...env, PYTHONHOME: path.join(temp, 'foreign-home') }
-    }), false)
+    assert.equal(
+      canImportHermesCli(fixture.python, {
+        cwd: REPO,
+        env: { ...env, PYTHONPATH: foreign }
+      }),
+      false,
+      'foreign dependencies must not conceal an empty selected environment'
+    )
+    assert.equal(
+      canImportHermesCli(fixture.python, {
+        cwd: REPO,
+        env: { ...env, PYTHONHOME: path.join(temp, 'foreign-home') }
+      }),
+      false
+    )
   } finally {
     fs.rmSync(temp, { recursive: true, force: true, maxRetries: 3 })
   }

@@ -159,10 +159,9 @@ describe('reapPackageRootedProcesses', () => {
   })
 
   it('reaps both roots in one pass when an install has both', () => {
-    const { outcome } = reap(
-      [proc(80, GPG_AGENT, DAEMON_CMDLINE), proc(81, STORE_NODE, `${STORE_NODE} daemon.js`)],
-      { installRoots: [ROOT, TOOLS_ROOT] }
-    )
+    const { outcome } = reap([proc(80, GPG_AGENT, DAEMON_CMDLINE), proc(81, STORE_NODE, `${STORE_NODE} daemon.js`)], {
+      installRoots: [ROOT, TOOLS_ROOT]
+    })
 
     expect(outcome.matched).toBe(1)
     expect(outcome.killed).toEqual([80])
@@ -265,10 +264,9 @@ describe('reapPackageRootedProcesses', () => {
   })
 
   it('skips pids the graceful backend teardown already owns', () => {
-    const { outcome } = reap(
-      [proc(30, MAIN_EXE, `${MAIN_EXE} --app`), proc(31, PAYLOAD_PYTHON, 'idle-python')],
-      { excludePids: [30] }
-    )
+    const { outcome } = reap([proc(30, MAIN_EXE, `${MAIN_EXE} --app`), proc(31, PAYLOAD_PYTHON, 'idle-python')], {
+      excludePids: [30]
+    })
 
     expect(outcome.killed).toEqual([])
   })
@@ -359,12 +357,7 @@ describe('listWindowsProcesses', () => {
   it('parses Win32_Process output (pid|parent|path|command line), mapping unreadable fields to null', () => {
     // The real shape: ExecutablePath / CommandLine are null for processes we
     // cannot open, so the script emits empty middle/tail fields.
-    const stdout = [
-      `48236|61728|${GPG_AGENT}|gpg-agent --daemon`,
-      `22660|4|${MAIN_EXE}|`,
-      '4|0||',
-      ''
-    ].join('\r\n')
+    const stdout = [`48236|61728|${GPG_AGENT}|gpg-agent --daemon`, `22660|4|${MAIN_EXE}|`, '4|0||', ''].join('\r\n')
 
     const parsed = listWindowsProcesses(() => stdout)
 

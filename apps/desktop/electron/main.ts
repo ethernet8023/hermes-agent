@@ -37,7 +37,11 @@ import { appIconCandidates, resolveAppIcon } from './app-icon'
 import { stageAppInstallerFile } from './app-installer-file'
 import { appVersionInfo, type AppVersionInfo, assertSourceUpdateChannel, packagedReleaseChannel } from './app-version'
 import { runAppInstallerChecker } from './appinstaller-checker'
-import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate, waitForBackendExit as waitForBackendExitImpl } from './backend-child'
+import {
+  stopBackendChild as stopBackendChildImpl,
+  stopBackendTreesForUpdate,
+  waitForBackendExit as waitForBackendExitImpl
+} from './backend-child'
 import {
   type BackendOutputTail,
   claimDecision,
@@ -426,13 +430,16 @@ import {
   stagedUpdaterSupportsPrewrittenMarker
 } from './updater-process'
 import { AppInstallerStrategy } from './updater/app-installer'
-import {
-  createCheckoutStrategy
-} from './updater/checkout'
+import { createCheckoutStrategy } from './updater/checkout'
 import { readSourceUpdate, type SourceUpdate } from './updater/checkout-source'
 import { ExternalStrategy } from './updater/external'
 import { createMacStrategy } from './updater/mac-client'
-import { type ConsumedRelaunch, consumePendingRelaunch, registerUpdateRelaunch, type RelaunchRegistration } from './updater/relaunch'
+import {
+  type ConsumedRelaunch,
+  consumePendingRelaunch,
+  registerUpdateRelaunch,
+  type RelaunchRegistration
+} from './updater/relaunch'
 import { startRelaunchWaiter } from './updater/relaunch-waiter'
 import { createStoreStrategy } from './updater/store-client'
 import { isHermesOwnedVenvDaemon } from './venv-holder-select'
@@ -456,11 +463,7 @@ import {
   MIN_WIDTH as WINDOW_MIN_WIDTH
 } from './window-state'
 import { hiddenWindowsChildOptions } from './windows-child-options'
-import {
-  buildPathExtCandidates,
-  chooseUpdaterArgs,
-  resolveVenvHermesCommand
-} from './windows-hermes-path'
+import { buildPathExtCandidates, chooseUpdaterArgs, resolveVenvHermesCommand } from './windows-hermes-path'
 import {
   connectWindowsRemote,
   detectRemotePlatform,
@@ -734,7 +737,6 @@ const HERMES_HOME: string = resolveDesktopHermesHome({
   directoryExists,
   readWindowsHome: (): string | null => readWindowsUserEnvVar('HERMES_HOME')
 })
-
 
 // ACTIVE_HERMES_ROOT — the canonical mutable Hermes install. Same path
 // install.ps1 / install.sh use, so a desktop-only user and a CLI-only user end
@@ -2998,7 +3000,9 @@ async function checkUpdates(opts: { force?: boolean } = {}): Promise<UpdaterStat
   try {
     strategy = resolvePackagedUpdateStrategy()
 
-    if (strategy) { return await strategy.check(opts) }
+    if (strategy) {
+      return await strategy.check(opts)
+    }
   } catch (error) {
     return {
       supported: true,
@@ -3045,9 +3049,13 @@ function resolvePackagedUpdateStrategy(): UpdaterStrategy | null {
     source: INSTALL_STAMP?.source
   })
 
-  if (mechanism === 'windows-handoff' || mechanism === 'posix-handoff') { return null }
+  if (mechanism === 'windows-handoff' || mechanism === 'posix-handoff') {
+    return null
+  }
 
-  if (packagedUpdateStrategy) { return packagedUpdateStrategy }
+  if (packagedUpdateStrategy) {
+    return packagedUpdateStrategy
+  }
 
   if (mechanism === 'electron-updater') {
     packagedUpdateStrategy = createMacStrategy({
@@ -3072,10 +3080,11 @@ function resolvePackagedUpdateStrategy(): UpdaterStrategy | null {
       // The checker ships inside the payload's repo snapshot (git archive of
       // the committed tree): <payload>/<repo>/apps/desktop/scripts/.
       script: path.join(payload.repoDir, 'apps', 'desktop', 'scripts', 'check-appinstaller-update.py'),
-      run: (python, script) => runAppInstallerChecker(python, script, {
-        env: { ...process.env, PYTHONPATH: payload.sitePackages },
-        onStderr: stderr => console.error(`[app-installer] checker stderr: ${stderr.slice(0, 400)}`)
-      }),
+      run: (python, script) =>
+        runAppInstallerChecker(python, script, {
+          env: { ...process.env, PYTHONPATH: payload.sitePackages },
+          onStderr: stderr => console.error(`[app-installer] checker stderr: ${stderr.slice(0, 400)}`)
+        }),
       channel: resolveUpdaterChannelFromStamp(),
       light: isLightVariant(),
       feedBaseUrl: resolveDesktopFeedBaseUrl(),
@@ -3103,13 +3112,7 @@ function resolvePackagedUpdateStrategy(): UpdaterStrategy | null {
               processId: process.pid,
               processStartTimeMs: Math.round(Date.now() - process.uptime() * 1000),
               identityName: PRODUCT_IDENTITY.msixAppIdWithOrg,
-              scriptPath: path.join(
-                payload.repoDir,
-                'apps',
-                'desktop',
-                'scripts',
-                'update-relaunch-waiter.ps1'
-              )
+              scriptPath: path.join(payload.repoDir, 'apps', 'desktop', 'scripts', 'update-relaunch-waiter.ps1')
             })
         })
     })
@@ -3130,15 +3133,17 @@ function resolvePackagedUpdateStrategy(): UpdaterStrategy | null {
       restore: restoreBundledBackend,
       emitProgress: emitUpdateProgress,
       quit: () => app.quit(),
-      registerPendingRelaunch: (fromVersion: string): Promise<RelaunchRegistration> => registerUpdateRelaunch(app, fromVersion, {
-        relaunch: () => startRelaunchWaiter({
-          processId: process.pid,
-          processStartTimeMs: Math.round(Date.now() - process.uptime() * 1000),
-          identityName: PRODUCT_IDENTITY.storeMsix!.identityName,
-          scriptPath: path.join(payload.repoDir, 'apps', 'desktop', 'scripts', 'update-relaunch-waiter.ps1'),
-          timeoutSeconds: 1860
+      registerPendingRelaunch: (fromVersion: string): Promise<RelaunchRegistration> =>
+        registerUpdateRelaunch(app, fromVersion, {
+          relaunch: () =>
+            startRelaunchWaiter({
+              processId: process.pid,
+              processStartTimeMs: Math.round(Date.now() - process.uptime() * 1000),
+              identityName: PRODUCT_IDENTITY.storeMsix!.identityName,
+              scriptPath: path.join(payload.repoDir, 'apps', 'desktop', 'scripts', 'update-relaunch-waiter.ps1'),
+              timeoutSeconds: 1860
+            })
         })
-      })
     })
 
     return packagedUpdateStrategy
@@ -3164,12 +3169,13 @@ function resolveCheckoutUpdateStrategy(): UpdaterStrategy {
     directoryExists,
     readCanonicalInstallStamp,
     readDesktopUpdateConfig,
-    readSourceUpdate: (updateRoot: string): Promise<SourceUpdate | null> => readSourceUpdate({
-      python: findPythonForRoot(updateRoot),
-      git: resolveGitBinary(),
-      updateRoot,
-      hermesHome: HERMES_HOME
-    }),
+    readSourceUpdate: (updateRoot: string): Promise<SourceUpdate | null> =>
+      readSourceUpdate({
+        python: findPythonForRoot(updateRoot),
+        git: resolveGitBinary(),
+        updateRoot,
+        hermesHome: HERMES_HOME
+      }),
     resolveUpdateRoot,
     resolveUpdaterBinary,
     resolveHealedBranch,
@@ -3203,10 +3209,14 @@ function resolveCheckoutUpdateStrategy(): UpdaterStrategy {
 function resolveDesktopFeedBaseUrl(): string {
   const configured = readUpdatesFeedBaseFromConfig()
 
-  if (configured) {return configured}
+  if (configured) {
+    return configured
+  }
   const env = process.env.HERMES_DESKTOP_FEED_BASE_URL
 
-  if (env) {return env}
+  if (env) {
+    return env
+  }
 
   return ''
 }
@@ -3216,11 +3226,15 @@ function readUpdatesFeedBaseFromConfig(): string {
   try {
     const configPath = path.join(HERMES_HOME, 'config.yaml')
 
-    if (!fileExists(configPath)) {return ''}
+    if (!fileExists(configPath)) {
+      return ''
+    }
     const raw = fs.readFileSync(configPath, 'utf8')
     const match = raw.match(/^\s*desktop_feed_base_url\s*:\s*(.+)\s*$/m)
 
-    if (!match) {return ''}
+    if (!match) {
+      return ''
+    }
     const value = match[1].trim().replace(/^['"]|['"]$/g, '')
 
     return value
@@ -3835,7 +3849,9 @@ async function applyUpdates(): Promise<UpdaterApplyResultWire> {
 
     return result
   } finally {
-    if (!handedOff) { updateInFlight = false }
+    if (!handedOff) {
+      updateInFlight = false
+    }
   }
 }
 
@@ -3886,10 +3902,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
     ? await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
     : configuredBranch || DEFAULT_UPDATE_BRANCH
 
-  const updaterArgs: string[] = chooseUpdaterArgs(
-    { runtimeUsable: isSourceRuntimeUsable(updateRoot) },
-    branch
-  )
+  const updaterArgs: string[] = chooseUpdaterArgs({ runtimeUsable: isSourceRuntimeUsable(updateRoot) }, branch)
 
   await stopBackendsForUpdate()
 
@@ -4101,7 +4114,11 @@ function activeRuntimeState(
   // update`, which moves HEAD legitimately. The marker only attests "a
   // desktop-managed bootstrap ran here at least once"; runtime usability is
   // what decides whether we can actually launch.
-  const state: ActiveRuntimeState = classifyActiveRuntime(readBootstrapMarker(), BOOTSTRAP_MARKER_SCHEMA_VERSION, backend !== null)
+  const state: ActiveRuntimeState = classifyActiveRuntime(
+    readBootstrapMarker(),
+    BOOTSTRAP_MARKER_SCHEMA_VERSION,
+    backend !== null
+  )
 
   // The canonical install stamp (written next to the runtime by the bootstrap)
   // tells the UI where this runtime came from. Prefer it over the marker so
@@ -4405,10 +4422,15 @@ function resolveHermesBackend(backendArgs: string[]): ResolvedHermesBackend {
 
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
-  const overrideRoot: string | undefined = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
+  const overrideRoot: string | undefined =
+    process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
 
   if (overrideRoot && isHermesSourceRoot(overrideRoot)) {
-    const backend: SourceBackend | null = createSourcePythonBackend(overrideRoot, findPythonForRoot(overrideRoot), backendArgs)
+    const backend: SourceBackend | null = createSourcePythonBackend(
+      overrideRoot,
+      findPythonForRoot(overrideRoot),
+      backendArgs
+    )
 
     if (backend) {
       return backend
@@ -4420,7 +4442,11 @@ function resolveHermesBackend(backendArgs: string[]): ResolvedHermesBackend {
   //    installed `hermes` on PATH so local Python edits are actually exercised.
   //    (In dev with no checkout, SOURCE_REPO_ROOT won't pass isHermesSourceRoot.)
   if (!IS_PACKAGED && isHermesSourceRoot(SOURCE_REPO_ROOT)) {
-    const backend: SourceBackend | null = createSourcePythonBackend(SOURCE_REPO_ROOT, findPythonForRoot(SOURCE_REPO_ROOT), backendArgs)
+    const backend: SourceBackend | null = createSourcePythonBackend(
+      SOURCE_REPO_ROOT,
+      findPythonForRoot(SOURCE_REPO_ROOT),
+      backendArgs
+    )
 
     if (backend) {
       return backend
@@ -4450,7 +4476,10 @@ function resolveHermesBackend(backendArgs: string[]): ResolvedHermesBackend {
         rememberLog(`Ignoring desktop app executable on PATH while resolving Hermes CLI: ${hermesCommand}`)
         hermesCommand = null
       } else {
-        const unwrapped: ReturnType<typeof unwrapWindowsVenvHermesCommand> = unwrapWindowsVenvHermesCommand(hermesCommand, backendArgs)
+        const unwrapped: ReturnType<typeof unwrapWindowsVenvHermesCommand> = unwrapWindowsVenvHermesCommand(
+          hermesCommand,
+          backendArgs
+        )
 
         if (unwrapped) {
           return unwrapped
@@ -4486,7 +4515,9 @@ function resolveHermesBackend(backendArgs: string[]): ResolvedHermesBackend {
   //    builds could leave a healthy install behind without the marker. If the
   //    active runtime is usable, launch it directly; only fall through to
   //    bootstrap when the runtime itself is unusable.
-  const activeBackend: SourceBackend | null = resolveSourceInstallationBackend(ACTIVE_HERMES_ROOT, backendArgs, { hermesHome: HERMES_HOME })
+  const activeBackend: SourceBackend | null = resolveSourceInstallationBackend(ACTIVE_HERMES_ROOT, backendArgs, {
+    hermesHome: HERMES_HOME
+  })
   const activeRuntime: ActiveRuntimeState = activeRuntimeState(activeBackend)
 
   if (activeBackend && !bootstrapRepairRequested) {
@@ -9748,23 +9779,25 @@ async function teardownSshConnection(profile) {
   // alone leaves the backend at pid 1 holding state.db (#91668).
   // Windows remotes use a different lifecycle (connectWindowsRemote) and
   // are left to a follow-up; POSIX is the leak that OOM'd gateways.
-  await sshTeardowns.track(state.ssh, (): Promise<void> => teardownSshState(
-    {
-      ...state,
-      ownershipId: state.ownershipId || sshOwnershipKey(profile)
-    },
-    {
-      cleanupRemote:
-        state.remotePlatform === 'Windows'
-          ? async () => {
-              // connectWindowsRemote does not share POSIX lock/kill. Stay
-              // silent on the kill path, but leave a log so quit is not a
-              // mysterious no-op on Windows remotes.
-              sshRememberLog('[ssh] skip remote serve teardown on Windows remotes; POSIX disconnect does not apply')
-            }
-          : remoteLifecycle.disconnect
-    }
-  ))
+  await sshTeardowns.track(state.ssh, (): Promise<void> =>
+    teardownSshState(
+      {
+        ...state,
+        ownershipId: state.ownershipId || sshOwnershipKey(profile)
+      },
+      {
+        cleanupRemote:
+          state.remotePlatform === 'Windows'
+            ? async () => {
+                // connectWindowsRemote does not share POSIX lock/kill. Stay
+                // silent on the kill path, but leave a log so quit is not a
+                // mysterious no-op on Windows remotes.
+                sshRememberLog('[ssh] skip remote serve teardown on Windows remotes; POSIX disconnect does not apply')
+              }
+            : remoteLifecycle.disconnect
+      }
+    )
+  )
 }
 
 // CRITICAL: this must mirror resolveRemoteBackend's precedence, not just return
@@ -10693,7 +10726,11 @@ function resetBootProgressForReconnect() {
 }
 
 function stopBackendChild(child: ChildProcess | null | undefined): void {
-  void localBackendLifecycle.stop(child).catch((error: unknown): void => rememberLog(`Backend teardown failed: ${error instanceof Error ? error.message : String(error)}`))
+  void localBackendLifecycle
+    .stop(child)
+    .catch((error: unknown): void =>
+      rememberLog(`Backend teardown failed: ${error instanceof Error ? error.message : String(error)}`)
+    )
 }
 
 // Soft gateway-mode apply: tear down the primary without resetting boot UI or
@@ -11923,7 +11960,9 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
     )
   }
 
-  const cancelRequest = (): void => { spawnRequest.cancel() }
+  const cancelRequest = (): void => {
+    spawnRequest.cancel()
+  }
   localBackendLifecycle.signal.addEventListener('abort', cancelRequest, { once: true })
 
   try {
@@ -11995,25 +12034,28 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
     backend.args,
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
-      env: desktopBackendSpawnEnv({
-        ...process.env,
-        HERMES_HOME,
-        ...backend.env,
-        // Pin the gateway's tool/terminal cwd to the same directory we chose for
-        // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
-        // can still point at the install dir even when spawn cwd is home.
-        TERMINAL_CWD: hermesCwd,
-        HERMES_DASHBOARD_SESSION_TOKEN: token,
-        // Marks this dashboard backend as desktop-spawned so it runs the cron
-        // scheduler tick loop (the gateway isn't running under the app).
-        HERMES_DESKTOP: '1',
-        // Exact parent identity lets the backend self-exit after an unclean
-        // Desktop death without mistaking a reused PID for its owner. If the
-        // optional marker probe fails, retain legacy PID-only tracking.
-        ...parentIdentityEnv,
-        HERMES_WEB_DIST: webDist,
-        ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
-      }, GUEST_ONBOARDING),
+      env: desktopBackendSpawnEnv(
+        {
+          ...process.env,
+          HERMES_HOME,
+          ...backend.env,
+          // Pin the gateway's tool/terminal cwd to the same directory we chose for
+          // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
+          // can still point at the install dir even when spawn cwd is home.
+          TERMINAL_CWD: hermesCwd,
+          HERMES_DASHBOARD_SESSION_TOKEN: token,
+          // Marks this dashboard backend as desktop-spawned so it runs the cron
+          // scheduler tick loop (the gateway isn't running under the app).
+          HERMES_DESKTOP: '1',
+          // Exact parent identity lets the backend self-exit after an unclean
+          // Desktop death without mistaking a reused PID for its owner. If the
+          // optional marker probe fails, retain legacy PID-only tracking.
+          ...parentIdentityEnv,
+          HERMES_WEB_DIST: webDist,
+          ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
+        },
+        GUEST_ONBOARDING
+      ),
       shell: backend.shell,
       stdio: ['ignore', 'pipe', 'pipe']
     })
@@ -12175,10 +12217,14 @@ function reapInstallRootedStragglers(excludePids: number[]): void {
   try {
     reapPackageRootedProcesses({
       installRoots: [payloadRoot],
-      listProcesses: () => listWindowsProcesses((file, args, options) => execFileSync(file, args, {
-        ...hiddenWindowsChildOptions({ encoding: 'utf8', timeout: options.timeout }),
-        windowsHide: options.windowsHide
-      }) as unknown as string),
+      listProcesses: () =>
+        listWindowsProcesses(
+          (file, args, options) =>
+            execFileSync(file, args, {
+              ...hiddenWindowsChildOptions({ encoding: 'utf8', timeout: options.timeout }),
+              windowsHide: options.windowsHide
+            }) as unknown as string
+        ),
       killProcess: pid => process.kill(pid, 'SIGKILL'),
       selfPid: process.pid,
       excludePids,
@@ -12210,10 +12256,14 @@ const quitTeardown = createQuitTeardownCoordinator((): void => app.quit())
 
 async function teardownSshForQuit(): Promise<void> {
   for (const scope of sshConnections.keys()) {
-    void teardownSshConnection(scope || null).catch((error: unknown): void => rememberLog(`SSH teardown failed: ${error instanceof Error ? error.message : String(error)}`))
+    void teardownSshConnection(scope || null).catch((error: unknown): void =>
+      rememberLog(`SSH teardown failed: ${error instanceof Error ? error.message : String(error)}`)
+    )
   }
 
-  await sshTeardowns.finish(sshBootstrapCoordinator.promises(), (): Promise<void> => sshBootstrapCoordinator.forceCleanupAll())
+  await sshTeardowns.finish(sshBootstrapCoordinator.promises(), (): Promise<void> =>
+    sshBootstrapCoordinator.forceCleanupAll()
+  )
 }
 
 async function exitAfterBackendShutdown(code) {
@@ -12465,30 +12515,33 @@ async function startHermes() {
       backend.args,
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
-        env: desktopBackendSpawnEnv({
-          ...process.env,
-          // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
-          // resolves to the SAME location our resolveHermesHome() picked. Without
-          // this pin, Python falls back to ~/.hermes on every platform — fine on
-          // mac/linux (where our default matches), but on Windows our default is
-          // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
-          // Mismatch would split config / sessions / .env / logs across two
-          // directories. install.ps1 sets HERMES_HOME via setx; the desktop
-          // can't reliably do that, so we set it inline for every spawn.
-          HERMES_HOME,
-          ...backend.env,
-          TERMINAL_CWD: hermesCwd,
-          HERMES_DASHBOARD_SESSION_TOKEN: token,
-          // Marks this dashboard backend as desktop-spawned so it runs the cron
-          // scheduler tick loop (the gateway isn't running under the app).
-          HERMES_DESKTOP: '1',
-          // Exact parent identity lets the backend self-exit after an unclean
-          // Desktop death without mistaking a reused PID for its owner. If the
-          // optional marker probe fails, retain legacy PID-only tracking.
-          ...parentIdentityEnv,
-          HERMES_WEB_DIST: webDist,
-          ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
-        }, GUEST_ONBOARDING),
+        env: desktopBackendSpawnEnv(
+          {
+            ...process.env,
+            // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
+            // resolves to the SAME location our resolveHermesHome() picked. Without
+            // this pin, Python falls back to ~/.hermes on every platform — fine on
+            // mac/linux (where our default matches), but on Windows our default is
+            // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
+            // Mismatch would split config / sessions / .env / logs across two
+            // directories. install.ps1 sets HERMES_HOME via setx; the desktop
+            // can't reliably do that, so we set it inline for every spawn.
+            HERMES_HOME,
+            ...backend.env,
+            TERMINAL_CWD: hermesCwd,
+            HERMES_DASHBOARD_SESSION_TOKEN: token,
+            // Marks this dashboard backend as desktop-spawned so it runs the cron
+            // scheduler tick loop (the gateway isn't running under the app).
+            HERMES_DESKTOP: '1',
+            // Exact parent identity lets the backend self-exit after an unclean
+            // Desktop death without mistaking a reused PID for its owner. If the
+            // optional marker probe fails, retain legacy PID-only tracking.
+            ...parentIdentityEnv,
+            HERMES_WEB_DIST: webDist,
+            ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
+          },
+          GUEST_ONBOARDING
+        ),
         shell: backend.shell,
         stdio: ['ignore', 'pipe', 'pipe']
       })
@@ -12519,13 +12572,18 @@ async function startHermes() {
     // surface as an unhandled rejection before the Promise.race below attaches.
     portAnnouncement.catch(() => {})
 
-    const processOwner = await backendConnectionState.claimProcess(connectionAttempt, hermesProcess, (child: ChildProcess): ReturnType<typeof claimBackendChild> => claimBackendChild(
-      child,
-      `${backend.command} ${backend.args.join(' ')}`,
-      profile,
-      backendNonce,
-      primaryOutputTail
-    ))
+    const processOwner = await backendConnectionState.claimProcess(
+      connectionAttempt,
+      hermesProcess,
+      (child: ChildProcess): ReturnType<typeof claimBackendChild> =>
+        claimBackendChild(
+          child,
+          `${backend.command} ${backend.args.join(' ')}`,
+          profile,
+          backendNonce,
+          primaryOutputTail
+        )
+    )
 
     if (!processOwner) {
       stopBackendChild(hermesProcess)
@@ -16234,7 +16292,9 @@ ipcMain.handle('hermes:api', async (_event, request) => {
 
 // Speech claims outlive instant cues so throttled peer windows cannot replay a reply.
 const ownsAmbientCue: ReturnType<typeof createAmbientClaimArbiter> = createAmbientClaimArbiter()
-ipcMain.handle('hermes:ambient:claim', (_event: IpcMainInvokeEvent, key: unknown): boolean => ownsAmbientCue(String(key ?? '')))
+ipcMain.handle('hermes:ambient:claim', (_event: IpcMainInvokeEvent, key: unknown): boolean =>
+  ownsAmbientCue(String(key ?? ''))
+)
 
 registerNativeNotifications({ getMainWindow: (): BrowserWindow | null => mainWindow, focusWindow })
 
@@ -17009,14 +17069,16 @@ const terminalIpc = registerTerminalIpc({
 
 const disposeTerminalSession = terminalIpc.disposeTerminalSession
 
-ipcMain.handle('hermes:updates:check', async (_event: Electron.IpcMainInvokeEvent, opts?: { force?: boolean }): Promise<UpdaterStatusWire> =>
-  checkUpdates({ force: Boolean(opts?.force) }).catch((error: Error): UpdaterStatusWire => ({
-    supported: true,
-    branch: readDesktopUpdateConfig().branch,
-    error: 'check-failed',
-    message: error?.message || String(error),
-    fetchedAt: Date.now()
-  }))
+ipcMain.handle(
+  'hermes:updates:check',
+  async (_event: Electron.IpcMainInvokeEvent, opts?: { force?: boolean }): Promise<UpdaterStatusWire> =>
+    checkUpdates({ force: Boolean(opts?.force) }).catch((error: Error): UpdaterStatusWire => ({
+      supported: true,
+      branch: readDesktopUpdateConfig().branch,
+      error: 'check-failed',
+      message: error?.message || String(error),
+      fetchedAt: Date.now()
+    }))
 )
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
@@ -17029,13 +17091,16 @@ ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
 
 ipcMain.handle('hermes:updates:branch:get', async () => readDesktopUpdateConfig())
 
-ipcMain.handle('hermes:updates:branch:set', async (_event: Electron.IpcMainInvokeEvent, name: unknown): Promise<{ branch: string }> => {
-  assertSourceUpdateChannel(INSTALL_STAMP)
-  const branch: string = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
-  writeDesktopUpdateConfig({ branch })
+ipcMain.handle(
+  'hermes:updates:branch:set',
+  async (_event: Electron.IpcMainInvokeEvent, name: unknown): Promise<{ branch: string }> => {
+    assertSourceUpdateChannel(INSTALL_STAMP)
+    const branch: string = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
+    writeDesktopUpdateConfig({ branch })
 
-  return { branch }
-})
+    return { branch }
+  }
+)
 
 function resolveHermesVersion(scope: { connectionId?: string; profile?: string } = {}): Promise<string> {
   return resolveGatewayVersion(path => handleHermesApiRequest({ ...scope, path, timeoutMs: 5000 }))
@@ -17065,9 +17130,7 @@ function showAboutPanelFresh(): void {
     const display: string = info.appVersion
     app.setAboutPanelOptions({
       applicationName: APP_NAME,
-      applicationVersion: skew.outOfSync
-        ? `${display} — app build out of date, update the desktop app`
-        : display,
+      applicationVersion: skew.outOfSync ? `${display} — app build out of date, update the desktop app` : display,
       copyright: 'Copyright © 2026 Nous Research'
     })
     app.showAboutPanel()
@@ -17122,12 +17185,7 @@ ipcMain.handle('hermes:app:relaunch', async () => {
  *  pm syncs (bisect disables, failed rebuilds), plugin update checks,
  *  and (embedded) updates. */
 function readLatestSyncReceipt(): Record<string, unknown> | null {
-  const receiptPath = path.join(
-    HERMES_HOME,
-    'logs',
-    'update_receipts',
-    'latest.json'
-  )
+  const receiptPath = path.join(HERMES_HOME, 'logs', 'update_receipts', 'latest.json')
 
   try {
     const text = fs.readFileSync(receiptPath, 'utf8')
@@ -17800,8 +17858,11 @@ app.on('before-quit', event => {
     shutdownPending: backendShutdown.isPending()
   })
 
-  const sshNeedsWait = sshConnections.size > 0 || sshBootstrapCoordinator.promises().length > 0 || sshTeardowns.hasPending()
-  const teardownTasks: QuitTeardownTask[] = [{ run: (): Promise<void> => backendShutdown.run(), waitForCompletion: backendNeedsWait }]
+  const sshNeedsWait =
+    sshConnections.size > 0 || sshBootstrapCoordinator.promises().length > 0 || sshTeardowns.hasPending()
+  const teardownTasks: QuitTeardownTask[] = [
+    { run: (): Promise<void> => backendShutdown.run(), waitForCompletion: backendNeedsWait }
+  ]
 
   if (sshNeedsWait) {
     teardownTasks.push({ run: teardownSshForQuit, waitForCompletion: true })

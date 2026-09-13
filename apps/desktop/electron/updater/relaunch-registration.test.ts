@@ -13,20 +13,33 @@ for (const automatic of [true, false]) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'relaunch-registration-'))
     const marker = path.join(home, PENDING_RELAUNCH_FILENAME)
     let resolveReady!: (handle: RelaunchWaiterHandle | undefined) => void
-    const ready = new Promise<RelaunchWaiterHandle | undefined>(resolve => { resolveReady = resolve })
+    const ready = new Promise<RelaunchWaiterHandle | undefined>(resolve => {
+      resolveReady = resolve
+    })
     let cancelled = 0
     let registered = false
 
     try {
-      const pending: Promise<RelaunchRegistration> = registerUpdateRelaunch({ getPath: (): string => home }, '1.0', { relaunch: (): Promise<RelaunchWaiterHandle | undefined> => ready })
-        .then(result => { registered = true;
+      const pending: Promise<RelaunchRegistration> = registerUpdateRelaunch({ getPath: (): string => home }, '1.0', {
+        relaunch: (): Promise<RelaunchWaiterHandle | undefined> => ready
+      }).then(result => {
+        registered = true
 
- return result })
+        return result
+      })
 
       await new Promise(setImmediate)
       assert.equal(registered, false)
       assert.equal(JSON.parse(fs.readFileSync(marker, 'utf8')).fromVersion, '1.0')
-      resolveReady(automatic ? { cancel: async () => { cancelled++ } } : undefined)
+      resolveReady(
+        automatic
+          ? {
+              cancel: async () => {
+                cancelled++
+              }
+            }
+          : undefined
+      )
       const registration = await pending
       assert.equal(registration.automatic, automatic)
       assert.equal(fs.existsSync(marker), true)
@@ -46,24 +59,44 @@ test('start and cancellation failures preserve the cause and still clean owned m
   const failure = new Error('owned child refused to stop')
 
   try {
-    await assert.rejects(registerUpdateRelaunch({ getPath: (): string => home }, '1.0', {
-      relaunch: async () => { throw failure }
-    }), error => error === failure)
+    await assert.rejects(
+      registerUpdateRelaunch({ getPath: (): string => home }, '1.0', {
+        relaunch: async () => {
+          throw failure
+        }
+      }),
+      error => error === failure
+    )
     assert.equal(fs.existsSync(marker), false)
 
     let attempts = 0
 
     const registration: RelaunchRegistration = await registerUpdateRelaunch({ getPath: (): string => home }, '1.0', {
-      relaunch: async () => ({ cancel: async () => { attempts++; throw failure } })
+      relaunch: async () => ({
+        cancel: async () => {
+          attempts++
+          throw failure
+        }
+      })
     })
 
-    await assert.rejects(registration.cancel(), error => error instanceof AggregateError && error.errors.includes(failure))
-    await assert.rejects(registration.cancel(), error => error instanceof AggregateError && error.errors.includes(failure))
+    await assert.rejects(
+      registration.cancel(),
+      error => error instanceof AggregateError && error.errors.includes(failure)
+    )
+    await assert.rejects(
+      registration.cancel(),
+      error => error instanceof AggregateError && error.errors.includes(failure)
+    )
     assert.equal(attempts, 1)
     assert.equal(fs.existsSync(marker), false)
 
     const blocked: RelaunchRegistration = await registerUpdateRelaunch({ getPath: (): string => home }, '1.0', {
-      relaunch: async () => ({ cancel: async () => { throw failure } })
+      relaunch: async () => ({
+        cancel: async () => {
+          throw failure
+        }
+      })
     })
 
     fs.unlinkSync(marker)

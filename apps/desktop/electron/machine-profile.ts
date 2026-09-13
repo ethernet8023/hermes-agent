@@ -63,7 +63,7 @@ function readHardwareModel(): string {
 async function hasNvidiaGpu(): Promise<boolean> {
   try {
     // Chromium already enumerates GPUs; no vendor tools or subprocess are needed.
-    const info = await app.getGPUInfo('basic') as { gpuDevice?: { vendorId?: number }[] }
+    const info = (await app.getGPUInfo('basic')) as { gpuDevice?: { vendorId?: number }[] }
 
     return (info.gpuDevice ?? []).some((device): boolean => device.vendorId === 0x10de)
   } catch {

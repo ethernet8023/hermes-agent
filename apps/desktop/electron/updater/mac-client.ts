@@ -26,11 +26,18 @@ export function createMacStrategy(deps: MacClientDeps): MacStrategy {
   if (deps.feedBaseUrl) {
     const base = new URL(deps.feedBaseUrl)
 
-    if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname))) {
+    if (
+      base.protocol !== 'https:' &&
+      !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname))
+    ) {
       throw new Error('The update feed must use HTTPS or a loopback HTTP address.')
     }
 
-    updater.setFeedURL({ provider: 'generic', url: `${base.href.replace(/\/+$/, '')}/${feed.directory}/`, channel: feed.channel })
+    updater.setFeedURL({
+      provider: 'generic',
+      url: `${base.href.replace(/\/+$/, '')}/${feed.directory}/`,
+      channel: feed.channel
+    })
   }
 
   return new MacStrategy({ ...deps, updater, prepareInstall: () => prepareMacInstall(nativeUpdater) })

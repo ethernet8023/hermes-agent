@@ -2,11 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import {
-  checkAppInstallerUpdate,
-  triggerAppInstallerUpdate,
-  win32AppInstallerFeedPath
-} from './app-updater'
+import { checkAppInstallerUpdate, triggerAppInstallerUpdate, win32AppInstallerFeedPath } from './app-updater'
 
 // ── feed hosting + paths ────────────────────────────────────────────
 
@@ -63,33 +59,59 @@ test('win32 trigger prepares a local descriptor before teardown and file activat
   const calls: string[] = []
 
   const installer = {
-    prepare: async (url: string) => { calls.push(`download:${url}`);
+    prepare: async (url: string) => {
+      calls.push(`download:${url}`)
 
- return 'update.appinstaller' },
-    open: async (file: string) => { calls.push(`open:${file}`);
+      return 'update.appinstaller'
+    },
+    open: async (file: string) => {
+      calls.push(`open:${file}`)
 
- return '' }
+      return ''
+    }
   }
 
   const result = await triggerAppInstallerUpdate(
-    'https://updates.example.com/', 'stable', false, installer,
+    'https://updates.example.com/',
+    'stable',
+    false,
+    installer,
     () => void calls.push('teardown')
   )
 
   assert.equal(result.ok, true)
   assert.deepEqual(calls, [
     'download:https://updates.example.com/win32/stable/stable.appinstaller',
-    'teardown', 'open:update.appinstaller'
+    'teardown',
+    'open:update.appinstaller'
   ])
 })
 
 test('win32 trigger refuses failed downloads before teardown and surfaces file-open errors', async () => {
-  const teardown = () => { throw new Error('unexpected teardown') }
-  await assert.rejects(triggerAppInstallerUpdate('https://updates.example.com', 'canary', true, {
-    prepare: async url => { assert.match(url, /win32\/light\/canary\/canary.appinstaller$/); throw new Error('download failed') },
-    open: async () => ''
-  }, teardown), /download failed/)
-  await assert.rejects(triggerAppInstallerUpdate('https://updates.example.com', 'stable', false, {
-    prepare: async () => 'update.appinstaller', open: async () => 'No file association'
-  }), /No file association/)
+  const teardown = () => {
+    throw new Error('unexpected teardown')
+  }
+  await assert.rejects(
+    triggerAppInstallerUpdate(
+      'https://updates.example.com',
+      'canary',
+      true,
+      {
+        prepare: async url => {
+          assert.match(url, /win32\/light\/canary\/canary.appinstaller$/)
+          throw new Error('download failed')
+        },
+        open: async () => ''
+      },
+      teardown
+    ),
+    /download failed/
+  )
+  await assert.rejects(
+    triggerAppInstallerUpdate('https://updates.example.com', 'stable', false, {
+      prepare: async () => 'update.appinstaller',
+      open: async () => 'No file association'
+    }),
+    /No file association/
+  )
 })

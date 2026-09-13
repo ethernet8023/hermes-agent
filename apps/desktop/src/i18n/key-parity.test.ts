@@ -32,9 +32,7 @@ type LeafKey = string
 type Obj = Record<string, unknown>
 
 function asObj(value: unknown): Obj | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Obj)
-    : null
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Obj) : null
 }
 
 function leafEntries(value: unknown, prefix = ''): LeafKey[] {
@@ -65,10 +63,14 @@ function enAt(path: string): unknown {
   for (const part of path.split('.')) {
     const obj = asObj(node)
 
-    if (obj === null) {return undefined}
+    if (obj === null) {
+      return undefined
+    }
     node = obj[part]
 
-    if (node === undefined) {return undefined}
+    if (node === undefined) {
+      return undefined
+    }
   }
 
   return node
@@ -89,26 +91,32 @@ function enAt(path: string): unknown {
 function staleUnderLiveParents(locale: unknown): LeafKey[] {
   const enKeys = keySet(en)
 
-  return [...keySet(locale)].filter((k) => {
-    if (enKeys.has(k)) {return false}
-    const parts = k.split('.')
+  return [...keySet(locale)]
+    .filter(k => {
+      if (enKeys.has(k)) {
+        return false
+      }
+      const parts = k.split('.')
 
-    for (let i = parts.length - 1; i >= 1; i -= 1) {
-      const parent = parts.slice(0, i).join('.')
-      const enValue = enAt(parent)
+      for (let i = parts.length - 1; i >= 1; i -= 1) {
+        const parent = parts.slice(0, i).join('.')
+        const enValue = enAt(parent)
 
-      if (enValue === undefined) {continue} // keep walking up
-      const obj = asObj(enValue)
+        if (enValue === undefined) {
+          continue
+        } // keep walking up
+        const obj = asObj(enValue)
 
-      if (obj !== null && Object.keys(obj).length === 0) {
-        return false // en emptied this whole section → locale extras are legit
+        if (obj !== null && Object.keys(obj).length === 0) {
+          return false // en emptied this whole section → locale extras are legit
+        }
+
+        return true // live section (or scalar) → leaf should still exist in en
       }
 
-      return true // live section (or scalar) → leaf should still exist in en
-    }
-
-    return false
-  }).sort()
+      return false
+    })
+    .sort()
 }
 
 const LOCALES: Array<[string, unknown]> = [
@@ -116,16 +124,13 @@ const LOCALES: Array<[string, unknown]> = [
   ['zh-hant', zhHant],
   ['ja', ja],
   ['ar', ar],
-  ['ru', ru],
+  ['ru', ru]
 ]
 
 describe('desktop i18n key parity with en', () => {
   it.each(LOCALES)('%s has no stale keys under live en sections', (_name, locale) => {
     const stale = staleUnderLiveParents(locale)
-    expect(
-      stale,
-      `stale keys in ${_name} — renamed/removed in en.ts but still declared here`
-    ).toEqual([])
+    expect(stale, `stale keys in ${_name} — renamed/removed in en.ts but still declared here`).toEqual([])
   })
 
   it('reports partial-locale coverage so the translation backlog is visible', () => {
@@ -138,7 +143,7 @@ describe('desktop i18n key parity with en', () => {
 
     for (const [name, locale] of LOCALES) {
       const localeSet = keySet(locale)
-      const absent = [...enKeys].filter((k) => !localeSet.has(k))
+      const absent = [...enKeys].filter(k => !localeSet.has(k))
 
       if (absent.length > 0) {
         missing.push(`${name}: ${absent.length} keys fall back to English (${absent.slice(0, 3).join(', ')}…)`)

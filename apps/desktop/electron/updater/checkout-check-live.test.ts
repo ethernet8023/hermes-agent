@@ -23,11 +23,15 @@ it('checks a real linked worktree through HTTP and reuses the disk cache until f
   let targetSha = ''
 
   function git(args: string[], cwd: string = checkout): string {
-    return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', ...args], {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe']
-    }).trim()
+    return execFileSync(
+      'git',
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', ...args],
+      {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
+    ).trim()
   }
 
   try {
@@ -37,7 +41,9 @@ it('checks a real linked worktree through HTTP and reuses the disk cache until f
     git(['remote', 'add', 'origin', 'https://github.com/example/test.git'])
     git(['worktree', 'add', '--detach', worktree])
     targetSha = git(['rev-parse', 'HEAD'])
-    await new Promise<void>((resolve: () => void): void => { server.listen(0, '127.0.0.1', resolve) })
+    await new Promise<void>((resolve: () => void): void => {
+      server.listen(0, '127.0.0.1', resolve)
+    })
     const address = server.address() as AddressInfo
 
     const deps: CheckoutCheckDeps = {
@@ -52,14 +58,17 @@ it('checks a real linked worktree through HTTP and reuses the disk cache until f
       resolveUpdateRoot: (): string => worktree,
       resolveHealedBranch: async (_directory: string, branch: string): Promise<string> => branch,
       getOriginUrl: async (directory: string): Promise<string> => git(['remote', 'get-url', 'origin'], directory),
-      runGit: async (args: string[], options?: { cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }> => {
+      runGit: async (
+        args: string[],
+        options?: { cwd?: string }
+      ): Promise<{ code: number; stdout: string; stderr: string }> => {
         // A passive check must not use git to contact the configured remote.
         expect(['rev-parse', 'status']).toContain(args[0])
 
         return { code: 0, stdout: git(args, options?.cwd), stderr: '' }
       },
       readSourceUpdate: async (): Promise<{ channel: 'main' }> => ({ channel: 'main' }),
-    fetchGitHubApi: async (url: string, accept?: string): Promise<unknown> => {
+      fetchGitHubApi: async (url: string, accept?: string): Promise<unknown> => {
         const parsed = new URL(url)
         expect(parsed.hostname).toBe('api.github.com')
 
@@ -69,11 +78,17 @@ it('checks a real linked worktree through HTTP and reuses the disk cache until f
 
         return response.text()
       },
-      rememberLog: (message: unknown): void => { throw new Error(String(message)) }
+      rememberLog: (message: unknown): void => {
+        throw new Error(String(message))
+      }
     }
 
     expect(fs.statSync(path.join(worktree, '.git')).isFile()).toBe(true)
-    expect(await checkCheckoutUpdates(deps)).toMatchObject({ supported: true, currentSha: targetSha, updateAvailable: false })
+    expect(await checkCheckoutUpdates(deps)).toMatchObject({
+      supported: true,
+      currentSha: targetSha,
+      updateAvailable: false
+    })
     expect(requests).toHaveLength(1)
     await checkCheckoutUpdates({ ...deps })
     expect(requests).toHaveLength(1)
@@ -85,7 +100,9 @@ it('checks a real linked worktree through HTTP and reuses the disk cache until f
     expect(requests).toHaveLength(3)
   } finally {
     server.closeAllConnections()
-    await new Promise<void>((resolve: () => void): void => { server.close((): void => resolve()) })
+    await new Promise<void>((resolve: () => void): void => {
+      server.close((): void => resolve())
+    })
     fs.rmSync(root, { recursive: true, force: true })
   }
 })

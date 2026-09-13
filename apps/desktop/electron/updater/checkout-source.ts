@@ -21,7 +21,8 @@ export interface SourceUpdateProbe {
 
 const execute: typeof execFile.__promisify__ = promisify(execFile)
 
-export const SOURCE_PROBE_RECOVERY: string = 'This checkout predates desktop source-channel checks. Run `hermes update --help` in this installation, then choose the intended branch or channel explicitly before updating.'
+export const SOURCE_PROBE_RECOVERY: string =
+  'This checkout predates desktop source-channel checks. Run `hermes update --help` in this installation, then choose the intended branch or channel explicitly before updating.'
 
 export function sourceUpdateEnvironment(updateRoot: string, hermesHome: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -49,7 +50,10 @@ export async function readSourceUpdate(probe: SourceUpdateProbe): Promise<Source
       // Inspect the target checkout's callable, not stderr strings or an editable
       // install elsewhere on sys.path. Exceptions inside a present probe propagate.
       'from pathlib import Path; import runpy; p = Path("hermes_cli/source_releases.py"); entry = runpy.run_path(str(p)).get("main") if p.is_file() else None; entry() if callable(entry) else print("null")',
-      '--install-root', probe.updateRoot, '--git', probe.git
+      '--install-root',
+      probe.updateRoot,
+      '--git',
+      probe.git
     ],
     hiddenWindowsChildOptions({
       cwd: probe.updateRoot,

@@ -202,7 +202,8 @@ export const en: Translations = {
   },
 
   notifications: {
-    sharedProfileWarning: 'Another Hermes installation is using this profile. Both installations share its settings and data, so changes can conflict. You can continue, or close the other installation before making changes.',
+    sharedProfileWarning:
+      'Another Hermes installation is using this profile. Both installations share its settings and data, so changes can conflict. You can continue, or close the other installation before making changes.',
     region: 'Notifications',
     hide: 'Hide',
     show: 'Show',
@@ -220,8 +221,7 @@ export const en: Translations = {
     updateReadyTitle: 'Update ready',
     updateReadyMessage: count => `${count} new change${count === 1 ? '' : 's'} available.`,
     updateReadyMessageUnknown: 'A new update is available.',
-    updateReadyMessageAppInstaller:
-      'A new version of Hermes is ready. Update now and Windows will finish it for you.',
+    updateReadyMessageAppInstaller: 'A new version of Hermes is ready. Update now and Windows will finish it for you.',
     seeWhatsNew: "See what's new",
     mcp: {
       needsAuthTitle: 'MCP server needs re-authentication',
@@ -845,7 +845,7 @@ export const en: Translations = {
     fieldLabels: FIELD_LABELS,
     fieldDescriptions: FIELD_DESCRIPTIONS,
     about: {
-      updates: 'Updates',
+      updates: 'Updates'
     },
     config: {
       none: 'None',
@@ -3084,7 +3084,8 @@ export const en: Translations = {
   updates: {
     channels: { stable: 'Stable', canary: 'Canary' },
     bundleSwapPending: 'Restart to finish the update',
-    bundleSwapPendingDesc: 'The updated app is already installed — Hermes only needs to restart to load it. Chats and settings are untouched.',
+    bundleSwapPendingDesc:
+      'The updated app is already installed — Hermes only needs to restart to load it. Chats and settings are untouched.',
     bundleSwapPendingAction: 'Restart Hermes',
     stages: {
       idle: 'Getting ready…',
@@ -3200,8 +3201,7 @@ export const en: Translations = {
     checkingShort: 'Checking…',
     releaseAvailable: tag => `Version ${tag} is available.`,
     versionDetailsTitle: 'Version details',
-    versionDetailsBody:
-      'This install is managed outside the app. Update it the same way you installed it.',
+    versionDetailsBody: 'This install is managed outside the app. Update it the same way you installed it.',
     versionDetailsVersion: 'Version',
     versionDetailsCommit: 'Commit',
     versionDetailsBuildOrigin: 'Build Origin',
@@ -3248,8 +3248,7 @@ export const en: Translations = {
     setupChoiceTitle: 'Set up Hermes Desktop',
     setupChoiceDesc:
       'Connect this app to a Hermes gateway you already run, or install Hermes locally on this computer.',
-    setupChoiceDescLocal:
-      'Install Hermes on this computer, or connect to a Hermes gateway you already run.',
+    setupChoiceDescLocal: 'Install Hermes on this computer, or connect to a Hermes gateway you already run.',
     connectExistingTitle: 'Connect to existing Hermes',
     connectExistingShort: 'Connect existing',
     connectExistingDesc: 'Use a remote backend with a session token or browser sign-in. No local install will start.',

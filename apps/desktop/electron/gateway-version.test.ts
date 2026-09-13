@@ -29,7 +29,7 @@ test('version follows the gateway response across runtime changes', async () => 
     version = '4.5.6'
     assert.equal(await resolveGatewayVersion(request), version)
   } finally {
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())))
   }
 })
 
@@ -38,5 +38,10 @@ test('unavailable gateway version stays unknown instead of using another install
     assert.equal(await resolveGatewayVersion(async () => response), '')
   }
 
-  assert.equal(await resolveGatewayVersion(async () => { throw new Error('offline') }), '')
+  assert.equal(
+    await resolveGatewayVersion(async () => {
+      throw new Error('offline')
+    }),
+    ''
+  )
 })

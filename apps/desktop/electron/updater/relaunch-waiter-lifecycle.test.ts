@@ -36,29 +36,43 @@ for (const mode of [
     const start: SpawnWaiter = (_command, args, options) => {
       stage = options.cwd
       const readyFile = args[args.indexOf('-ReadyFile') + 1]
-      child = spawn(mode.missing ? path.join(stage, 'missing.exe') : process.execPath, ['-e', `
+      child = spawn(
+        mode.missing ? path.join(stage, 'missing.exe') : process.execPath,
+        [
+          '-e',
+          `
         const fs = require('node:fs');
         if (process.env.TEST_READY === 'yes') fs.writeFileSync(process.env.READY_FILE, 'ready');
         setInterval(() => {}, 1000);
-      `], {
-        ...options,
-        env: { ...process.env, READY_FILE: readyFile, TEST_READY: mode.ready ? 'yes' : 'no' }
-      })
+      `
+        ],
+        {
+          ...options,
+          env: { ...process.env, READY_FILE: readyFile, TEST_READY: mode.ready ? 'yes' : 'no' }
+        }
+      )
       originalKill = child.kill.bind(child)
 
-      if (mode.refuseKill) { child.kill = () => false }
-      child.once('close', () => { closed = true })
+      if (mode.refuseKill) {
+        child.kill = () => false
+      }
+      child.once('close', () => {
+        closed = true
+      })
 
       return child
     }
 
     try {
-      const starting = startRelaunchWaiter({
-        processId: process.pid,
-        processStartTimeMs: Date.now(),
-        identityName: 'disposable-waiter-test',
-        scriptPath
-      }, { spawn: start, handshakeTimeoutMs: mode.ready ? 10_000 : 2_000, cancelTimeoutMs: 2_000, pollMs: 20 })
+      const starting = startRelaunchWaiter(
+        {
+          processId: process.pid,
+          processStartTimeMs: Date.now(),
+          identityName: 'disposable-waiter-test',
+          scriptPath
+        },
+        { spawn: start, handshakeTimeoutMs: mode.ready ? 10_000 : 2_000, cancelTimeoutMs: 2_000, pollMs: 20 }
+      )
 
       if (!mode.ready && mode.refuseKill) {
         await assert.rejects(starting, /did not exit after cancellation/)
@@ -85,9 +99,11 @@ for (const mode of [
         assert.equal(handle.cancel(), cancelled, 'concurrent cancellation shares its result')
 
         if (mode.refuseKill || mode.refuseCleanup) {
-          await assert.rejects(cancelled, error => mode.refuseCleanup
-            ? error === cleanupError
-            : error instanceof Error && error.message.includes('did not exit after cancellation'))
+          await assert.rejects(cancelled, error =>
+            mode.refuseCleanup
+              ? error === cleanupError
+              : error instanceof Error && error.message.includes('did not exit after cancellation')
+          )
           assert.equal(handle.cancel(), cancelled)
           assert.equal(closed, !mode.refuseKill)
           assert.equal(fs.existsSync(stage), true)
@@ -106,10 +122,14 @@ for (const mode of [
     } finally {
       vi.restoreAllMocks()
 
-      if (child && originalKill) { child.kill = originalKill }
+      if (child && originalKill) {
+        child.kill = originalKill
+      }
       await stop(child)
 
-      if (stage) {fs.rmSync(stage, { recursive: true, force: true })}
+      if (stage) {
+        fs.rmSync(stage, { recursive: true, force: true })
+      }
     }
   }, 20_000)
 }

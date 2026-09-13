@@ -23,7 +23,9 @@ export function ExternalOpenFailedDialog() {
   const [failure, setFailure] = useState<ExternalOpenFailedPayload | null>(null)
 
   useEffect(() => {
-    if (!window.hermesDesktop?.onExternalOpenFailed) {return}
+    if (!window.hermesDesktop?.onExternalOpenFailed) {
+      return
+    }
 
     return window.hermesDesktop.onExternalOpenFailed(setFailure)
   }, [])
@@ -41,9 +43,7 @@ export function ExternalOpenFailedDialog() {
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.message}</DialogDescription>
         </DialogHeader>
-        <div className="max-h-40 overflow-auto break-all rounded-md border bg-muted p-3 select-all">
-          {failure?.url}
-        </div>
+        <div className="max-h-40 overflow-auto break-all rounded-md border bg-muted p-3 select-all">{failure?.url}</div>
         <DialogFooter>
           {failure ? <CopyButton text={failure.url}>{copy.copyUrl}</CopyButton> : null}
           <Button onClick={() => setFailure(null)} variant="ghost">

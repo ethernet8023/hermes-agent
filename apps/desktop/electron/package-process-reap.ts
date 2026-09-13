@@ -70,6 +70,7 @@ export interface ReapOutcome {
  */
 function isSharedRuntime(imagePath: string): boolean {
   const image = imagePath.replace(/^.*[\\/]/, '').toLowerCase()
+
   return /^(?:pythonw?(?:[0-9.]+)?|node|hermes(?:-agent|-acp)?)(?:\.exe|\.cmd)?$/.test(image)
 }
 
@@ -147,7 +148,11 @@ export function isUnderInstallRoot(
     return false
   }
 
-  const normalize = (value: string): string => value.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
+  const normalize = (value: string): string =>
+    value
+      .replace(/[\\/]+$/, '')
+      .replace(/\//g, '\\')
+      .toLowerCase()
   const normalizedPath = normalize(imagePath)
   const candidates = typeof roots === 'string' || roots == null ? [roots] : roots
 

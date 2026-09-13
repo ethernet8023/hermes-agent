@@ -280,38 +280,41 @@ test('POSIX managed launcher is detached, correlation-scoped, and never publishe
   assert.match(command, /while \[ ! -e/)
 })
 
-test.runIf(process.platform !== 'win32')('POSIX managed launcher executes the updater command and atomically publishes its status', async () => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-launch-'))
+test.runIf(process.platform !== 'win32')(
+  'POSIX managed launcher executes the updater command and atomically publishes its status',
+  async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-launch-'))
 
-  try {
-    const command = buildPosixManagedUpdateLaunch(
-      {
-        ssh: { exec: async () => '' },
-        platform: 'Linux',
-        hermesPath: '/bin/true',
-        hermesHome: home
-      },
-      CORRELATION
-    )
+    try {
+      const command = buildPosixManagedUpdateLaunch(
+        {
+          ssh: { exec: async () => '' },
+          platform: 'Linux',
+          hermesPath: '/bin/true',
+          hermesHome: home
+        },
+        CORRELATION
+      )
 
-    const { stdout } = await exec(command, { shell: '/bin/sh' })
-    const statusPath = path.join(home, `.update_exit_code.${CORRELATION}`)
-    let status = ''
+      const { stdout } = await exec(command, { shell: '/bin/sh' })
+      const statusPath = path.join(home, `.update_exit_code.${CORRELATION}`)
+      let status = ''
 
-    for (let attempt = 0; attempt < 50 && !status; attempt += 1) {
-      try {
-        status = await readFile(statusPath, 'utf8')
-      } catch {
-        await new Promise(resolve => setTimeout(resolve, 10))
+      for (let attempt = 0; attempt < 50 && !status; attempt += 1) {
+        try {
+          status = await readFile(statusPath, 'utf8')
+        } catch {
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
       }
-    }
 
-    assert.match(stdout, /MANAGED_UPDATE_STARTED/)
-    assert.equal(status, '0')
-  } finally {
-    await rm(home, { force: true, recursive: true })
+      assert.match(stdout, /MANAGED_UPDATE_STARTED/)
+      assert.equal(status, '0')
+    } finally {
+      await rm(home, { force: true, recursive: true })
+    }
   }
-})
+)
 
 test('Windows managed launcher starts a hidden child and leaves exit 75 to the external coordinator', () => {
   const command = buildWindowsManagedUpdateLaunch(
@@ -359,75 +362,81 @@ test('remote observation rejects a receipt for another correlation', () => {
   )
 })
 
-test.runIf(process.platform !== 'win32')('POSIX observer reads the exact correlation receipt and terminal marker from disk', async () => {
-  const home = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-update-'))
+test.runIf(process.platform !== 'win32')(
+  'POSIX observer reads the exact correlation receipt and terminal marker from disk',
+  async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-update-'))
 
-  try {
-    const receipts = path.join(home, 'logs', 'update_receipts')
-    await mkdir(receipts, { recursive: true })
-    await writeFile(path.join(home, `.update_exit_code.${CORRELATION}`), '0')
-    await writeFile(
-      path.join(receipts, `update_${CORRELATION}.json`),
-      JSON.stringify({
-        correlation_id: CORRELATION,
-        outcome: 'success',
-        started_at: '2026-08-23T00:00:00Z',
-        finished_at: '2026-08-23T00:01:00Z',
-        pre_update: { sha: 'old' },
-        post_update: { sha: 'new' }
-      })
-    )
+    try {
+      const receipts = path.join(home, 'logs', 'update_receipts')
+      await mkdir(receipts, { recursive: true })
+      await writeFile(path.join(home, `.update_exit_code.${CORRELATION}`), '0')
+      await writeFile(
+        path.join(receipts, `update_${CORRELATION}.json`),
+        JSON.stringify({
+          correlation_id: CORRELATION,
+          outcome: 'success',
+          started_at: '2026-08-23T00:00:00Z',
+          finished_at: '2026-08-23T00:01:00Z',
+          pre_update: { sha: 'old' },
+          post_update: { sha: 'new' }
+        })
+      )
 
-    const command = buildRemoteUpdateObservationCommand(
-      {
-        ssh: { exec: async () => '' },
-        platform: 'Linux',
-        hermesPath: '/opt/hermes/hermes',
-        hermesHome: home
-      },
-      CORRELATION
-    )
+      const command = buildRemoteUpdateObservationCommand(
+        {
+          ssh: { exec: async () => '' },
+          platform: 'Linux',
+          hermesPath: '/opt/hermes/hermes',
+          hermesHome: home
+        },
+        CORRELATION
+      )
 
-    const { stdout } = await exec(command, { shell: '/bin/sh' })
-    const parsed = parseRemoteUpdateObservation(stdout, CORRELATION)
+      const { stdout } = await exec(command, { shell: '/bin/sh' })
+      const parsed = parseRemoteUpdateObservation(stdout, CORRELATION)
 
-    assert.equal(parsed.marker, 'absent')
-    assert.equal(parsed.exitCode, 0)
-    assert.equal(parsed.receipt?.correlationId, CORRELATION)
-    assert.equal(parsed.receipt?.preSha, 'old')
-    assert.equal(parsed.receipt?.postSha, 'new')
-  } finally {
-    await rm(home, { force: true, recursive: true })
+      assert.equal(parsed.marker, 'absent')
+      assert.equal(parsed.exitCode, 0)
+      assert.equal(parsed.receipt?.correlationId, CORRELATION)
+      assert.equal(parsed.receipt?.preSha, 'old')
+      assert.equal(parsed.receipt?.postSha, 'new')
+    } finally {
+      await rm(home, { force: true, recursive: true })
+    }
   }
-})
+)
 
-test.runIf(process.platform !== 'win32')('managed observer unwraps a named profile home for the install-wide marker', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-profile-marker-'))
-  const profileHome = path.join(root, 'profiles', 'research')
+test.runIf(process.platform !== 'win32')(
+  'managed observer unwraps a named profile home for the install-wide marker',
+  async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'hermes-managed-profile-marker-'))
+    const profileHome = path.join(root, 'profiles', 'research')
 
-  try {
-    await mkdir(profileHome, { recursive: true })
-    await writeFile(path.join(root, '.hermes-update-in-progress'), `${process.pid}\n1\n`)
+    try {
+      await mkdir(profileHome, { recursive: true })
+      await writeFile(path.join(root, '.hermes-update-in-progress'), `${process.pid}\n1\n`)
 
-    const command = buildRemoteUpdateObservationCommand(
-      {
-        ssh: { exec: async () => '' },
-        platform: 'Linux',
-        hermesPath: '/opt/hermes/hermes',
-        hermesHome: profileHome
-      },
-      CORRELATION
-    )
+      const command = buildRemoteUpdateObservationCommand(
+        {
+          ssh: { exec: async () => '' },
+          platform: 'Linux',
+          hermesPath: '/opt/hermes/hermes',
+          hermesHome: profileHome
+        },
+        CORRELATION
+      )
 
-    const { stdout } = await exec(command, { shell: '/bin/sh' })
-    const parsed = parseRemoteUpdateObservation(stdout, CORRELATION)
+      const { stdout } = await exec(command, { shell: '/bin/sh' })
+      const parsed = parseRemoteUpdateObservation(stdout, CORRELATION)
 
-    assert.equal(parsed.marker, 'live')
-    assert.equal(parsed.markerPid, process.pid)
-  } finally {
-    await rm(root, { force: true, recursive: true })
+      assert.equal(parsed.marker, 'live')
+      assert.equal(parsed.markerPid, process.pid)
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
   }
-})
+)
 
 test('Windows coordinator handoff is pending until its marker clears and correlated receipt is durable', async () => {
   const replies = [

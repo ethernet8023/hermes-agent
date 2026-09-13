@@ -5,7 +5,11 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
-import { launcherTargetsInstallation, resolveInstallationLauncher, windowsUpdatePrerequisiteError } from './updater-process'
+import {
+  launcherTargetsInstallation,
+  resolveInstallationLauncher,
+  windowsUpdatePrerequisiteError
+} from './updater-process'
 
 test('PM update prerequisites use the exact published launcher, not checkout venv files', (): void => {
   const root: string = fs.mkdtempSync(path.join(os.tmpdir(), 'update-launcher-'))
@@ -30,7 +34,6 @@ test('PM update prerequisites use the exact published launcher, not checkout ven
   }
 })
 
-
 test('earlier PM user-bin launchers are accepted only for the reported source tree', (): void => {
   const base: string = fs.mkdtempSync(path.join(os.tmpdir(), 'old-pm-launcher-'))
 
@@ -45,9 +48,10 @@ test('earlier PM user-bin launchers are accepted only for the reported source tr
     fs.mkdirSync(path.join(home, 'bin'), { recursive: true })
     const launcher: string = path.join(home, 'bin', process.platform === 'win32' ? 'hermes.cmd' : 'hermes')
 
-    const body = (reported: string): string => process.platform === 'win32'
-      ? `@echo off\r\necho Install directory: ${reported}\r\n`
-      : `#!/bin/sh\nprintf '%s\\n' 'Install directory: ${reported}'\n`
+    const body = (reported: string): string =>
+      process.platform === 'win32'
+        ? `@echo off\r\necho Install directory: ${reported}\r\n`
+        : `#!/bin/sh\nprintf '%s\\n' 'Install directory: ${reported}'\n`
 
     fs.writeFileSync(launcher, body(root), { mode: 0o755 })
     assert.equal(launcherTargetsInstallation(launcher, root), true)

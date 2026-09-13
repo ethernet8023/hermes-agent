@@ -346,7 +346,10 @@ test('open() evicts a wedged master (check passes, exec hangs) and dials fresh',
     return { code: 0 }
   })
 
-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, mux: true, controlDir: '/tmp/d', connectTimeoutMs: 50 })
+  const conn = new SshConnection(
+    { host: 'box', user: 'me' },
+    { spawnFn, mux: true, controlDir: '/tmp/d', connectTimeoutMs: 50 }
+  )
 
   await conn.open()
   assert.deepEqual(
@@ -1006,7 +1009,8 @@ test('closing one scope addresses only that scope control master', async () => {
     { host: 'box', user: 'me' },
     {
       spawnFn: firstSpawn,
-      mux: true, controlDir: '/tmp/d',
+      mux: true,
+      controlDir: '/tmp/d',
       ownershipId: 'installation',
       scope: 'first'
     }
@@ -1016,7 +1020,8 @@ test('closing one scope addresses only that scope control master', async () => {
     { host: 'box', user: 'me' },
     {
       spawnFn: secondSpawn,
-      mux: true, controlDir: '/tmp/d',
+      mux: true,
+      controlDir: '/tmp/d',
       ownershipId: 'installation',
       scope: 'second'
     }

@@ -7,8 +7,7 @@ import type { InstallStamp } from '../install-stamp'
 
 import type { UpdaterApplyResultWire, UpdaterStatusWire } from './index'
 
-export const EXTERNAL_UNSUPPORTED_MESSAGE =
-  'Updates are managed by the package owner outside this app.'
+export const EXTERNAL_UNSUPPORTED_MESSAGE = 'Updates are managed by the package owner outside this app.'
 
 export const COMMIT_BUILD_UPDATE_MESSAGE: string =
   "This build doesn't get updates. Ask the developer who gave it to you for a new build."

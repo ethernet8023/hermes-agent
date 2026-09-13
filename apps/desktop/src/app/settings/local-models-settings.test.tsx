@@ -124,7 +124,8 @@ async function renderFullPane(): Promise<ReturnType<typeof renderPane>> {
   // straight to the full pane, the runtime section directly.
   await waitFor((): void => {
     expect(
-      Boolean(screen.queryByRole('button', { name: /let me choose/i })) || screen.queryAllByText(/this machine/i).length > 0
+      Boolean(screen.queryByRole('button', { name: /let me choose/i })) ||
+        screen.queryAllByText(/this machine/i).length > 0
     ).toBe(true)
   })
 

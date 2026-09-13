@@ -6,10 +6,13 @@ import { deriveSyncStatusSummary } from './sync-status'
 
 describe('deriveSyncStatusSummary', () => {
   test('a no-op sync is healthy, while an embedded failed sync is visible', () => {
-    expect(deriveSyncStatusSummary({ outcome: 'ok', venv_rebuild: { ok: false, reason: 'already in sync' } }).headline).toBeNull()
+    expect(
+      deriveSyncStatusSummary({ outcome: 'ok', venv_rebuild: { ok: false, reason: 'already in sync' } }).headline
+    ).toBeNull()
 
     const receipt = {
-      outcome: 'failed', pm_sync_outcome: 'failed',
+      outcome: 'failed',
+      pm_sync_outcome: 'failed',
       pm_steps: [{ name: 'dependency-sync', ok: false, detail: 'network unavailable' }]
     }
 
@@ -54,9 +57,7 @@ describe('deriveSyncStatusSummary', () => {
 
     const summary = deriveSyncStatusSummary(receipt)
     expect(summary.level).toBe('warn')
-    expect(summary.disabledPlugins).toEqual([
-      { plugin: 'bad-plug', reason: 'conflicts with core pin' }
-    ])
+    expect(summary.disabledPlugins).toEqual([{ plugin: 'bad-plug', reason: 'conflicts with core pin' }])
     expect(summary.headline).toContain('disabled')
   })
 
@@ -77,9 +78,7 @@ describe('deriveSyncStatusSummary', () => {
     expect(summary.level).toBe('warn')
     expect(summary.headline).toContain('update-url')
     expect(summary.needsFixing).toHaveLength(1)
-    expect(summary.updatesAvailable).toEqual([
-      { name: 'other', current: '1.0', latest: '2.0' }
-    ])
+    expect(summary.updatesAvailable).toEqual([{ name: 'other', current: '1.0', latest: '2.0' }])
   })
 
   test('plain updates-available is info, not warn', () => {

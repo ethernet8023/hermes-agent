@@ -18,21 +18,33 @@ function makeDeps(over: Partial<AppInstallerStrategyDeps> = {}) {
     light: false,
     feedBaseUrl: 'https://updates.example/hermes-desktop',
     installer: {
-      prepare: async () => { calls.push('prepare');
+      prepare: async () => {
+        calls.push('prepare')
 
- return 'update.appinstaller' },
-      open: async () => { calls.push('open');
+        return 'update.appinstaller'
+      },
+      open: async () => {
+        calls.push('open')
 
- return '' }
+        return ''
+      }
     },
-    teardownBundledBackend: async () => { calls.push('teardown') },
-    restoreBundledBackend: async () => { calls.push('restore') },
+    teardownBundledBackend: async () => {
+      calls.push('teardown')
+    },
+    restoreBundledBackend: async () => {
+      calls.push('restore')
+    },
     emitUpdateProgress: () => {},
     appVersion: '0.18.2',
-    quit: () => { calls.push('quit') },
-    registerPendingRelaunch: async () => { calls.push('relaunch-marker');
+    quit: () => {
+      calls.push('quit')
+    },
+    registerPendingRelaunch: async () => {
+      calls.push('relaunch-marker')
 
- return { automatic: true, cancel: async () => {} } },
+      return { automatic: true, cancel: async () => {} }
+    },
     ...over
   }
 
@@ -54,7 +66,9 @@ describe('AppInstallerStrategy.apply', () => {
 
     const { deps, calls } = makeDeps({
       registerPendingRelaunch: async () => ({ automatic: false, cancel: async () => {} }),
-      emitUpdateProgress: event => { progress.push(event.message) }
+      emitUpdateProgress: event => {
+        progress.push(event.message)
+      }
     })
 
     const result = await new AppInstallerStrategy(deps).apply()
@@ -68,11 +82,16 @@ describe('AppInstallerStrategy.apply', () => {
 
     const { deps, calls } = makeDeps({
       feedBaseUrl: '',
-      run: async () => ({ code: 2, stdout: JSON.stringify({ available: true, source_uri: 'https://registered.example/channel.appinstaller' }) }),
+      run: async () => ({
+        code: 2,
+        stdout: JSON.stringify({ available: true, source_uri: 'https://registered.example/channel.appinstaller' })
+      }),
       installer: {
-        prepare: async url => { prepared.push(url);
+        prepare: async url => {
+          prepared.push(url)
 
- return 'registered.appinstaller' },
+          return 'registered.appinstaller'
+        },
         open: async () => ''
       }
     })
@@ -100,7 +119,9 @@ describe('AppInstallerStrategy.check', () => {
   })
 
   it('unknown availability is an error on the wire, never "no update"', async () => {
-    const { deps } = makeDeps({ run: async () => ({ code: 1, stdout: '{"available": null, "error": "winrt missing"}' }) })
+    const { deps } = makeDeps({
+      run: async () => ({ code: 1, stdout: '{"available": null, "error": "winrt missing"}' })
+    })
     const status = await new AppInstallerStrategy(deps).check()
     expect(status.updateAvailable).toBe(false)
     expect(status.error).toBe('winrt missing')

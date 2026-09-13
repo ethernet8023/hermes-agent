@@ -120,7 +120,8 @@ export class AppInstallerStrategy {
 
           if (!registration.automatic) {
             this.deps.emitUpdateProgress({
-              stage: 'restart', percent: 100,
+              stage: 'restart',
+              percent: 100,
               message: 'Automatic relaunch could not be registered. Reopen Hermes after App Installer finishes.'
             })
           }
@@ -149,10 +150,12 @@ export class AppInstallerStrategy {
         }
       }
 
-      const message = errors.map(item => item instanceof Error ? item.message : String(item)).join('; ')
+      const message = errors.map(item => (item instanceof Error ? item.message : String(item))).join('; ')
       this.deps.emitUpdateProgress({ stage: 'error', message, percent: null })
 
-      if (errors.length > 1) { throw new AggregateError(errors, message, { cause: error }) }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, message, { cause: error })
+      }
       throw error
     }
 

@@ -163,10 +163,7 @@ describe('startRelaunchWaiter', () => {
     const scriptPath = await stageScript()
     const { spawn, seen } = fakeSpawn('none')
 
-    const result = await startRelaunchWaiter(
-      { ...OPTIONS, scriptPath },
-      { spawn, handshakeTimeoutMs: 80, pollMs: 20 }
-    )
+    const result = await startRelaunchWaiter({ ...OPTIONS, scriptPath }, { spawn, handshakeTimeoutMs: 80, pollMs: 20 })
 
     expect(result).toBeUndefined()
     expect(seen.killed).toBe(true)

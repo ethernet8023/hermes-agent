@@ -181,9 +181,13 @@ test('failed stops block respawn and retain the child for a later stop retry', a
 
   const stopper = createPoolStopper({
     pool,
-    stopChild: current => { attempts.push(current!) },
+    stopChild: current => {
+      attempts.push(current!)
+    },
     waitForExit: async current => {
-      if (refuses) { throw failure }
+      if (refuses) {
+        throw failure
+      }
       current!.exited = true
     }
   })

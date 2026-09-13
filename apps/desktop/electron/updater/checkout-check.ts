@@ -144,7 +144,12 @@ export async function checkCheckoutUpdates(
   const selection: SourceUpdate | null = await deps.readSourceUpdate(updateRoot)
 
   if (selection === null) {
-    return { supported: false, reason: 'source-probe-unavailable', message: SOURCE_PROBE_RECOVERY, hermesRoot: updateRoot }
+    return {
+      supported: false,
+      reason: 'source-probe-unavailable',
+      message: SOURCE_PROBE_RECOVERY,
+      hermesRoot: updateRoot
+    }
   }
 
   if (selection.channel !== 'main') {

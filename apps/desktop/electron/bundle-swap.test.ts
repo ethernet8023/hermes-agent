@@ -63,6 +63,4 @@ describe('detectBundleSwap', () => {
     expect(detectBundleSwap(fallbackTagged, { ...RUNNING, commit: 'b'.repeat(40) })).toBe(false)
     expect(detectBundleSwap(RUNNING, fallbackCommit)).toBe(false)
   })
-
-
 })

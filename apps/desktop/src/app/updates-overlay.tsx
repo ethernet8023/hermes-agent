@@ -18,7 +18,6 @@ import { Progress } from '@/components/ui/progress'
 import { UpdateStatusCard, VersionHero } from '@/components/update-status'
 import { VersionDetails } from '@/components/version-details'
 import type {
-
   DesktopUpdateCommit,
   DesktopUpdateStage,
   DesktopUpdateStatus,
@@ -92,7 +91,6 @@ export function UpdatesOverlay() {
             ? 'error'
             : 'idle'
 
-
   const handleClose = (next: boolean) => {
     if (phase === 'applying') {
       return
@@ -131,7 +129,6 @@ export function UpdatesOverlay() {
         )}
 
         {phase === 'guiSkew' && <GuiSkewView message={apply.message} onDone={() => handleClose(false)} />}
-
 
         {phase === 'error' ? (
           <ErrorView message={apply.message} onDismiss={() => handleClose(false)} onRetry={handleInstall} />
@@ -429,11 +426,7 @@ function ApplyingView({
   const label = u.stages[apply.stage as DesktopUpdateStage] ?? u.stages.idle
   const isWindowsPackage = statusMechanism === 'app-installer' || statusMechanism === 'microsoft-store'
 
-  const body = isWindowsPackage
-    ? u.applyingBodyAppInstaller
-    : isBackend
-      ? u.applyingBodyBackend
-      : u.applyingBody
+  const body = isWindowsPackage ? u.applyingBodyAppInstaller : isBackend ? u.applyingBodyBackend : u.applyingBody
 
   const currentMessage = apply.message.trim()
   const recentLog = apply.log.slice(-4)
@@ -477,7 +470,6 @@ function ApplyingView({
     </div>
   )
 }
-
 
 function ErrorView({ message, onDismiss, onRetry }: { message: string; onDismiss: () => void; onRetry: () => void }) {
   const { t } = useI18n()

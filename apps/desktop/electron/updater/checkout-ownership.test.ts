@@ -21,7 +21,9 @@ function dependencies(): CheckoutStrategyDeps {
     resolveUpdaterBinary: () => null,
     resolveHealedBranch: async (_, branch) => branch,
     getOriginUrl: async () => '',
-    runGit: vi.fn(async () => { throw new Error('unexpected git invocation') }),
+    runGit: vi.fn(async () => {
+      throw new Error('unexpected git invocation')
+    }),
     firstLine: text => text.split('\n')[0],
     emitUpdateProgress: vi.fn(),
     rememberLog: vi.fn(),
@@ -36,20 +38,23 @@ function dependencies(): CheckoutStrategyDeps {
 }
 
 describe('checkout update admission', () => {
-  it.each(['external', 'app-installer', 'electron-updater'] as const)('refuses %s-owned code without fetching or stopping the backend', async updateMechanism => {
-    const deps = dependencies()
-    deps.readCanonicalInstallStamp = () => ({ updateMechanism })
-    const strategy = createCheckoutStrategy(deps)
-    const result = await strategy.check()
+  it.each(['external', 'app-installer', 'electron-updater'] as const)(
+    'refuses %s-owned code without fetching or stopping the backend',
+    async updateMechanism => {
+      const deps = dependencies()
+      deps.readCanonicalInstallStamp = () => ({ updateMechanism })
+      const strategy = createCheckoutStrategy(deps)
+      const result = await strategy.check()
 
-    expect(result.supported).toBe(false)
-    expect(await strategy.apply()).toMatchObject({ ok: false })
-    expect(deps.readSourceUpdate).not.toHaveBeenCalled()
-    expect(result.mechanism).toBe(strategy.mechanism)
-    expect(deps.runGit).not.toHaveBeenCalled()
-    expect(deps.stopBackendsForUpdate).not.toHaveBeenCalled()
-    expect(deps.quit).not.toHaveBeenCalled()
-  })
+      expect(result.supported).toBe(false)
+      expect(await strategy.apply()).toMatchObject({ ok: false })
+      expect(deps.readSourceUpdate).not.toHaveBeenCalled()
+      expect(result.mechanism).toBe(strategy.mechanism)
+      expect(deps.runGit).not.toHaveBeenCalled()
+      expect(deps.stopBackendsForUpdate).not.toHaveBeenCalled()
+      expect(deps.quit).not.toHaveBeenCalled()
+    }
+  )
 
   it('rejects a missing source checkout without attempting git', async () => {
     const deps = dependencies()

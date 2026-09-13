@@ -17,14 +17,22 @@ export interface AppVersionInfo {
 
 /** A release channel is an artifact identity, not a user preference. */
 export function packagedReleaseChannel(stamp: Readonly<InstallStamp> | null): 'stable' | 'canary' | null {
-  if (!stamp?.tag || stamp.source === 'commit-build') { return null }
+  if (!stamp?.tag || stamp.source === 'commit-build') {
+    return null
+  }
 
   return isCanaryTag(stamp.tag) ? 'canary' : 'stable'
 }
 
 /** The backend may live on another machine and run a different release. */
-export function appVersionInfo(stamp: Readonly<InstallStamp> | null, runtimeVersion: string, packageVersion: string): AppVersionInfo {
-  if (!stamp) { return { appVersion: runtimeVersion, baseVersion: packageVersion } }
+export function appVersionInfo(
+  stamp: Readonly<InstallStamp> | null,
+  runtimeVersion: string,
+  packageVersion: string
+): AppVersionInfo {
+  if (!stamp) {
+    return { appVersion: runtimeVersion, baseVersion: packageVersion }
+  }
 
   return {
     appVersion: stamp.payload === 'bootstrap' ? runtimeVersion : stamp.displayVersion || packageVersion,
@@ -41,7 +49,9 @@ export function appVersionInfo(stamp: Readonly<InstallStamp> | null, runtimeVers
 }
 
 export function assertSourceUpdateChannel(stamp: Readonly<InstallStamp> | null): void {
-  if (stamp?.source === 'commit-build') { throw new Error(COMMIT_BUILD_UPDATE_MESSAGE) }
+  if (stamp?.source === 'commit-build') {
+    throw new Error(COMMIT_BUILD_UPDATE_MESSAGE)
+  }
 
   if (stamp && stamp.payload !== 'bootstrap') {
     throw new Error('This package has a fixed update channel. Install the other package to change channels.')

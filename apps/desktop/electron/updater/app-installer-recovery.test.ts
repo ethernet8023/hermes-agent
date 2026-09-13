@@ -20,13 +20,21 @@ for (const failureAt of ['prepare', 'register', 'teardown', 'open', 'none']) {
     const act = (at: string): void => {
       calls.push(at)
 
-      if (at === failureAt) {throw failure}
+      if (at === failureAt) {
+        throw failure
+      }
     }
 
     const deps: AppInstallerStrategyDeps = {
-      python: 'unused-checker', script: 'unused.py',
-      run: async () => { throw new Error('configured feed does not need the checker') },
-      channel: 'stable', light: false, appVersion: '1.0', feedBaseUrl: 'https://example.invalid',
+      python: 'unused-checker',
+      script: 'unused.py',
+      run: async () => {
+        throw new Error('configured feed does not need the checker')
+      },
+      channel: 'stable',
+      light: false,
+      appVersion: '1.0',
+      feedBaseUrl: 'https://example.invalid',
       installer: {
         prepare: async () => {
           act('prepare')
@@ -40,17 +48,32 @@ for (const failureAt of ['prepare', 'register', 'teardown', 'open', 'none']) {
           return ''
         }
       },
-      registerPendingRelaunch: (version: string): Promise<RelaunchRegistration> => registerUpdateRelaunch({ getPath: (): string => home }, version, {
-        relaunch: async () => {
-          act('register')
+      registerPendingRelaunch: (version: string): Promise<RelaunchRegistration> =>
+        registerUpdateRelaunch({ getPath: (): string => home }, version, {
+          relaunch: async () => {
+            act('register')
 
-          return { cancel: async () => { calls.push('cancel') } }
-        }
-      }),
-      teardownBundledBackend: async () => { running = false; act('teardown') },
-      restoreBundledBackend: async () => { running = true; calls.push('restore') },
-      emitUpdateProgress: value => { progress.push(value.stage) },
-      quit: () => { calls.push('quit') }
+            return {
+              cancel: async () => {
+                calls.push('cancel')
+              }
+            }
+          }
+        }),
+      teardownBundledBackend: async () => {
+        running = false
+        act('teardown')
+      },
+      restoreBundledBackend: async () => {
+        running = true
+        calls.push('restore')
+      },
+      emitUpdateProgress: value => {
+        progress.push(value.stage)
+      },
+      quit: () => {
+        calls.push('quit')
+      }
     }
 
     try {
@@ -83,16 +106,43 @@ test('handoff errors retain cleanup failures while still restoring the backend',
   const order: string[] = []
 
   const deps: AppInstallerStrategyDeps = {
-    python: 'unused', script: 'unused.py', run: async () => ({ code: 0, stdout: '' }),
-    channel: 'stable', light: false, appVersion: '1.0', feedBaseUrl: 'https://example.invalid',
-    installer: { prepare: async () => 'file', open: async () => { throw original } },
-    registerPendingRelaunch: (version: string): Promise<RelaunchRegistration> => registerUpdateRelaunch({ getPath: (): string => home }, version, {
-      relaunch: async () => ({ cancel: async () => { order.push('cancel'); throw cancellation } })
-    }),
-    teardownBundledBackend: async () => { order.push('stop') },
-    restoreBundledBackend: async () => { order.push('restore'); throw recovery },
-    emitUpdateProgress: event => { if (event.stage === 'error') {order.push('error')} },
-    quit: () => { throw new Error('failed handoff must not quit') }
+    python: 'unused',
+    script: 'unused.py',
+    run: async () => ({ code: 0, stdout: '' }),
+    channel: 'stable',
+    light: false,
+    appVersion: '1.0',
+    feedBaseUrl: 'https://example.invalid',
+    installer: {
+      prepare: async () => 'file',
+      open: async () => {
+        throw original
+      }
+    },
+    registerPendingRelaunch: (version: string): Promise<RelaunchRegistration> =>
+      registerUpdateRelaunch({ getPath: (): string => home }, version, {
+        relaunch: async () => ({
+          cancel: async () => {
+            order.push('cancel')
+            throw cancellation
+          }
+        })
+      }),
+    teardownBundledBackend: async () => {
+      order.push('stop')
+    },
+    restoreBundledBackend: async () => {
+      order.push('restore')
+      throw recovery
+    },
+    emitUpdateProgress: event => {
+      if (event.stage === 'error') {
+        order.push('error')
+      }
+    },
+    quit: () => {
+      throw new Error('failed handoff must not quit')
+    }
   }
 
   try {

@@ -48,8 +48,11 @@ describe('useStatusSnapshot', () => {
 
       expect(warning).toBeTypeOf('string')
 
-      const wrapper: (props: { children: ReactNode }) => ReactElement = ({ children }: { children: ReactNode }): ReactElement =>
-        createElement(I18nProvider, { configClient: null, initialLocale: locale, children })
+      const wrapper: (props: { children: ReactNode }) => ReactElement = ({
+        children
+      }: {
+        children: ReactNode
+      }): ReactElement => createElement(I18nProvider, { configClient: null, initialLocale: locale, children })
 
       const requestGateway: GatewayRequester = vi.fn().mockResolvedValue({}) as unknown as GatewayRequester
 

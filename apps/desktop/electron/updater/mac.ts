@@ -20,7 +20,9 @@ export class MacStrategy implements UpdaterStrategy {
   constructor(private readonly deps: MacStrategyDeps) {}
 
   async check(): Promise<UpdaterStatusWire> {
-    if (this.applying) { throw new Error('An update is already in progress.') }
+    if (this.applying) {
+      throw new Error('An update is already in progress.')
+    }
 
     return this.checkRelease()
   }
@@ -28,7 +30,9 @@ export class MacStrategy implements UpdaterStrategy {
   private async checkRelease(): Promise<UpdaterStatusWire> {
     const result = await this.deps.updater.checkForUpdates()
 
-    if (!result) { throw new Error('The macOS updater is not active for this app.') }
+    if (!result) {
+      throw new Error('The macOS updater is not active for this app.')
+    }
 
     return {
       supported: true,
@@ -42,7 +46,9 @@ export class MacStrategy implements UpdaterStrategy {
   }
 
   async apply(): Promise<UpdaterApplyResultWire> {
-    if (this.applying) { throw new Error('An update is already in progress.') }
+    if (this.applying) {
+      throw new Error('An update is already in progress.')
+    }
     this.applying = true
     let stopped = false
 
@@ -55,7 +61,9 @@ export class MacStrategy implements UpdaterStrategy {
     try {
       const status = await this.checkRelease()
 
-      if (!status.updateAvailable) { return { ok: true, mechanism: this.mechanism } }
+      if (!status.updateAvailable) {
+        return { ok: true, mechanism: this.mechanism }
+      }
       await this.deps.updater.downloadUpdate()
       this.deps.emitProgress({ stage: 'prepare', message: 'Verifying the signed macOS update.', percent: null })
       await this.deps.prepareInstall()
@@ -66,7 +74,9 @@ export class MacStrategy implements UpdaterStrategy {
 
       return { ok: true, bundled: true, handedOff: true, mechanism: this.mechanism }
     } catch (error) {
-      if (stopped) { await this.deps.onInstallFailure() }
+      if (stopped) {
+        await this.deps.onInstallFailure()
+      }
       throw error
     } finally {
       this.deps.updater.removeListener('download-progress', progress)
@@ -92,13 +102,23 @@ export function prepareMacInstall(native: NativeMacUpdater, timeoutMs = 120_000)
       native.removeListener('update-downloaded', ready)
     }
 
-    const failed = (error: Error): void => { cleanup(); reject(error) }
+    const failed = (error: Error): void => {
+      cleanup()
+      reject(error)
+    }
 
-    const ready = (): void => { cleanup(); resolve() }
+    const ready = (): void => {
+      cleanup()
+      resolve()
+    }
     const timer = setTimeout(() => failed(new Error('macOS update verification timed out.')), timeoutMs)
     native.once('error', failed)
     native.once('update-downloaded', ready)
 
-    try { native.checkForUpdates() } catch (error) { failed(error as Error) }
+    try {
+      native.checkForUpdates()
+    } catch (error) {
+      failed(error as Error)
+    }
   })
 }

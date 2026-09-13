@@ -15,37 +15,58 @@ it('offers manual recovery only for a missing source probe, never for a broken p
   fs.mkdirSync(home)
   fs.writeFileSync(path.join(root, 'hermes_cli', '__init__.py'), '')
 
-  const probe: () => Promise<SourceUpdate | null> = (): Promise<SourceUpdate | null> => readSourceUpdate({
-    python: process.env.HERMES_PYTHON || 'python3', git: 'git', updateRoot: root, hermesHome: home
-  })
+  const probe: () => Promise<SourceUpdate | null> = (): Promise<SourceUpdate | null> =>
+    readSourceUpdate({
+      python: process.env.HERMES_PYTHON || 'python3',
+      git: 'git',
+      updateRoot: root,
+      hermesHome: home
+    })
 
   const deps: CheckoutStrategyDeps = {
     isGitCheckout: (): boolean => true,
     updateCheckCachePath: path.join(root, 'cache.json'),
-    writeFileAtomic: vi.fn(), readSourceUpdate: probe, fetchGitHubApi: vi.fn(),
-    hermesHome: home, isWindows: process.platform === 'win32', isMac: process.platform === 'darwin',
-    defaultUpdateBranch: 'main', updateHandoffDwellMs: 0,
-    directoryExists: fs.existsSync, readCanonicalInstallStamp: (): null => null,
+    writeFileAtomic: vi.fn(),
+    readSourceUpdate: probe,
+    fetchGitHubApi: vi.fn(),
+    hermesHome: home,
+    isWindows: process.platform === 'win32',
+    isMac: process.platform === 'darwin',
+    defaultUpdateBranch: 'main',
+    updateHandoffDwellMs: 0,
+    directoryExists: fs.existsSync,
+    readCanonicalInstallStamp: (): null => null,
     readDesktopUpdateConfig: (): { branch: string } => ({ branch: 'main' }),
-    resolveUpdateRoot: (): string => root, resolveUpdaterBinary: vi.fn((): string => 'frozen-updater'),
+    resolveUpdateRoot: (): string => root,
+    resolveUpdaterBinary: vi.fn((): string => 'frozen-updater'),
     resolveHealedBranch: vi.fn(async (_root: string, branch: string): Promise<string> => branch),
     getOriginUrl: async (): Promise<string> => 'https://github.com/fixture/repo',
     runGit: async (args: string[]): Promise<{ code: number; stdout: string; stderr: string }> => ({
-      code: 0, stdout: args.includes('--abbrev-ref') ? 'feature/work' : args.includes('HEAD') ? 'a'.repeat(40) : '', stderr: ''
+      code: 0,
+      stdout: args.includes('--abbrev-ref') ? 'feature/work' : args.includes('HEAD') ? 'a'.repeat(40) : '',
+      stderr: ''
     }),
-    firstLine: (text: string): string => text.split('\n')[0], emitUpdateProgress: vi.fn(), rememberLog: vi.fn(),
+    firstLine: (text: string): string => text.split('\n')[0],
+    emitUpdateProgress: vi.fn(),
+    rememberLog: vi.fn(),
     startHermes: vi.fn(async (): Promise<void> => {}),
     stopBackendsForUpdate: vi.fn(async (): Promise<void> => {}),
-    repairMacUpdaterHelper: vi.fn(), preflightStateDb: vi.fn(), runningAppBundle: (): null => null,
-    markQuittingForHandoff: vi.fn(), quit: vi.fn()
+    repairMacUpdaterHelper: vi.fn(),
+    preflightStateDb: vi.fn(),
+    runningAppBundle: (): null => null,
+    markQuittingForHandoff: vi.fn(),
+    quit: vi.fn()
   }
 
   const strategy: ReturnType<typeof createCheckoutStrategy> = createCheckoutStrategy(deps)
 
   try {
     for (const oldModule of ['def resolve_source_release(channel):\n    return None, None\n', null]) {
-      if (oldModule !== null) { fs.writeFileSync(modulePath, oldModule) }
-      else { fs.rmSync(modulePath) }
+      if (oldModule !== null) {
+        fs.writeFileSync(modulePath, oldModule)
+      } else {
+        fs.rmSync(modulePath)
+      }
 
       expect(await strategy.check()).toMatchObject({ supported: false, reason: 'source-probe-unavailable' })
       const result: Awaited<ReturnType<typeof strategy.apply>> = await strategy.apply()

@@ -2,21 +2,44 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { client } = vi.hoisted(() => ({
   client: {
-    autoDownload: true, autoInstallOnAppQuit: true, autoRunAppAfterInstall: false,
-    channel: '', allowPrerelease: true, allowDowngrade: true,
-    on: vi.fn(), setFeedURL: vi.fn(), checkForUpdates: vi.fn(async () => null)
+    autoDownload: true,
+    autoInstallOnAppQuit: true,
+    autoRunAppAfterInstall: false,
+    channel: '',
+    allowPrerelease: true,
+    allowDowngrade: true,
+    on: vi.fn(),
+    setFeedURL: vi.fn(),
+    checkForUpdates: vi.fn(async () => null)
   }
 }))
 
 vi.mock('electron', () => ({ autoUpdater: {} }))
-vi.mock('electron-updater', () => ({ default: { MacUpdater: class { constructor() { return client } } } }))
+vi.mock('electron-updater', () => ({
+  default: {
+    MacUpdater: class {
+      constructor() {
+        return client
+      }
+    }
+  }
+}))
 
 import { createMacStrategy } from './mac-client'
 
 afterEach(() => vi.clearAllMocks())
 
 function deps(feedBaseUrl = '', light = false, channel: 'stable' | 'canary' = 'stable') {
-  return { channel, light, feedBaseUrl, appVersion: '0.28.0', log: vi.fn(), emitProgress: vi.fn(), beforeInstall: vi.fn(), onInstallFailure: vi.fn() }
+  return {
+    channel,
+    light,
+    feedBaseUrl,
+    appVersion: '0.28.0',
+    log: vi.fn(),
+    emitProgress: vi.fn(),
+    beforeInstall: vi.fn(),
+    onInstallFailure: vi.fn()
+  }
 }
 
 describe('macOS client wiring', () => {
@@ -34,7 +57,11 @@ describe('macOS client wiring', () => {
 
   it('overrides the provider with the same variant/channel path as the publisher', () => {
     createMacStrategy(deps('https://updates.example/', true, 'canary'))
-    expect(client.setFeedURL).toHaveBeenCalledWith({ provider: 'generic', url: 'https://updates.example/releases/darwin/light/canary/', channel: 'canary' })
+    expect(client.setFeedURL).toHaveBeenCalledWith({
+      provider: 'generic',
+      url: 'https://updates.example/releases/darwin/light/canary/',
+      channel: 'canary'
+    })
     expect(client.allowPrerelease).toBe(true)
     expect(() => createMacStrategy(deps('http://untrusted.example'))).toThrow('HTTPS')
   })

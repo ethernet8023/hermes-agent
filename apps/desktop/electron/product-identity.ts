@@ -28,10 +28,16 @@ export const PRODUCT_IDENTITY: Readonly<ProductIdentity> =
  * Stable keeps its historical userData and runtime naming behavior.
  */
 export function applyDesktopIdentity(
-  app: { getPath(name: 'appData'): string; setPath(name: 'userData', value: string): void; setName(name: string): void },
+  app: {
+    getPath(name: 'appData'): string
+    setPath(name: 'userData', value: string): void
+    setName(name: string): void
+  },
   identity: Readonly<ProductIdentity> = PRODUCT_IDENTITY
 ): string | null {
-  if (identity.appNamePascal === identity.artifactNamePascal) {return null}
+  if (identity.appNamePascal === identity.artifactNamePascal) {
+    return null
+  }
   const userData: string = path.join(app.getPath('appData'), identity.appNamePascal)
   mkdirSync(userData, { recursive: true })
   app.setPath('userData', userData)

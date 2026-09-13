@@ -87,7 +87,13 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
     const status: UpdaterStatusWire = await checkCheckoutUpdates(deps, { force: true })
 
     if (status.reason === 'source-probe-unavailable') {
-      return { ok: true, manual: true, command: 'hermes update --help', message: status.message, hermesRoot: status.hermesRoot }
+      return {
+        ok: true,
+        manual: true,
+        command: 'hermes update --help',
+        message: status.message,
+        hermesRoot: status.hermesRoot
+      }
     }
 
     if (!status.supported || status.error) {
@@ -97,7 +103,9 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
     const branch: string = status.branch ?? deps.defaultUpdateBranch
     const targetArgs: string[] = status.channel ? ['--channel', status.channel] : ['--branch', branch]
     const targetLabel: string = status.channel ?? branch
-    const manualCommand: string = status.channel ? `hermes update --channel ${status.channel}` : buildManualUpdateCommand(branch)
+    const manualCommand: string = status.channel
+      ? `hermes update --channel ${status.channel}`
+      : buildManualUpdateCommand(branch)
     const updater: string | null = deps.resolveUpdaterBinary()
     const root: string = deps.resolveUpdateRoot()
 
@@ -106,11 +114,12 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
     if (existsSync(path.join(root, 'pm')) && !existsSync(path.join(root, 'scripts', 'desktop-update', 'runtime.ps1'))) {
       const launcher: string | null = resolveInstallationLauncher(root, deps.isWindows, deps.hermesHome)
 
-      if (!launcher) { return { ok: false, error: 'installation-launcher-missing' } }
+      if (!launcher) {
+        return { ok: false, error: 'installation-launcher-missing' }
+      }
 
-      const quote = (value: string): string => deps.isWindows
-        ? `'${value.replace(/'/g, "''")}'`
-        : `'${value.replace(/'/g, "'\\''")}'`
+      const quote = (value: string): string =>
+        deps.isWindows ? `'${value.replace(/'/g, "''")}'` : `'${value.replace(/'/g, "'\\''")}'`
 
       const command: string = `${deps.isWindows ? '& ' : ''}${quote(launcher)} update ${targetArgs.map(quote).join(' ')}`
 
@@ -143,7 +152,9 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
       if (!resolveUpdateScriptHandoff(updateRoot)) {
         const command: string = manualCommand
 
-        deps.rememberLog(`[updates] no staged updater; surfacing manual \`${command}\` for CLI install at ${updateRoot}`)
+        deps.rememberLog(
+          `[updates] no staged updater; surfacing manual \`${command}\` for CLI install at ${updateRoot}`
+        )
         deps.emitUpdateProgress({ stage: 'manual', message: command, percent: null })
 
         return { ok: true, manual: true, command, hermesRoot: updateRoot }
@@ -180,7 +191,6 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
     if (targetApp) {
       updaterArgs.push('--target-app', targetApp)
     }
-
 
     // ── Pre-flight state.db integrity guard (#68474) ─────────────────
     // Emergency backup and header verification before the update touches
@@ -319,7 +329,6 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
       deps.emitUpdateProgress({ stage: 'error', message, percent: null })
       deps.startHermes().catch(() => {})
 
-
       return { ok: false, error: 'updater-spawn-failed', message }
     }
 
@@ -334,109 +343,120 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
     return { ok: true, handedOff: true, updater }
   }
 
-  async function applyPosixHandoff(targetArgs: string[], targetLabel: string, manualCommand: string): Promise<UpdaterApplyResultWire> {
-  const updateRoot = deps.resolveUpdateRoot()
-  const handoff = resolvePosixScriptHandoff(updateRoot)
+  async function applyPosixHandoff(
+    targetArgs: string[],
+    targetLabel: string,
+    manualCommand: string
+  ): Promise<UpdaterApplyResultWire> {
+    const updateRoot = deps.resolveUpdateRoot()
+    const handoff = resolvePosixScriptHandoff(updateRoot)
 
-  if (!handoff) {
-    deps.emitUpdateProgress({ stage: 'manual', message: manualCommand, percent: null })
+    if (!handoff) {
+      deps.emitUpdateProgress({ stage: 'manual', message: manualCommand, percent: null })
 
-    return { ok: true, manual: true, command: manualCommand, hermesRoot: updateRoot }
-  }
-
-  const handoffConflict = updateHandoffConflict(deps.hermesHome)
-
-  if (handoffConflict) {
-    // Same hazard as the Windows path (#75778): a live foreign updater
-    // already owns the marker — refuse rather than double-mutate the tree.
-    deps.rememberLog(`[updates] refusing posix hand-off: ${handoffConflict.message}`)
-    deps.emitUpdateProgress({ stage: 'error', message: handoffConflict.message, percent: null })
-
-    return { ok: false, error: 'update-already-running', message: handoffConflict.message }
-  }
-
-  // ── Pre-flight state.db integrity guard (#68474) ──
-  deps.preflightStateDb(deps.hermesHome, deps.rememberLog)
-
-  const args: string[] = [...handoff.args, '--install-root', updateRoot, ...targetArgs, '--desktop-pid', String(process.pid)]
-  const updateStartedAt = Math.floor(Date.now() / 1000)
-
-  // Relaunch target: the running .app bundle on mac (script swaps the
-  // rebuilt bundle over it), the running binary elsewhere. The script's gate
-  // (an exact port of update-relaunch.ts's decideRelaunchOutcome) relaunches
-  // only a binary the rebuild replaced with a launchable sandbox helper —
-  // replaying the original launch context (filtered args, cwd, sandbox
-  // opt-out) so a deep-link or --no-sandbox launch survives the update.
-  const targetApp = deps.isMac ? deps.runningAppBundle() : process.execPath
-
-  if (targetApp) {
-    args.push('--relaunch-target', targetApp)
-  }
-
-  const relaunchArgs = collectRelaunchArgs(process.argv.slice(1))
-
-  if (!deps.isMac) {
-    args.push('--relaunch-cwd', process.cwd())
-
-    if (sandboxFallbackFromEnv(process.env, relaunchArgs)) {
-      args.push('--sandbox-fallback')
+      return { ok: true, manual: true, command: manualCommand, hermesRoot: updateRoot }
     }
 
-    if (relaunchArgs.length) {
-      args.push('--', ...relaunchArgs)
+    const handoffConflict = updateHandoffConflict(deps.hermesHome)
+
+    if (handoffConflict) {
+      // Same hazard as the Windows path (#75778): a live foreign updater
+      // already owns the marker — refuse rather than double-mutate the tree.
+      deps.rememberLog(`[updates] refusing posix hand-off: ${handoffConflict.message}`)
+      deps.emitUpdateProgress({ stage: 'error', message: handoffConflict.message, percent: null })
+
+      return { ok: false, error: 'update-already-running', message: handoffConflict.message }
     }
-  }
 
-  const child = spawnUpdaterProcess(handoff.command, args, {
-    cwd: deps.hermesHome,
-    env: {
-      ...sourceUpdateEnvironment(updateRoot, deps.hermesHome),
-      HERMES_UPDATE_STARTED_AT: String(updateStartedAt)
-    },
-    detached: true,
-    stdio: 'ignore'
-  })
+    // ── Pre-flight state.db integrity guard (#68474) ──
+    deps.preflightStateDb(deps.hermesHome, deps.rememberLog)
 
-  // Bridge marker (same contract as the Windows hand-off): cover the gap
-  // until the script claims the marker with its own pid as step 0. If the
-  // script never starts, the dead pid reads as stale and self-deletes.
-  if (Number.isInteger(child.pid)) {
-    writeUpdateMarker(deps.hermesHome, child.pid, { startedAt: updateStartedAt })
-  }
+    const args: string[] = [
+      ...handoff.args,
+      '--install-root',
+      updateRoot,
+      ...targetArgs,
+      '--desktop-pid',
+      String(process.pid)
+    ]
+    const updateStartedAt = Math.floor(Date.now() / 1000)
 
-  deps.rememberLog(`[updates] launched posix hand-off: ${handoff.scriptPath} (${targetLabel}); quitting to hand off`)
-  deps.emitUpdateProgress({
-    stage: 'restart',
-    message:
-      'Updating Hermes — this window will close. Don’t reopen Hermes yourself; it restarts automatically when the update finishes.',
-    percent: 100
-  })
+    // Relaunch target: the running .app bundle on mac (script swaps the
+    // rebuilt bundle over it), the running binary elsewhere. The script's gate
+    // (an exact port of update-relaunch.ts's decideRelaunchOutcome) relaunches
+    // only a binary the rebuild replaced with a launchable sandbox helper —
+    // replaying the original launch context (filtered args, cwd, sandbox
+    // opt-out) so a deep-link or --no-sandbox launch survives the update.
+    const targetApp = deps.isMac ? deps.runningAppBundle() : process.execPath
 
-  // Settle window (#66753): the reported macOS failure mode is exactly this
-  // path — the app quits, bash/posix.sh dies early (or was never spawnable),
-  // and the user is left with no app, no updater, and no relaunch. Watch the
-  // child through the dwell; on spawn error or early death, stay alive and
-  // surface the failure instead of quitting into nothing.
-  const dwellStartedAt = Date.now()
-  const handoffOutcome = await observeUpdaterHandoff(child, deps.updateHandoffDwellMs)
+    if (targetApp) {
+      args.push('--relaunch-target', targetApp)
+    }
 
-  if (!handoffOutcome.ok) {
-    const message = `Update failed to start: ${handoffOutcome.message}. Hermes will keep running — try again, or run \`hermes update\` from a terminal.`
+    const relaunchArgs = collectRelaunchArgs(process.argv.slice(1))
 
-    deps.rememberLog(`[updates] posix hand-off not viable, aborting quit: ${handoffOutcome.message}`)
-    deps.emitUpdateProgress({ stage: 'error', message, percent: null })
+    if (!deps.isMac) {
+      args.push('--relaunch-cwd', process.cwd())
 
-    return { ok: false, error: 'updater-spawn-failed', message }
-  }
+      if (sandboxFallbackFromEnv(process.env, relaunchArgs)) {
+        args.push('--sandbox-fallback')
+      }
 
-  deps.markQuittingForHandoff()
-  setTimeout(
-    () => {
-      deps.quit()
-    },
-    Math.max(0, deps.updateHandoffDwellMs - (Date.now() - dwellStartedAt))
-  )
+      if (relaunchArgs.length) {
+        args.push('--', ...relaunchArgs)
+      }
+    }
 
-  return { ok: true, handedOff: true, updater: handoff.scriptPath }
+    const child = spawnUpdaterProcess(handoff.command, args, {
+      cwd: deps.hermesHome,
+      env: {
+        ...sourceUpdateEnvironment(updateRoot, deps.hermesHome),
+        HERMES_UPDATE_STARTED_AT: String(updateStartedAt)
+      },
+      detached: true,
+      stdio: 'ignore'
+    })
+
+    // Bridge marker (same contract as the Windows hand-off): cover the gap
+    // until the script claims the marker with its own pid as step 0. If the
+    // script never starts, the dead pid reads as stale and self-deletes.
+    if (Number.isInteger(child.pid)) {
+      writeUpdateMarker(deps.hermesHome, child.pid, { startedAt: updateStartedAt })
+    }
+
+    deps.rememberLog(`[updates] launched posix hand-off: ${handoff.scriptPath} (${targetLabel}); quitting to hand off`)
+    deps.emitUpdateProgress({
+      stage: 'restart',
+      message:
+        'Updating Hermes — this window will close. Don’t reopen Hermes yourself; it restarts automatically when the update finishes.',
+      percent: 100
+    })
+
+    // Settle window (#66753): the reported macOS failure mode is exactly this
+    // path — the app quits, bash/posix.sh dies early (or was never spawnable),
+    // and the user is left with no app, no updater, and no relaunch. Watch the
+    // child through the dwell; on spawn error or early death, stay alive and
+    // surface the failure instead of quitting into nothing.
+    const dwellStartedAt = Date.now()
+    const handoffOutcome = await observeUpdaterHandoff(child, deps.updateHandoffDwellMs)
+
+    if (!handoffOutcome.ok) {
+      const message = `Update failed to start: ${handoffOutcome.message}. Hermes will keep running — try again, or run \`hermes update\` from a terminal.`
+
+      deps.rememberLog(`[updates] posix hand-off not viable, aborting quit: ${handoffOutcome.message}`)
+      deps.emitUpdateProgress({ stage: 'error', message, percent: null })
+
+      return { ok: false, error: 'updater-spawn-failed', message }
+    }
+
+    deps.markQuittingForHandoff()
+    setTimeout(
+      () => {
+        deps.quit()
+      },
+      Math.max(0, deps.updateHandoffDwellMs - (Date.now() - dwellStartedAt))
+    )
+
+    return { ok: true, handedOff: true, updater: handoff.scriptPath }
   }
 }

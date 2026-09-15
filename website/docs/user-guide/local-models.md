@@ -16,8 +16,9 @@ after a model is downloaded.
 
 ## Desktop availability and downloads
 
-The desktop Local Models interface is enabled for canary builds. Other desktop
-builds require the `--local` launch flag. A runtime can already be bundled;
+The desktop Local Models interface is enabled on every preview build (canary,
+commit, and channel builds). Tagged stable releases require the `--local`
+launch flag. A runtime can already be bundled;
 its absence triggers the managed-tool install path, not an arbitrary latest
 llama.cpp download.
 

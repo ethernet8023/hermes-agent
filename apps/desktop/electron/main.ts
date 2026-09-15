@@ -196,7 +196,7 @@ import {
   tuiResumeArgs
 } from './external-terminal'
 import { type FaviconIo, resolveFavicon } from './favicon'
-import { resolveFeatureFlags } from './feature-flags'
+import { isPreviewBuild, resolveFeatureFlags } from './feature-flags'
 import {
   installFindShortcut,
   installFoundInPageForwarder,
@@ -16204,16 +16204,16 @@ ipcMain.on('hermes:translucency:support', event => {
 
 // Feature-flag facts the renderer needs before first paint (same sendSync
 // pattern as translucency). Resolved in feature-flags.ts from the launch
-// argv and the artifact's channel: `--local` (from `hermes desktop --local`
+// argv and the artifact's identity: `--local` (from `hermes desktop --local`
 // or directly on Hermes.exe, a shortcut edit) gates the local-models GUI on
-// stable builds, and canary builds get the same surfaces by default. Launch
-// flags survive self-relaunches because collectRelaunchArgs only strips
-// internal flags.
+// tagged stable releases; every other build (canary, commit, channel, dev)
+// is a preview and gets the same surfaces by default. Launch flags survive
+// self-relaunches because collectRelaunchArgs only strips internal flags.
 ipcMain.on('hermes:feature-flags', (event: IpcMainEvent): void => {
   event.returnValue = {
     ...resolveFeatureFlags({
       argv: process.argv,
-      canary: resolveUpdaterChannelFromStamp() === 'canary'
+      preview: isPreviewBuild(INSTALL_STAMP)
     }),
     guestOnboarding: GUEST_ONBOARDING,
     skipIntro: SKIP_INTRO

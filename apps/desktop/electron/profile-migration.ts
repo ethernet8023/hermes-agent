@@ -271,9 +271,8 @@ export function readExistingPreference(
  */
 export function migrateActiveProfileIfMissing(desktopProfileConfigPath: string, deps: MigrationDeps): boolean {
   const exists: boolean = deps.existsSync(desktopProfileConfigPath)
-  const existing = exists
-    ? readExistingPreference(desktopProfileConfigPath, deps.readFileSync)
-    : null
+
+  const existing = exists ? readExistingPreference(desktopProfileConfigPath, deps.readFileSync) : null
 
   if (exists && (!existing || !existing.migrated)) {
     return false

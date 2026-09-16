@@ -19,26 +19,29 @@ function fixture(): { root: string; binDir: string; source: string } {
   return { root, binDir, source }
 }
 
-test.runIf(process.platform !== 'win32')('retiring a bundle removes only its direct CLI links, including dangling ones', (): void => {
-  const { root, binDir, source }: ReturnType<typeof fixture> = fixture()
-  const payload: string = path.dirname(path.dirname(source))
-  const target: string = path.join(binDir, 'hermes')
+test.runIf(process.platform !== 'win32')(
+  'retiring a bundle removes only its direct CLI links, including dangling ones',
+  (): void => {
+    const { root, binDir, source }: ReturnType<typeof fixture> = fixture()
+    const payload: string = path.dirname(path.dirname(source))
+    const target: string = path.join(binDir, 'hermes')
 
-  try {
-    provisionCliLinks({ hermes: source }, binDir, (): void => {})
-    fs.symlinkSync(path.join(root, 'other/agent-payload/bin/other'), path.join(binDir, 'other'))
-    fs.symlinkSync(source, path.join(binDir, 'personal-alias'))
-    fs.writeFileSync(path.join(binDir, 'custom'), 'keep')
-    fs.rmSync(source)
-    removeBundleCliLinks(payload, binDir)
-    assert.equal(fs.lstatSync(target, { throwIfNoEntry: false }), undefined)
-    assert.deepEqual(fs.readdirSync(binDir).sort(), ['custom', 'other', 'personal-alias'])
-    removeBundleCliLinks(payload, binDir)
-    assert.equal(fs.readFileSync(path.join(binDir, 'custom'), 'utf8'), 'keep')
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true })
+    try {
+      provisionCliLinks({ hermes: source }, binDir, (): void => {})
+      fs.symlinkSync(path.join(root, 'other/agent-payload/bin/other'), path.join(binDir, 'other'))
+      fs.symlinkSync(source, path.join(binDir, 'personal-alias'))
+      fs.writeFileSync(path.join(binDir, 'custom'), 'keep')
+      fs.rmSync(source)
+      removeBundleCliLinks(payload, binDir)
+      assert.equal(fs.lstatSync(target, { throwIfNoEntry: false }), undefined)
+      assert.deepEqual(fs.readdirSync(binDir).sort(), ['custom', 'other', 'personal-alias'])
+      removeBundleCliLinks(payload, binDir)
+      assert.equal(fs.readFileSync(path.join(binDir, 'custom'), 'utf8'), 'keep')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   }
-})
+)
 
 test('repairs owned dangling CLI links without changing foreign or live entries', context => {
   const { root, binDir, source } = fixture()

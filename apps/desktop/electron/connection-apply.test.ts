@@ -19,37 +19,34 @@ function deferred() {
 }
 
 describe('applyConnectionChange', () => {
-  it(
-    'serializes connection changes behind bootstrap rollback before teardown and apply',
-    async () => {
-      const gate = deferred()
-      const events: string[] = []
+  it('serializes connection changes behind bootstrap rollback before teardown and apply', async () => {
+    const gate = deferred()
+    const events: string[] = []
 
-      const run = applyConnectionChange({
-        cancelAndWait: async () => {
-          events.push('cancel')
-          await gate.promise
-          events.push('drained')
-        },
-        isPrimary: true,
-        scope: '',
-        sendApplied: () => events.push('applied'),
-        stopPool: vi.fn(),
-        teardownPrimary: async () => {
-          events.push('primary')
-        },
-        teardownSsh: async () => {
-          events.push('ssh')
-        }
-      })
+    const run = applyConnectionChange({
+      cancelAndWait: async () => {
+        events.push('cancel')
+        await gate.promise
+        events.push('drained')
+      },
+      isPrimary: true,
+      scope: '',
+      sendApplied: () => events.push('applied'),
+      stopPool: vi.fn(),
+      teardownPrimary: async () => {
+        events.push('primary')
+      },
+      teardownSsh: async () => {
+        events.push('ssh')
+      }
+    })
 
-      await Promise.resolve()
-      expect(events).toEqual(['cancel'])
-      gate.resolve()
-      await run
-      expect(events).toEqual(['cancel', 'drained', 'ssh', 'primary', 'applied'])
-    }
-  )
+    await Promise.resolve()
+    expect(events).toEqual(['cancel'])
+    gate.resolve()
+    await run
+    expect(events).toEqual(['cancel', 'drained', 'ssh', 'primary', 'applied'])
+  })
 
   it('tears down only a non-primary scope without applying the primary connection', async () => {
     const events: string[] = []
@@ -98,10 +95,25 @@ it.each([
   [false, 0, 0, true, true],
   [true, 1, 1, true, false],
   [false, 0, 0, false, false]
-] as const)('quit guard: done=%s connections=%s bootstrap=%s stopping=%s → %s',
-  (teardownDone: boolean, connectionCount: number, bootstrapPending: number, stopping: boolean, expected: boolean): void => {
-    expect(sshQuitShouldBlock({ teardownDone, connectionCount, bootstrapPending, inFlight: stopping ? Promise.resolve() : null })).toBe(expected)
-  })
+] as const)(
+  'quit guard: done=%s connections=%s bootstrap=%s stopping=%s → %s',
+  (
+    teardownDone: boolean,
+    connectionCount: number,
+    bootstrapPending: number,
+    stopping: boolean,
+    expected: boolean
+  ): void => {
+    expect(
+      sshQuitShouldBlock({
+        teardownDone,
+        connectionCount,
+        bootstrapPending,
+        inFlight: stopping ? Promise.resolve() : null
+      })
+    ).toBe(expected)
+  }
+)
 
 describe('teardownSshState', () => {
   it('terminates the owned remote backend before closing its tunnel and SSH transport', async () => {

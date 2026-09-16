@@ -6,13 +6,19 @@ import path from 'node:path'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 /** Exact installation identity; PATH may refer to another checkout. */
-export function resolveInstallationLauncher(updateRoot: string, isWindows: boolean = process.platform === 'win32', hermesHome: string = process.env.HERMES_HOME ?? ''): string | null {
+export function resolveInstallationLauncher(
+  updateRoot: string,
+  isWindows: boolean = process.platform === 'win32',
+  hermesHome: string = process.env.HERMES_HOME ?? ''
+): string | null {
   const names: string[] = isWindows ? ['hermes.exe', 'hermes.cmd'] : ['hermes']
 
   for (const name of names) {
     const candidate: string = path.join(updateRoot, '.hermes', 'bin', name)
 
-    if (stagedFileExists(candidate)) { return candidate }
+    if (stagedFileExists(candidate)) {
+      return candidate
+    }
   }
 
   // Earlier PM installers published only to user-bin. Trust that historical
@@ -23,14 +29,20 @@ export function resolveInstallationLauncher(updateRoot: string, isWindows: boole
       : path.join(os.homedir(), '.hermes')
 
     const dirs: string[] = isWindows
-      ? [path.join(hermesHome || defaultHome, 'bin'), path.join(defaultHome, 'bin'), path.join(path.dirname(updateRoot), 'bin')]
+      ? [
+          path.join(hermesHome || defaultHome, 'bin'),
+          path.join(defaultHome, 'bin'),
+          path.join(path.dirname(updateRoot), 'bin')
+        ]
       : [path.join(os.homedir(), '.local', 'bin'), path.join(hermesHome || defaultHome, 'bin')]
 
     for (const dir of new Set(dirs)) {
       for (const name of names) {
         const candidate: string = path.join(dir, name)
 
-        if (stagedFileExists(candidate) && launcherTargetsInstallation(candidate, updateRoot)) { return candidate }
+        if (stagedFileExists(candidate) && launcherTargetsInstallation(candidate, updateRoot)) {
+          return candidate
+        }
       }
     }
   }
@@ -39,7 +51,9 @@ export function resolveInstallationLauncher(updateRoot: string, isWindows: boole
   if (!existsSync(path.join(updateRoot, 'pm'))) {
     const legacy: string = path.join(updateRoot, 'venv', isWindows ? 'Scripts' : 'bin', names[0])
 
-    if (stagedFileExists(legacy)) { return legacy }
+    if (stagedFileExists(legacy)) {
+      return legacy
+    }
   }
 
   return null
@@ -50,7 +64,11 @@ export function launcherTargetsInstallation(launcher: string, root: string): boo
     const shell: boolean = process.platform === 'win32' && /\.cmd$/i.test(launcher)
 
     const output: string = execFileSync(shell ? `"${launcher}"` : launcher, ['--version'], {
-      cwd: root, encoding: 'utf8', timeout: 15000, windowsHide: true, shell,
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+      shell,
       env: { ...process.env, HERMES_INSTALL_ROOT: root }
     })
 

@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { createStoreStrategy } from './store-client'
 
 it('the production runner passes modes, full HWND and isolated payload imports', async () => {
-  const calls: { python: string; args: readonly string[]; env?: NodeJS.ProcessEnv; timeout?: number; waitForExit?: boolean }[] = []
+  const calls: {
+    python: string
+    args: readonly string[]
+    env?: NodeJS.ProcessEnv
+    timeout?: number
+    waitForExit?: boolean
+  }[] = []
   const handle = Buffer.alloc(8)
   handle.writeBigUInt64LE(0x1234567887654321n)
 
@@ -20,7 +26,13 @@ it('the production runner passes modes, full HWND and isolated payload imports',
     emitProgress: () => {},
     registerPendingRelaunch: async () => ({ automatic: true, cancel: async () => {} }),
     run: async (python, script, deps) => {
-      calls.push({ python, args: [script, ...(deps.args ?? [])], env: deps.env, timeout: deps.timeoutMs, waitForExit: deps.waitForExit })
+      calls.push({
+        python,
+        args: [script, ...(deps.args ?? [])],
+        env: deps.env,
+        timeout: deps.timeoutMs,
+        waitForExit: deps.waitForExit
+      })
 
       return {
         code: deps.args?.includes('check') ? 2 : 0,

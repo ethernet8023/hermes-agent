@@ -26,7 +26,9 @@ export function DiscontinuedNotice({
       <DialogTitle>{t.updates.discontinuedTitle}</DialogTitle>
       <DialogDescription>{t.updates.discontinuedBody}</DialogDescription>
       <div className="flex justify-end">
-        <Button onClick={onDismiss} variant="text">{t.updates.maybeLater}</Button>
+        <Button onClick={onDismiss} variant="text">
+          {t.updates.maybeLater}
+        </Button>
       </div>
     </div>
   )

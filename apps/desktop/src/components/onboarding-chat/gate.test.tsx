@@ -19,10 +19,14 @@ it('starts the skipped-film splash before the backend connects and removes it on
   $desktopOnboarding.set({ ...$desktopOnboarding.get(), firstRunSkipped: false })
 
   let complete = (_ready: boolean) => {}
-  const pending = new Promise<boolean>(resolve => { complete = resolve })
+  const pending = new Promise<boolean>(resolve => {
+    complete = resolve
+  })
   const kickoff = vi.fn(() => pending)
 
-  const request = async () => { throw new Error('No provider notice available') }
+  const request = async () => {
+    throw new Error('No provider notice available')
+  }
 
   const view = (enabled: boolean) => (
     <I18nProvider>
@@ -37,7 +41,10 @@ it('starts the skipped-film splash before the backend connects and removes it on
   rerender(view(true))
   await waitFor(() => expect(kickoff).toHaveBeenCalledOnce())
   expect(screen.getByRole('status')).toBeTruthy()
-  await act(async () => { complete(true); await pending })
+  await act(async () => {
+    complete(true)
+    await pending
+  })
   expect(screen.queryByRole('status')).toBeNull()
   expect($onboardingGate.get().guideKickoff).toBe('started')
 })
@@ -51,13 +58,21 @@ it.each(['refused', 'rejected'])('restores the ordinary app after %s startup', a
   $onboardingGate.set({ phase: 'cinematic', guideQueued: true, guideKickoff: 'idle' })
 
   const kickoff = vi.fn(async () => {
-    if (outcome === 'rejected') {throw new Error('Backend unavailable')}
+    if (outcome === 'rejected') {
+      throw new Error('Backend unavailable')
+    }
 
     return false
   })
 
-  const request = async () => { throw new Error('No provider notice available') }
-  render(<I18nProvider><OnboardingChatGate enabled onKickoff={kickoff} requestGateway={request} /></I18nProvider>)
+  const request = async () => {
+    throw new Error('No provider notice available')
+  }
+  render(
+    <I18nProvider>
+      <OnboardingChatGate enabled onKickoff={kickoff} requestGateway={request} />
+    </I18nProvider>
+  )
   await waitFor(() => expect($onboardingGate.get().phase).toBe('skipped'))
   expect(screen.queryByRole('status')).toBeNull()
   expect($chatOnboardingSolo.get()).toBe(false)

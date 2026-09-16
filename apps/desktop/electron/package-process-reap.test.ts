@@ -86,41 +86,93 @@ const cases: SelectionCase[] = [
   { name: 'excluded daemon', processes: [proc(10, GPG_AGENT), proc(11, GPG_AGENT)], excludePids: [10], killed: [11] },
   { name: 'sibling-prefix daemon', processes: [proc(10, `${ROOT}-other\\gpg-agent.exe`)], killed: [] },
   { name: 'external daemon', processes: [proc(10, 'C:\\Git\\gpg-agent.exe'), proc(11, GPG_AGENT)], killed: [11] },
-  { name: 'unidentified parent and daemon descendants', processes: [proc(12, GPG_AGENT, DAEMON_CMDLINE, 11), proc(11, GPG_AGENT, DAEMON_CMDLINE, 10), proc(10, null)], killed: [] },
-  { name: 'shared runtime and daemon descendants', processes: [proc(12, GPG_AGENT, DAEMON_CMDLINE, 11), proc(11, GPG_AGENT, DAEMON_CMDLINE, 10), proc(10, PAYLOAD_PYTHON, '-u -X utf8 -m gateway.run')], killed: [] },
-  { name: 'shared entrypoints irrespective of argv', processes: [proc(10, MAIN_EXE, '--app'), proc(11, PAYLOAD_PYTHON, null), proc(12, STORE_NODE, 'daemon.js'), proc(13, GPG_AGENT)], roots: [ROOT, TOOLS_ROOT], killed: [13] },
-  { name: 'mutable tool roots', processes: [proc(10, `${TOOLS_ROOT}\\git\\gpg-agent.exe`), proc(11, GPG_AGENT)], roots: [null, TOOLS_ROOT], killed: [10] },
+  {
+    name: 'unidentified parent and daemon descendants',
+    processes: [proc(12, GPG_AGENT, DAEMON_CMDLINE, 11), proc(11, GPG_AGENT, DAEMON_CMDLINE, 10), proc(10, null)],
+    killed: []
+  },
+  {
+    name: 'shared runtime and daemon descendants',
+    processes: [
+      proc(12, GPG_AGENT, DAEMON_CMDLINE, 11),
+      proc(11, GPG_AGENT, DAEMON_CMDLINE, 10),
+      proc(10, PAYLOAD_PYTHON, '-u -X utf8 -m gateway.run')
+    ],
+    killed: []
+  },
+  {
+    name: 'shared entrypoints irrespective of argv',
+    processes: [
+      proc(10, MAIN_EXE, '--app'),
+      proc(11, PAYLOAD_PYTHON, null),
+      proc(12, STORE_NODE, 'daemon.js'),
+      proc(13, GPG_AGENT)
+    ],
+    roots: [ROOT, TOOLS_ROOT],
+    killed: [13]
+  },
+  {
+    name: 'mutable tool roots',
+    processes: [proc(10, `${TOOLS_ROOT}\\git\\gpg-agent.exe`), proc(11, GPG_AGENT)],
+    roots: [null, TOOLS_ROOT],
+    killed: [10]
+  },
   { name: 'unreadable path', processes: [proc(10, null)], killed: [] }
 ]
 
-it.each(cases)('safe kill selection: $name', ({ processes, roots = [ROOT], selfPid = 1, excludePids = [], killed }: SelectionCase): void => {
-  const signalled: number[] = []
+it.each(cases)(
+  'safe kill selection: $name',
+  ({ processes, roots = [ROOT], selfPid = 1, excludePids = [], killed }: SelectionCase): void => {
+    const signalled: number[] = []
 
-  const outcome: ReturnType<typeof reapPackageRootedProcesses> = reapPackageRootedProcesses({
-    installRoots: roots, selfPid, excludePids, isWindows: true,
-    listProcesses: (): RunningProcess[] => processes,
-    killProcess: (pid: number): void => { signalled.push(pid) }
-  })
+    const outcome: ReturnType<typeof reapPackageRootedProcesses> = reapPackageRootedProcesses({
+      installRoots: roots,
+      selfPid,
+      excludePids,
+      isWindows: true,
+      listProcesses: (): RunningProcess[] => processes,
+      killProcess: (pid: number): void => {
+        signalled.push(pid)
+      }
+    })
 
-  expect(outcome.killed).toEqual(killed)
-  expect(outcome.matched).toBe(killed.length)
-  expect(signalled).toEqual(killed)
-})
+    expect(outcome.killed).toEqual(killed)
+    expect(outcome.matched).toBe(killed.length)
+    expect(signalled).toEqual(killed)
+  }
+)
 
 it('continues after kill failure and refuses absent roots or failed enumeration', (): void => {
   const processes: RunningProcess[] = [proc(50, GPG_AGENT), proc(51, GPG_AGENT)]
 
   const base: Parameters<typeof reapPackageRootedProcesses>[0] = {
-    installRoots: [ROOT], isWindows: true, selfPid: 1,
+    installRoots: [ROOT],
+    isWindows: true,
+    selfPid: 1,
     listProcesses: (): RunningProcess[] => processes,
-    killProcess: (pid: number): void => { if (pid === 50) { throw new Error('Access denied') } }
+    killProcess: (pid: number): void => {
+      if (pid === 50) {
+        throw new Error('Access denied')
+      }
+    }
   }
 
   expect(reapPackageRootedProcesses(base)).toMatchObject({ failed: [50], killed: [51] })
 
-  for (const overrides of [{ isWindows: false }, { installRoots: [null, ''] }, { listProcesses: (): never => { throw new Error('enumeration failed') } }]) {
+  for (const overrides of [
+    { isWindows: false },
+    { installRoots: [null, ''] },
+    {
+      listProcesses: (): never => {
+        throw new Error('enumeration failed')
+      }
+    }
+  ]) {
     const killProcess = vi.fn<(pid: number) => void>()
-    expect(reapPackageRootedProcesses({ ...base, ...overrides, killProcess })).toMatchObject({ skipped: true, killed: [] })
+    expect(reapPackageRootedProcesses({ ...base, ...overrides, killProcess })).toMatchObject({
+      skipped: true,
+      killed: []
+    })
     expect(killProcess).not.toHaveBeenCalled()
   }
 })
@@ -129,12 +181,7 @@ describe('listWindowsProcesses', () => {
   it('parses Win32_Process output (pid|parent|path|command line), mapping unreadable fields to null', () => {
     // The real shape: ExecutablePath / CommandLine are null for processes we
     // cannot open, so the script emits empty middle/tail fields.
-    const stdout = [
-      `48236|61728|${GPG_AGENT}|gpg-agent --daemon`,
-      `22660|4|${MAIN_EXE}|`,
-      '4|0||',
-      ''
-    ].join('\r\n')
+    const stdout = [`48236|61728|${GPG_AGENT}|gpg-agent --daemon`, `22660|4|${MAIN_EXE}|`, '4|0||', ''].join('\r\n')
 
     const parsed = listWindowsProcesses(() => stdout)
 

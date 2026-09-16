@@ -6,6 +6,7 @@ import yaml from 'js-yaml'
 import { z } from 'zod'
 
 const section = z.object({}).passthrough()
+
 const configSchema = z.object({
   model: section.optional(),
   providers: section.optional(),
@@ -16,10 +17,12 @@ const configSchema = z.object({
 
 export function validateMockUrl(value: string): string {
   const url = new URL(value)
+
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port
       || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
     throw new Error('Mock URL must be a credential-free http://127.0.0.1:PORT origin')
   }
+
   return url.origin
 }
 
@@ -37,6 +40,7 @@ export function writeMockProviderConfig(
   const config = configSchema.parse(fs.existsSync(configPath) ? yaml.load(fs.readFileSync(configPath, 'utf8')) ?? {} : {})
   const extra = configSchema.parse(extraConfig ? yaml.load(extraConfig) ?? {} : {})
   const display = section.parse(extraDisplayConfig ? yaml.load(extraDisplayConfig) ?? {} : {})
+
   const merged = {
     ...config,
     model: { ...config.model, default: 'mock-model', provider: 'mock', context_length: modelContextLength ?? 64000 },
@@ -48,9 +52,11 @@ export function writeMockProviderConfig(
     approvals: { ...config.approvals, mode: 'off' },
     ...extra,
   }
+
   if (extraDisplayConfig) {
     merged.display = { ...config.display, ...extra.display, ...display }
   }
+
   fs.writeFileSync(configPath, yaml.dump(merged), 'utf8')
 }
 
@@ -59,6 +65,7 @@ export function writeEnvFile(hermesHome: string, apiKey = 'e2e-mock-key'): void 
   if (!/^[\w-]+$/.test(apiKey)) {
     throw new Error('Mock key must be an inert single-line test value')
   }
+
   const envPath = path.join(hermesHome, '.env')
   const prior = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : ''
   const lines = prior.split(/\r?\n/).filter((line: string): boolean => !/^\s*(?:export\s+)?MOCK_API_KEY\s*=/.test(line))
@@ -67,9 +74,11 @@ export function writeEnvFile(hermesHome: string, apiKey = 'e2e-mock-key'): void 
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [home, url] = process.argv.slice(2)
+
   if (!home || !url || !path.isAbsolute(home)) {
     throw new Error('usage: node mock-provider-config.ts ABSOLUTE_HERMES_HOME MOCK_URL')
   }
+
   writeMockProviderConfig(home, url)
   writeEnvFile(home)
 }

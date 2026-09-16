@@ -18,7 +18,9 @@ export function readDesktopBootPreference(file: string): DesktopBootPreference |
   try {
     text = readFileSync(file, 'utf8')
   } catch (error: unknown) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') { return null }
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return null
+    }
     throw error
   }
 
@@ -55,7 +57,10 @@ function parseDesktopBootPreference(text: string): DesktopBootPreference {
 }
 /* oxlint-enable anti-slop/no-runtime-typeof */
 
-function updatePreference(file: string, update: (current: DesktopBootPreference | null) => DesktopBootPreference): DesktopBootPreference {
+function updatePreference(
+  file: string,
+  update: (current: DesktopBootPreference | null) => DesktopBootPreference
+): DesktopBootPreference {
   mkdirSync(path.dirname(file), { recursive: true })
   const temporary: string = `${file}.${randomUUID()}.tmp`
 
@@ -74,11 +79,22 @@ function updatePreference(file: string, update: (current: DesktopBootPreference 
 
     writeFileSync(temporary, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
     const handle: number = openSync(temporary, 'r+')
-    try { fsyncSync(handle) } finally { closeSync(handle) }
+
+    try {
+      fsyncSync(handle)
+    } finally {
+      closeSync(handle)
+    }
     renameSync(temporary, file)
+
     if (process.platform !== 'win32') {
       const directory: number = openSync(path.dirname(file), 'r')
-      try { fsyncSync(directory) } finally { closeSync(directory) }
+
+      try {
+        fsyncSync(directory)
+      } finally {
+        closeSync(directory)
+      }
     }
 
     return next
@@ -88,7 +104,9 @@ function updatePreference(file: string, update: (current: DesktopBootPreference 
 }
 
 export function writeDesktopProfile(file: string, profile: string | null): string | null {
-  if (!validProfile(profile)) { throw new Error(`Invalid profile name: ${profile}`) }
+  if (!validProfile(profile)) {
+    throw new Error(`Invalid profile name: ${profile}`)
+  }
 
   return updatePreference(file, (current: DesktopBootPreference | null): DesktopBootPreference => {
     const next: DesktopBootPreference = { ...current, profile }

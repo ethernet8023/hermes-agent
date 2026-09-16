@@ -102,7 +102,11 @@ test('cancellation and failed registration remove only their own installation ma
 
   for (const automatic of [true, false]) {
     let resolveReady!: (handle: RelaunchWaiterHandle | undefined) => void
-    const ready: Promise<RelaunchWaiterHandle | undefined> = new Promise((resolve: (handle: RelaunchWaiterHandle | undefined) => void): void => { resolveReady = resolve })
+    const ready: Promise<RelaunchWaiterHandle | undefined> = new Promise(
+      (resolve: (handle: RelaunchWaiterHandle | undefined) => void): void => {
+        resolveReady = resolve
+      }
+    )
     let registered: boolean = false
 
     const pending: Promise<RelaunchRegistration> = registerUpdateRelaunch(canary, 'canary-old', {
@@ -116,7 +120,15 @@ test('cancellation and failed registration remove only their own installation ma
     await new Promise(setImmediate)
     assert.equal(registered, false)
     assert.equal(fs.existsSync(marker(canary)), true)
-    resolveReady(automatic ? { cancel: async (): Promise<void> => { cancelled++ } } : undefined)
+    resolveReady(
+      automatic
+        ? {
+            cancel: async (): Promise<void> => {
+              cancelled++
+            }
+          }
+        : undefined
+    )
     const registration: RelaunchRegistration = await pending
     assert.equal(registration.automatic, automatic)
     await Promise.all([registration.cancel(), registration.cancel()])
@@ -166,7 +178,11 @@ test('cancellation and failed registration remove only their own installation ma
   await sibling.cancel()
 
   const blocked: RelaunchRegistration = await registerUpdateRelaunch(canary, 'old', {
-    relaunch: (): RelaunchWaiterHandle => ({ cancel: async (): Promise<never> => { throw failure } })
+    relaunch: (): RelaunchWaiterHandle => ({
+      cancel: async (): Promise<never> => {
+        throw failure
+      }
+    })
   })
 
   fs.unlinkSync(marker(canary))

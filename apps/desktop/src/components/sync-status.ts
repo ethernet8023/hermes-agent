@@ -20,9 +20,7 @@ export interface SyncStatusSummary {
   updatesAvailable: Array<{ name: string; current: string | null; latest: string | null }>
 }
 
-export function deriveSyncStatusSummary(
-  receipt: DesktopSyncReceipt | null
-): SyncStatusSummary {
+export function deriveSyncStatusSummary(receipt: DesktopSyncReceipt | null): SyncStatusSummary {
   const empty: SyncStatusSummary = {
     headline: null,
     level: 'ok',
@@ -31,7 +29,9 @@ export function deriveSyncStatusSummary(
     updatesAvailable: []
   }
 
-  if (!receipt) {return empty}
+  if (!receipt) {
+    return empty
+  }
 
   const disabledPlugins = (receipt.pm_plugin_bisect ?? receipt.plugin_bisect ?? [])
     .filter(d => d.action === 'disabled')
@@ -52,19 +52,21 @@ export function deriveSyncStatusSummary(
   const steps = receipt.pm_steps ?? receipt.steps ?? []
   const failureDetail = steps.find(step => step.ok === false)?.detail ?? rebuild?.reason
 
-  const rebuildFailed = outcome === 'failed' || outcome === 'refused' ||
+  const rebuildFailed =
+    outcome === 'failed' ||
+    outcome === 'refused' ||
     (outcome !== 'ok' && outcome !== 'success' && rebuild?.ok === false)
 
   let headline: string | null = null
   let level: SyncStatusSummary['level'] = 'ok'
 
   if (rebuildFailed) {
-    headline = failureDetail ? `Dependency rebuild failed — ${failureDetail}` : 'Dependency rebuild failed — inspect the update receipt'
+    headline = failureDetail
+      ? `Dependency rebuild failed — ${failureDetail}`
+      : 'Dependency rebuild failed — inspect the update receipt'
     level = 'error'
   } else if (needsFixing.length > 0) {
-    headline = `${needsFixing.length} plugin${
-      needsFixing.length === 1 ? '' : 's'
-    } need update-url review`
+    headline = `${needsFixing.length} plugin${needsFixing.length === 1 ? '' : 's'} need update-url review`
     level = 'warn'
   } else if (disabledPlugins.length > 0) {
     headline = `${disabledPlugins.length} plugin${

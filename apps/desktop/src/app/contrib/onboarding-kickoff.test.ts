@@ -86,9 +86,13 @@ it.each(['empty', 'wrong-session', 'wrong-profile', 'no-runtime'])(
         async () => {
           publishGuide(failure === 'wrong-session' ? 'other' : 'guide', failure !== 'empty')
 
-          if (failure === 'wrong-profile') {$activeGatewayProfile.set('default')}
+          if (failure === 'wrong-profile') {
+            $activeGatewayProfile.set('default')
+          }
 
-          if (failure === 'no-runtime') {$activeSessionId.set(null)}
+          if (failure === 'no-runtime') {
+            $activeSessionId.set(null)
+          }
         },
         request
       )

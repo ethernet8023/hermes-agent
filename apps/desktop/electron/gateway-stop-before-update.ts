@@ -25,7 +25,6 @@ export function stopGatewayBeforeUpdate(
   return runGatewayLifecycleCommand(hermesCliPath, ['gateway', 'stop', '--all'], deps)
 }
 
-
 function runGatewayLifecycleCommand(hermesCliPath: string, args: string[], deps: StopGatewayBeforeUpdateDeps): boolean {
   const isWindows = deps.isWindows ?? process.platform === 'win32'
 

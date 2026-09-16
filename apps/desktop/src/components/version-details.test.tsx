@@ -22,35 +22,63 @@ const baseVersion: DesktopVersionInfo = {
 }
 
 describe('VersionDetails', () => {
-  interface VersionCase { version: Partial<DesktopVersionInfo>; visible: string[]; absent?: string[] }
+  interface VersionCase {
+    version: Partial<DesktopVersionInfo>
+    visible: string[]
+    absent?: string[]
+  }
 
   const cases: VersionCase[] = [
     { version: { source: 'ci', branch: null }, visible: ['Build Origin', 'CI'] },
     { version: { source: 'ci', branch: 'unknown' }, visible: ['CI (unknown)'] },
     { version: { source: 'nix', distribution: 'nix' }, visible: ['Build Origin', 'Nix', 'Distribution'] },
     { version: { source: 'ci', distribution: 'docker' }, visible: ['CI', 'Distribution', 'Docker'] },
-    { version: { distribution: 'desktop-app', hermesRuntime: { type: 'embedded' } }, visible: ['Runtime', 'Embedded runtime'] },
-    { version: { hermesRuntime: { type: 'external', source: { type: 'git', root: '/home/u/.hermes/hermes-agent' } } },
-      visible: ['Runtime', 'git (/home/u/.hermes/hermes-agent)'], absent: ['External (uses the machine runtime)'] },
+    {
+      version: { distribution: 'desktop-app', hermesRuntime: { type: 'embedded' } },
+      visible: ['Runtime', 'Embedded runtime']
+    },
+    {
+      version: { hermesRuntime: { type: 'external', source: { type: 'git', root: '/home/u/.hermes/hermes-agent' } } },
+      visible: ['Runtime', 'git (/home/u/.hermes/hermes-agent)'],
+      absent: ['External (uses the machine runtime)']
+    },
     { version: { hermesRuntime: { type: 'external' } }, visible: ['Runtime', 'External (uses the machine runtime)'] },
-    { version: { distribution: 'desktop-app', updateMechanism: 'microsoft-store' },
-      visible: ['Distribution', 'Microsoft Store'], absent: ['Desktop app (MSIX)'] },
-    { version: { distribution: 'desktop-app', updateMechanism: 'app-installer' },
-      visible: ['Desktop app (MSIX)'], absent: ['Microsoft Store'] }
+    {
+      version: { distribution: 'desktop-app', updateMechanism: 'microsoft-store' },
+      visible: ['Distribution', 'Microsoft Store'],
+      absent: ['Desktop app (MSIX)']
+    },
+    {
+      version: { distribution: 'desktop-app', updateMechanism: 'app-installer' },
+      visible: ['Desktop app (MSIX)'],
+      absent: ['Microsoft Store']
+    }
   ]
 
   it.each(cases)('renders $version', ({ version, visible, absent = [] }: VersionCase): void => {
-    render(<I18nProvider configClient={null} initialLocale="en"><VersionDetails version={{ ...baseVersion, ...version }} /></I18nProvider>)
+    render(
+      <I18nProvider configClient={null} initialLocale="en">
+        <VersionDetails version={{ ...baseVersion, ...version }} />
+      </I18nProvider>
+    )
 
-    for (const text of visible) { expect(screen.getAllByText(text).length).toBeGreaterThan(0) }
+    for (const text of visible) {
+      expect(screen.getAllByText(text).length).toBeGreaterThan(0)
+    }
 
-    for (const text of absent) { expect(screen.queryByText(text)).toBeNull() }
+    for (const text of absent) {
+      expect(screen.queryByText(text)).toBeNull()
+    }
 
-    if (version.source === 'nix') { expect(screen.getAllByText('Nix')).toHaveLength(2) }
+    if (version.source === 'nix') {
+      expect(screen.getAllByText('Nix')).toHaveLength(2)
+    }
   })
 
   it('opens the commit URL via the system-browser bridge without opening a preview tab', async () => {
-    const openExternal: Mock<Window['hermesDesktop']['openExternal']> = vi.fn<Window['hermesDesktop']['openExternal']>().mockResolvedValue(undefined)
+    const openExternal: Mock<Window['hermesDesktop']['openExternal']> = vi
+      .fn<Window['hermesDesktop']['openExternal']>()
+      .mockResolvedValue(undefined)
     vi.stubGlobal('hermesDesktop', { openExternal } satisfies Pick<Window['hermesDesktop'], 'openExternal'>)
 
     render(

@@ -67,7 +67,18 @@ export interface InstallStamp {
   builtAt: string | null
   dirty: boolean
   /** Build provenance: where the stamp's facts came from. */
-  source: 'build' | 'commit-build' | 'channel-build' | 'ci' | 'docker' | 'fallback' | 'git' | 'local' | 'nix' | 'unknown' | null
+  source:
+    | 'build'
+    | 'commit-build'
+    | 'channel-build'
+    | 'ci'
+    | 'docker'
+    | 'fallback'
+    | 'git'
+    | 'local'
+    | 'nix'
+    | 'unknown'
+    | null
   /** The steward of a sealed tree ('desktop-app' | 'docker' | 'nix'), when packaged. */
   distribution: string | null
   /** Who applies the next update. Required in every stamp. */

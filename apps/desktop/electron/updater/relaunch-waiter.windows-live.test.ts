@@ -11,13 +11,17 @@ const scriptPath = path.resolve(__dirname, '..', '..', 'scripts', RELAUNCH_WAITE
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
 
 describe.skipIf(process.platform !== 'win32')('real PowerShell waiter control flow', () => {
-  it.each([false, true])('activates only after parent exit and package change (%s)', unavailable => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'relaunch-control-'))
-    const ready = path.join(root, 'ready.txt')
-    const activation = path.join(root, 'activation.txt')
-    const wrapper = path.join(root, 'run.ps1')
+  it.each([false, true])(
+    'activates only after parent exit and package change (%s)',
+    unavailable => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'relaunch-control-'))
+      const ready = path.join(root, 'ready.txt')
+      const activation = path.join(root, 'activation.txt')
+      const wrapper = path.join(root, 'run.ps1')
 
-    fs.writeFileSync(wrapper, `
+      fs.writeFileSync(
+        wrapper,
+        `
 $global:checks = 0
 $global:birth = Get-Date
 $global:clock = $global:birth
@@ -44,22 +48,29 @@ function Start-Process {
 $birthMs = ([DateTimeOffset]$global:birth).ToUnixTimeMilliseconds()
 & ${quote(scriptPath)} -ProcessId $PID -ProcessStartTimeMs $birthMs -IdentityName audit-only -ReadyFile ${quote(ready)} -TimeoutSeconds 10 -PollMillis 1
 exit $LASTEXITCODE
-`, 'utf8')
+`,
+        'utf8'
+      )
 
-    try {
-      const result = spawnSync(POWERSHELL_PATH, ['-NoProfile', '-NonInteractive', '-File', wrapper], {
-        cwd: root, encoding: 'utf8', windowsHide: true, timeout: 30_000
-      })
+      try {
+        const result = spawnSync(POWERSHELL_PATH, ['-NoProfile', '-NonInteractive', '-File', wrapper], {
+          cwd: root,
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 30_000
+        })
 
-      expect(result.status, result.stdout + result.stderr).toBe(unavailable ? 2 : 0)
-      expect(fs.existsSync(ready)).toBe(false)
-      expect(fs.existsSync(activation)).toBe(!unavailable)
+        expect(result.status, result.stdout + result.stderr).toBe(unavailable ? 2 : 0)
+        expect(fs.existsSync(ready)).toBe(false)
+        expect(fs.existsSync(activation)).toBe(!unavailable)
 
-      if (!unavailable) {
-        expect(fs.readFileSync(activation, 'utf8').trim()).toBe('shell:AppsFolder\\audit-only!Hermes')
+        if (!unavailable) {
+          expect(fs.readFileSync(activation, 'utf8').trim()).toBe('shell:AppsFolder\\audit-only!Hermes')
+        }
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
       }
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  }, 40_000)
+    },
+    40_000
+  )
 })

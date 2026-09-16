@@ -7,7 +7,9 @@ import { resolveGatewayVersion } from './gateway-version'
 test('version follows each supplied gateway response without caching', async (): Promise<void> => {
   let version: string = '1.2.3'
 
-  const request: (endpoint: string) => Promise<{ version: string }> = async (endpoint: string): Promise<{ version: string }> => {
+  const request: (endpoint: string) => Promise<{ version: string }> = async (
+    endpoint: string
+  ): Promise<{ version: string }> => {
     assert.equal(endpoint, '/api/health')
 
     return { version }
@@ -23,5 +25,10 @@ test('unavailable gateway version stays unknown instead of using another install
     assert.equal(await resolveGatewayVersion(async () => response), '')
   }
 
-  assert.equal(await resolveGatewayVersion(async () => { throw new Error('offline') }), '')
+  assert.equal(
+    await resolveGatewayVersion(async () => {
+      throw new Error('offline')
+    }),
+    ''
+  )
 })

@@ -77,6 +77,9 @@ test('apply ownership precedes async resolution, survives restoration, and retai
   await expect(first).rejects.toThrow('install failed')
   expect(applications).toBe(1)
   await expect(operation.apply(async () => ({ ok: false }))).resolves.toEqual({ ok: false })
-  await expect(operation.apply(async () => ({ ok: true, handedOff: true }))).resolves.toEqual({ ok: true, handedOff: true })
+  await expect(operation.apply(async () => ({ ok: true, handedOff: true }))).resolves.toEqual({
+    ok: true,
+    handedOff: true
+  })
   await expect(operation.apply(async () => ({ ok: true }))).rejects.toThrow('already in progress')
 })

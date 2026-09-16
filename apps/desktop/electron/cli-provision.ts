@@ -2,19 +2,30 @@ import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import path from 'node:path'
 
-type ProvisionFs = Pick<typeof fs, 'mkdirSync' | 'lstatSync' | 'readlinkSync' | 'statSync' | 'symlinkSync' | 'renameSync' | 'unlinkSync'>
+type ProvisionFs = Pick<
+  typeof fs,
+  'mkdirSync' | 'lstatSync' | 'readlinkSync' | 'statSync' | 'symlinkSync' | 'renameSync' | 'unlinkSync'
+>
 
 /** Remove only the absolute, same-name links this bundle's provisioner creates. */
 export function removeBundleCliLinks(payloadRoot: string, binDir: string): void {
-  if (!fs.existsSync(binDir)) { return }
+  if (!fs.existsSync(binDir)) {
+    return
+  }
   const payloadBin: string = path.resolve(payloadRoot, 'bin')
 
   for (const entry of fs.readdirSync(binDir, { withFileTypes: true })) {
-    if (!entry.isSymbolicLink()) { continue }
+    if (!entry.isSymbolicLink()) {
+      continue
+    }
     const link: string = path.join(binDir, entry.name)
     const destination: string = fs.readlinkSync(link)
 
-    if (path.isAbsolute(destination) && path.dirname(destination) === payloadBin && path.basename(destination) === entry.name) {
+    if (
+      path.isAbsolute(destination) &&
+      path.dirname(destination) === payloadBin &&
+      path.basename(destination) === entry.name
+    ) {
       fs.unlinkSync(link)
     }
   }
@@ -71,8 +82,12 @@ export function provisionCliLinks(
       const bin = path.dirname(destination)
 
       // Only bundled CLI links have this absolute destination shape.
-      if (!path.isAbsolute(destination) || path.basename(destination) !== name ||
-          path.basename(bin) !== 'bin' || path.basename(path.dirname(bin)) !== 'agent-payload') {
+      if (
+        !path.isAbsolute(destination) ||
+        path.basename(destination) !== name ||
+        path.basename(bin) !== 'bin' ||
+        path.basename(path.dirname(bin)) !== 'agent-payload'
+      ) {
         continue
       }
 
@@ -88,7 +103,10 @@ export function provisionCliLinks(
           io.unlinkSync(staged)
         } catch (cleanupError) {
           if ((cleanupError as NodeJS.ErrnoException).code !== 'ENOENT') {
-            throw new AggregateError([error, cleanupError], `${String(error)}; temporary link cleanup failed: ${String(cleanupError)}`)
+            throw new AggregateError(
+              [error, cleanupError],
+              `${String(error)}; temporary link cleanup failed: ${String(cleanupError)}`
+            )
           }
         }
 

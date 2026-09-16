@@ -134,7 +134,12 @@ function channelRecord(channel: 'stable' | 'canary', sequence: number): FixtureR
 }
 
 /** Build manifest per hermes_cli.release_channels.validate_manifest. */
-function buildManifest(channel: 'stable' | 'canary', sha: string, tag: string, id: string = buildId(channel)): FixtureManifest {
+function buildManifest(
+  channel: 'stable' | 'canary',
+  sha: string,
+  tag: string,
+  id: string = buildId(channel)
+): FixtureManifest {
   const identity: FixtureIdentity = {
     token: 'b'.repeat(16),
     displayName: channel === 'stable' ? 'Hermes Stable' : 'Hermes Canary',
@@ -145,7 +150,9 @@ function buildManifest(channel: 'stable' | 'canary', sha: string, tag: string, i
     cliName: 'hermes',
     windowsExecutableName: 'hermes'
   }
+
   const sequence: number = channel === 'stable' ? 1 : 2
+
   return {
     schema: 1,
     request: {
@@ -171,7 +178,12 @@ function buildManifest(channel: 'stable' | 'canary', sha: string, tag: string, i
         identity: 'chat.nous.hermes',
         version: tag.replace(/^v/, ''),
         teamId: 'TESTTEAM12',
-        artifact: { key: `releases/channel-builds/${id}/darwin-arm64.zip`, sha256: 'd'.repeat(64), size: 1, format: 'zip' },
+        artifact: {
+          key: `releases/channel-builds/${id}/darwin-arm64.zip`,
+          sha256: 'd'.repeat(64),
+          size: 1,
+          format: 'zip'
+        },
         feed: { channel: 'stable', key: `releases/channel-builds/${id}/darwin-arm64.xml` }
       }
     ]
@@ -232,10 +244,18 @@ it('carries each install channel from Python publication checks into the source 
       git(['tag', '-a', tags[channel], sha, '-m', channel])
       const manifest: FixtureManifest = buildManifest(channel, sha, tags[channel], buildId(channel))
       const body: string = canonicalJson(manifest)
-      responses.set(`/releases/channels/${channel}.json`, JSON.stringify({ ...channelRecord(channel, channel === 'stable' ? 1 : 2),
-        head: { buildId: buildId(channel), sequence: channel === 'stable' ? 1 : 2,
-          manifestKey: manifestKey(channel),
-          sha256: crypto.createHash('sha256').update(body, 'utf8').digest('hex') } }))
+      responses.set(
+        `/releases/channels/${channel}.json`,
+        JSON.stringify({
+          ...channelRecord(channel, channel === 'stable' ? 1 : 2),
+          head: {
+            buildId: buildId(channel),
+            sequence: channel === 'stable' ? 1 : 2,
+            manifestKey: manifestKey(channel),
+            sha256: crypto.createHash('sha256').update(body, 'utf8').digest('hex')
+          }
+        })
+      )
       responses.set(`/${manifestKey(channel)}`, body)
       responses.set(`/repos/NousResearch/hermes-agent/releases/tags/${tags[channel]}`, {
         tag_name: tags[channel],
@@ -247,11 +267,21 @@ it('carries each install channel from Python publication checks into the source 
 
     responses.set('/releases/stable/release-candidates.json', { tag: tags.stable, commit: commits[1] })
     // The 'main' subscription is a source-branch channel record under the R2 protocol.
-    responses.set('/releases/channels/main.json', JSON.stringify({
-      schema: 1, name: 'main', repository: 'NousResearch/hermes-agent',
-      policy: 'source-branch', state: 'active', revision: 1, nextSequence: 1,
-      identity: null, head: null, delivery: { kind: 'source-branch', branch: 'main' }
-    }))
+    responses.set(
+      '/releases/channels/main.json',
+      JSON.stringify({
+        schema: 1,
+        name: 'main',
+        repository: 'NousResearch/hermes-agent',
+        policy: 'source-branch',
+        state: 'active',
+        revision: 1,
+        nextSequence: 1,
+        identity: null,
+        head: null,
+        delivery: { kind: 'source-branch', branch: 'main' }
+      })
+    )
     git(['tag', 'v99.0.0'])
     git(['worktree', 'add', '-b', 'feature/gui', root])
     git(['remote', 'add', 'origin', origin])
@@ -320,10 +350,15 @@ urllib.request.build_opener = local_build
     }
 
     const checkerPath: string = path.join(root, 'hermes_cli', 'source_check.py')
-    fs.writeFileSync(checkerPath, fs.readFileSync(checkerPath, 'utf8').replace(
-      'from __future__ import annotations',
-      `from __future__ import annotations\nimport runpy; runpy.run_path(${JSON.stringify(path.join(root, 'transport.py'))})`
-    ))
+    fs.writeFileSync(
+      checkerPath,
+      fs
+        .readFileSync(checkerPath, 'utf8')
+        .replace(
+          'from __future__ import annotations',
+          `from __future__ import annotations\nimport runpy; runpy.run_path(${JSON.stringify(path.join(root, 'transport.py'))})`
+        )
+    )
 
     const deps: CheckoutStrategyDeps = {
       hermesHome: home,
@@ -332,9 +367,14 @@ urllib.request.build_opener = local_build
       defaultUpdateBranch: 'main',
       updateHandoffDwellMs: 0,
       resolveUpdateRoot: (): string => root,
-      readSourceUpdate: (install: string, opts: { force?: boolean }): Promise<SourceUpdate | null> => readSourceUpdate({
-        python, git: 'git', updateRoot: install, hermesHome: home, force: opts.force
-      }),
+      readSourceUpdate: (install: string, opts: { force?: boolean }): Promise<SourceUpdate | null> =>
+        readSourceUpdate({
+          python,
+          git: 'git',
+          updateRoot: install,
+          hermesHome: home,
+          force: opts.force
+        }),
       resolveUpdaterBinary: (): null => null,
 
       emitUpdateProgress: vi.fn(),
@@ -412,7 +452,10 @@ urllib.request.build_opener = local_build
     expect(spawned).toHaveLength(0)
     await setChannel('main')
     expect(await readSourceUpdate({ python, git: 'git', updateRoot: root, hermesHome: home })).toMatchObject({
-      supported: true, branch: 'feature/gui', targetSha: commits[3], updateAvailable: false
+      supported: true,
+      branch: 'feature/gui',
+      targetSha: commits[3],
+      updateAvailable: false
     })
     const count: number = requests.length
     expect(await strategy.check()).toMatchObject({

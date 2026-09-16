@@ -7,7 +7,10 @@ import { describe, expect, it } from 'vitest'
 import { AppInstallerStrategy } from './app-installer'
 import type { AppInstallerStrategyDeps } from './app-installer'
 
-interface StrategyFixture { deps: AppInstallerStrategyDeps; calls: string[] }
+interface StrategyFixture {
+  deps: AppInstallerStrategyDeps
+  calls: string[]
+}
 
 function makeDeps(over: Partial<AppInstallerStrategyDeps> = {}): StrategyFixture {
   const calls: string[] = []
@@ -20,21 +23,33 @@ function makeDeps(over: Partial<AppInstallerStrategyDeps> = {}): StrategyFixture
     light: false,
     feedBaseUrl: 'https://updates.example/hermes-desktop',
     installer: {
-      prepare: async () => { calls.push('prepare');
+      prepare: async () => {
+        calls.push('prepare')
 
- return 'update.appinstaller' },
-      open: async () => { calls.push('open');
+        return 'update.appinstaller'
+      },
+      open: async () => {
+        calls.push('open')
 
- return '' }
+        return ''
+      }
     },
-    teardownBundledBackend: async () => { calls.push('teardown') },
-    restoreBundledBackend: async () => { calls.push('restore') },
+    teardownBundledBackend: async () => {
+      calls.push('teardown')
+    },
+    restoreBundledBackend: async () => {
+      calls.push('restore')
+    },
     emitUpdateProgress: () => {},
     appVersion: '0.18.2',
-    quit: () => { calls.push('quit') },
-    registerPendingRelaunch: async () => { calls.push('relaunch-marker');
+    quit: () => {
+      calls.push('quit')
+    },
+    registerPendingRelaunch: async () => {
+      calls.push('relaunch-marker')
 
- return { automatic: true, cancel: async () => {} } },
+      return { automatic: true, cancel: async () => {} }
+    },
     ...over
   }
 
@@ -47,7 +62,9 @@ describe('AppInstallerStrategy.apply', () => {
 
     const { deps, calls } = makeDeps({
       registerPendingRelaunch: async () => ({ automatic: false, cancel: async () => {} }),
-      emitUpdateProgress: event => { progress.push(event.message) }
+      emitUpdateProgress: event => {
+        progress.push(event.message)
+      }
     })
 
     const result = await new AppInstallerStrategy(deps).apply()
@@ -61,11 +78,16 @@ describe('AppInstallerStrategy.apply', () => {
 
     const { deps, calls } = makeDeps({
       feedBaseUrl: '',
-      run: async () => ({ code: 2, stdout: JSON.stringify({ available: true, source_uri: 'https://registered.example/channel.appinstaller' }) }),
+      run: async () => ({
+        code: 2,
+        stdout: JSON.stringify({ available: true, source_uri: 'https://registered.example/channel.appinstaller' })
+      }),
       installer: {
-        prepare: async url => { prepared.push(url);
+        prepare: async url => {
+          prepared.push(url)
 
- return 'registered.appinstaller' },
+          return 'registered.appinstaller'
+        },
         open: async () => ''
       }
     })
@@ -77,13 +99,33 @@ describe('AppInstallerStrategy.apply', () => {
 
   it('uses an exact descriptor without a Python check, and rejects unverified prepared packages before teardown', async (): Promise<void> => {
     const { deps, calls } = makeDeps({
-      run: async (): Promise<never> => { throw new Error('Dynamic channels do not query the registered moving feed') },
-      feed: { url: 'https://updates.example/releases/channel-builds/abc/win32/update.appinstaller', version: '0.0.2.0',
-        verifyPrepared: async (): Promise<void> => { calls.push('verify'); throw new Error('wrong signature') }
+      run: async (): Promise<never> => {
+        throw new Error('Dynamic channels do not query the registered moving feed')
       },
-      appVersion: '0.0.1.0', feedBaseUrl: 'https://updates.example',
-      installer: { prepare: async (url: string): Promise<string> => { calls.push(url); return 'pinned.appinstaller' }, open: async (): Promise<string> => { calls.push('open'); return '' } }
+      feed: {
+        url: 'https://updates.example/releases/channel-builds/abc/win32/update.appinstaller',
+        version: '0.0.2.0',
+        verifyPrepared: async (): Promise<void> => {
+          calls.push('verify')
+          throw new Error('wrong signature')
+        }
+      },
+      appVersion: '0.0.1.0',
+      feedBaseUrl: 'https://updates.example',
+      installer: {
+        prepare: async (url: string): Promise<string> => {
+          calls.push(url)
+
+          return 'pinned.appinstaller'
+        },
+        open: async (): Promise<string> => {
+          calls.push('open')
+
+          return ''
+        }
+      }
     })
+
     const strategy = new AppInstallerStrategy(deps)
     expect(await strategy.check()).toMatchObject({ updateAvailable: true })
     await expect(strategy.apply()).rejects.toThrow('wrong signature')
@@ -107,41 +149,53 @@ it.each([
   [0, '', undefined, 'checker returned no availability'],
   [1, 'boom', undefined, 'checker exited 1'],
   [0, '{"available":"yes"}', undefined, 'checker returned no availability']
-] as const)('checker %s %s → available=%s error=%s', async (code: number, stdout: string, available: boolean | undefined, error: string | undefined): Promise<void> => {
-  const { deps }: ReturnType<typeof makeDeps> = makeDeps({
-    run: async (python: string, script: string): Promise<{ code: number; stdout: string }> => {
-      expect([python, script]).toEqual(['python.exe', 'check.py'])
+] as const)(
+  'checker %s %s → available=%s error=%s',
+  async (code: number, stdout: string, available: boolean | undefined, error: string | undefined): Promise<void> => {
+    const { deps }: ReturnType<typeof makeDeps> = makeDeps({
+      run: async (python: string, script: string): Promise<{ code: number; stdout: string }> => {
+        expect([python, script]).toEqual(['python.exe', 'check.py'])
 
-      return { code, stdout }
-    }
-  })
+        return { code, stdout }
+      }
+    })
 
-  expect(await new AppInstallerStrategy(deps).check()).toMatchObject({
-    supported: true, mechanism: 'app-installer', currentVersion: '0.18.2', updateAvailable: available, error
-  })
-})
+    expect(await new AppInstallerStrategy(deps).check()).toMatchObject({
+      supported: true,
+      mechanism: 'app-installer',
+      currentVersion: '0.18.2',
+      updateAvailable: available,
+      error
+    })
+  }
+)
 
 it.each([
   ['stable', false, 'win32/stable/stable.appinstaller'],
   ['canary', false, 'win32/canary/canary.appinstaller'],
   ['stable', true, 'win32/light/stable/stable.appinstaller'],
   ['canary', true, 'win32/light/canary/canary.appinstaller']
-] as const)('stages %s light=%s from its feed and reports open errors', async (channel: 'stable' | 'canary', light: boolean, suffix: string): Promise<void> => {
-  const { deps, calls }: ReturnType<typeof makeDeps> = makeDeps({ channel, light,
-    installer: {
-      prepare: async (url: string): Promise<string> => {
-        expect(url).toBe(`https://updates.example/hermes-desktop/${suffix}`)
+] as const)(
+  'stages %s light=%s from its feed and reports open errors',
+  async (channel: 'stable' | 'canary', light: boolean, suffix: string): Promise<void> => {
+    const { deps, calls }: ReturnType<typeof makeDeps> = makeDeps({
+      channel,
+      light,
+      installer: {
+        prepare: async (url: string): Promise<string> => {
+          expect(url).toBe(`https://updates.example/hermes-desktop/${suffix}`)
 
-        return 'update.appinstaller'
-      },
-      open: async (file: string): Promise<string> => {
-        expect(file).toBe('update.appinstaller')
+          return 'update.appinstaller'
+        },
+        open: async (file: string): Promise<string> => {
+          expect(file).toBe('update.appinstaller')
 
-        return 'No file association'
+          return 'No file association'
+        }
       }
-    }
-  })
+    })
 
-  await expect(new AppInstallerStrategy(deps).apply()).rejects.toThrow('No file association')
-  expect(calls).toEqual(['relaunch-marker', 'teardown', 'restore'])
-})
+    await expect(new AppInstallerStrategy(deps).apply()).rejects.toThrow('No file association')
+    expect(calls).toEqual(['relaunch-marker', 'teardown', 'restore'])
+  }
+)

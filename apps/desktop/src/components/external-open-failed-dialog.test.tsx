@@ -54,9 +54,13 @@ describe('ExternalOpenFailedDialog', () => {
     fail(listener, 'https://example.com/dead')
     expect(screen.getByText('https://example.com/dead')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /copy/i }))
-    await waitFor((): void => { expect(writeClipboard).toHaveBeenCalledWith('https://example.com/dead') })
+    await waitFor((): void => {
+      expect(writeClipboard).toHaveBeenCalledWith('https://example.com/dead')
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
-    await waitFor((): void => { expect(screen.queryByText('https://example.com/dead')).toBeNull() })
+    await waitFor((): void => {
+      expect(screen.queryByText('https://example.com/dead')).toBeNull()
+    })
   })
 
   it('renders nothing in a HUD window', () => {

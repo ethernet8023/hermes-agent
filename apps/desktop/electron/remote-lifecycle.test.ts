@@ -830,17 +830,19 @@ test('buildSpawnCommand atomically reserves the ownership slot through spawn and
   assert.ok(cmd.indexOf('lock_json') > cmd.indexOf('serve --isolated'))
 })
 
-test.skipIf(process.platform === 'win32')('detached backend does not inherit the update mutex descriptor', async (): Promise<void> => {
-  const shell: string = (await exec('command -v bash', { shell: 'bash' })).stdout.trim()
-  const directory: string = await mkdtemp(path.join(os.tmpdir(), 'hermes-update-mutex-'))
-  const hermesPath: string = path.join(directory, 'hermes')
-  const reportPath: string = path.join(directory, 'descriptor-report')
-  const logPath: string = path.join(directory, 'spawn.log')
+test.skipIf(process.platform === 'win32')(
+  'detached backend does not inherit the update mutex descriptor',
+  async (): Promise<void> => {
+    const shell: string = (await exec('command -v bash', { shell: 'bash' })).stdout.trim()
+    const directory: string = await mkdtemp(path.join(os.tmpdir(), 'hermes-update-mutex-'))
+    const hermesPath: string = path.join(directory, 'hermes')
+    const reportPath: string = path.join(directory, 'descriptor-report')
+    const logPath: string = path.join(directory, 'spawn.log')
 
-  try {
-    await writeFile(
-      hermesPath,
-      `#!${shell}
+    try {
+      await writeFile(
+        hermesPath,
+        `#!${shell}
 report=${expandRemotePath(reportPath)}
 : > "$report.tmp"
 for fd in /proc/$$/fd/*; do
@@ -851,36 +853,37 @@ for fd in /proc/$$/fd/*; do
 done
 mv "$report.tmp" "$report"
 `,
-      { encoding: 'utf8', mode: 0o700 }
-    )
+        { encoding: 'utf8', mode: 0o700 }
+      )
 
-    const command: string = buildSpawnCommand(hermesPath, '', {
-      hermesHome: path.join(directory, 'home'),
-      logPath
-    })
+      const command: string = buildSpawnCommand(hermesPath, '', {
+        hermesHome: path.join(directory, 'home'),
+        logPath
+      })
 
-    await exec(command, { shell, env: { ...process.env, HOME: directory, HERMES_HOME: directory } })
+      await exec(command, { shell, env: { ...process.env, HOME: directory, HERMES_HOME: directory } })
 
-    for (let attempt: number = 0; attempt < 100; attempt += 1) {
-      try {
-        const report: string = await readFile(reportPath, 'utf8')
-        assert.equal(report, '', 'the backend process must not retain the update mutex descriptor')
+      for (let attempt: number = 0; attempt < 100; attempt += 1) {
+        try {
+          const report: string = await readFile(reportPath, 'utf8')
+          assert.equal(report, '', 'the backend process must not retain the update mutex descriptor')
 
-        return
-      } catch (error: unknown) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
-          throw error
+          return
+        } catch (error: unknown) {
+          if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+            throw error
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 25))
         }
-
-        await new Promise(resolve => setTimeout(resolve, 25))
       }
-    }
 
-    assert.fail('the detached backend did not write its descriptor report')
-  } finally {
-    await rm(directory, { recursive: true, force: true })
+      assert.fail('the detached backend did not write its descriptor report')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   }
-})
+)
 
 test('spawnRemoteDashboard returns exact ownership artifacts', async () => {
   const ssh = fakeSsh([

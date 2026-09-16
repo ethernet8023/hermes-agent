@@ -15,28 +15,43 @@ it('offers manual recovery only for a missing source probe, never for a broken p
   fs.mkdirSync(home)
   fs.writeFileSync(path.join(root, 'hermes_cli', '__init__.py'), '')
 
-  const probe: () => Promise<SourceUpdate | null> = (): Promise<SourceUpdate | null> => readSourceUpdate({
-    python: process.env.HERMES_PYTHON || 'python3', git: 'git', updateRoot: root, hermesHome: home
-  })
+  const probe: () => Promise<SourceUpdate | null> = (): Promise<SourceUpdate | null> =>
+    readSourceUpdate({
+      python: process.env.HERMES_PYTHON || 'python3',
+      git: 'git',
+      updateRoot: root,
+      hermesHome: home
+    })
 
   const deps: CheckoutStrategyDeps = {
     readSourceUpdate: probe,
-    hermesHome: home, isWindows: process.platform === 'win32', isMac: process.platform === 'darwin',
-    defaultUpdateBranch: 'main', updateHandoffDwellMs: 0,
-    resolveUpdateRoot: (): string => root, resolveUpdaterBinary: vi.fn((): string => 'frozen-updater'),
-    emitUpdateProgress: vi.fn(), rememberLog: vi.fn(),
+    hermesHome: home,
+    isWindows: process.platform === 'win32',
+    isMac: process.platform === 'darwin',
+    defaultUpdateBranch: 'main',
+    updateHandoffDwellMs: 0,
+    resolveUpdateRoot: (): string => root,
+    resolveUpdaterBinary: vi.fn((): string => 'frozen-updater'),
+    emitUpdateProgress: vi.fn(),
+    rememberLog: vi.fn(),
     startHermes: vi.fn(async (): Promise<void> => {}),
     stopBackendsForUpdate: vi.fn(async (): Promise<void> => {}),
-    repairMacUpdaterHelper: vi.fn(), preflightStateDb: vi.fn(), runningAppBundle: (): null => null,
-    markQuittingForHandoff: vi.fn(), quit: vi.fn()
+    repairMacUpdaterHelper: vi.fn(),
+    preflightStateDb: vi.fn(),
+    runningAppBundle: (): null => null,
+    markQuittingForHandoff: vi.fn(),
+    quit: vi.fn()
   }
 
   const strategy: ReturnType<typeof createCheckoutStrategy> = createCheckoutStrategy(deps)
 
   try {
     for (const oldModule of ['def resolve_source_release(channel):\n    return None, None\n', null]) {
-      if (oldModule !== null) { fs.writeFileSync(modulePath, oldModule) }
-      else { fs.rmSync(modulePath) }
+      if (oldModule !== null) {
+        fs.writeFileSync(modulePath, oldModule)
+      } else {
+        fs.rmSync(modulePath)
+      }
 
       expect(await strategy.check()).toMatchObject({ supported: false, reason: 'source-probe-unavailable' })
       const result: Awaited<ReturnType<typeof strategy.apply>> = await strategy.apply()

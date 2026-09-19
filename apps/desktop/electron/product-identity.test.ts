@@ -121,45 +121,65 @@ test.each([
   [undefined, 'Hermes', 'hermes', 'latest', 'canary'],
   ['bundled', 'Hermes Agent', 'hermes', 'latest', 'canary'],
   ['light', 'Hermes Light', 'hermes-light', 'light', 'light-canary']
-] as const)('%s separates stable, canary and independent commits', async (variant: string | undefined, display: string, cli: string, channel: string, canaryChannel: string): Promise<void> => {
-  const stable: ProductIdentity = await identityForVariant(variant)
-  assert.equal(stable.displayName, display)
-  assert.equal(stable.channel, channel)
-  assert.equal(stable.light, variant === 'light')
-  assert.equal(stable.storeMsix, undefined)
-  const identities: ProductIdentity[] = [stable]
+] as const)(
+  '%s separates stable, canary and independent commits',
+  async (
+    variant: string | undefined,
+    display: string,
+    cli: string,
+    channel: string,
+    canaryChannel: string
+  ): Promise<void> => {
+    const stable: ProductIdentity = await identityForVariant(variant)
+    assert.equal(stable.displayName, display)
+    assert.equal(stable.channel, channel)
+    assert.equal(stable.light, variant === 'light')
+    assert.equal(stable.storeMsix, undefined)
+    const identities: ProductIdentity[] = [stable]
 
-  for (const [tag, commit, expectedCli, expectedChannel] of [
-    ['v1.2.3-canary.20260818', '', `${cli}-canary`, canaryChannel],
-    ['', 'abcdef1234567890abcdef1234567890abcdef12', `${cli}-abcdef1`, null],
-    ['', '1234567890abcdef1234567890abcdef12345678', `${cli}-1234567`, null]
-  ] as const) {
-    process.env.HERMES_PAYLOAD_TAG = tag
-    process.env.HERMES_BUILD_COMMIT = commit
-    const current: ProductIdentity = await identityForVariant(variant)
-    assert.equal(current.channel, expectedChannel)
-    assert.equal(current.cliName, expectedCli)
-    assert.equal(current.windowsExecutableName, expectedCli)
-    assert.equal(current.artifactNamePascal, stable.artifactNamePascal)
-    assert.deepEqual(current, await identityForVariant(variant))
+    for (const [tag, commit, expectedCli, expectedChannel] of [
+      ['v1.2.3-canary.20260818', '', `${cli}-canary`, canaryChannel],
+      ['', 'abcdef1234567890abcdef1234567890abcdef12', `${cli}-abcdef1`, null],
+      ['', '1234567890abcdef1234567890abcdef12345678', `${cli}-1234567`, null]
+    ] as const) {
+      process.env.HERMES_PAYLOAD_TAG = tag
+      process.env.HERMES_BUILD_COMMIT = commit
+      const current: ProductIdentity = await identityForVariant(variant)
+      assert.equal(current.channel, expectedChannel)
+      assert.equal(current.cliName, expectedCli)
+      assert.equal(current.windowsExecutableName, expectedCli)
+      assert.equal(current.artifactNamePascal, stable.artifactNamePascal)
+      assert.deepEqual(current, await identityForVariant(variant))
 
-    if (commit) { assert.equal(current.displayName, `${display} ${commit.slice(0, 7)}`) }
-
-    for (const previous of identities) {
-      for (const field of ['displayName', 'appId', 'appNamePascal', 'msixAppIdWithOrg', 'windowsExecutableName', 'cliName'] as const) {
-        assert.notEqual(current[field], previous[field], `${field} must isolate installations`)
-
-        if (commit) { assert.ok(current[field].includes(commit.slice(0, 7))) }
+      if (commit) {
+        assert.equal(current.displayName, `${display} ${commit.slice(0, 7)}`)
       }
+
+      for (const previous of identities) {
+        for (const field of [
+          'displayName',
+          'appId',
+          'appNamePascal',
+          'msixAppIdWithOrg',
+          'windowsExecutableName',
+          'cliName'
+        ] as const) {
+          assert.notEqual(current[field], previous[field], `${field} must isolate installations`)
+
+          if (commit) {
+            assert.ok(current[field].includes(commit.slice(0, 7)))
+          }
+        }
+      }
+
+      identities.push(current)
     }
 
-    identities.push(current)
+    process.env.HERMES_BUILD_COMMIT = 'not-a-sha'
+    process.env.HERMES_PAYLOAD_TAG = 'v1.2.3'
+    assert.deepEqual(await identityForVariant(variant), stable)
   }
-
-  process.env.HERMES_BUILD_COMMIT = 'not-a-sha'
-  process.env.HERMES_PAYLOAD_TAG = 'v1.2.3'
-  assert.deepEqual(await identityForVariant(variant), stable)
-})
+)
 
 test('light and bundled retain distinct OS markers from the full client', async (): Promise<void> => {
   const full: ProductIdentity = await identityForVariant(undefined)
@@ -167,7 +187,9 @@ test('light and bundled retain distinct OS markers from the full client', async 
   for (const variant of ['bundled', 'light']) {
     const other: ProductIdentity = await identityForVariant(variant)
 
-    for (const field of ['displayName', 'appId', 'appNamePascal'] as const) { assert.notEqual(other[field], full[field]) }
+    for (const field of ['displayName', 'appId', 'appNamePascal'] as const) {
+      assert.notEqual(other[field], full[field])
+    }
 
     if (variant === 'light') {
       assert.notEqual(other.msixAppIdWithOrg, full.msixAppIdWithOrg)

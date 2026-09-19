@@ -216,6 +216,7 @@ describe('GatewaySettings', () => {
       authMode: 'oauth',
       org: 'old-team'
     }
+
     registry.value = { connections: [saved] }
     getConnectionConfig.mockResolvedValue({
       ...localConnection,
@@ -224,20 +225,26 @@ describe('GatewaySettings', () => {
       remoteUrl: 'https://other.example'
     })
     const calls: string[] = []
+
     const oauthLogoutConnectionConfig = vi.fn(async () => {
       calls.push('logout')
     })
+
     const agentSignIn = vi.fn(async () => {
       calls.push('login')
+
       return { connected: true }
     })
+
     const save = vi.fn(async () => {
       calls.push('save')
     })
+
     const discover = vi.fn().mockResolvedValue({
       needsOrgSelection: true,
       orgs: [{ id: 'new-team', name: 'New team', role: 'OWNER' }]
     })
+
     Object.assign(window.hermesDesktop, {
       oauthLogoutConnectionConfig,
       connections: { save },
@@ -261,32 +268,32 @@ describe('GatewaySettings', () => {
     registry.value = null
   })
   it('keeps saved Cloud instances usable without discovery and marks the live source, not the default', async () => {
-  getConnectionConfig.mockResolvedValue({ ...localConnection, mode: 'cloud', remoteUrl: 'https://a.example' })
-  registry.value = {
-    connections: [
-      { id: 'saved-a', kind: 'cloud', label: 'Research', url: 'https://a.example', authMode: 'oauth' },
-      { id: 'saved-b', kind: 'cloud', label: 'Writing', url: 'https://b.example', authMode: 'oauth' }
-    ]
-  }
-  const agentSignIn = vi.fn()
-  const applyConnectionConfig = vi.fn()
-  Object.assign(window.hermesDesktop, {
-    applyConnectionConfig,
-    cloud: {
-      status: vi.fn().mockResolvedValue({ signedIn: false }),
-      agentSignIn
+    getConnectionConfig.mockResolvedValue({ ...localConnection, mode: 'cloud', remoteUrl: 'https://a.example' })
+    registry.value = {
+      connections: [
+        { id: 'saved-a', kind: 'cloud', label: 'Research', url: 'https://a.example', authMode: 'oauth' },
+        { id: 'saved-b', kind: 'cloud', label: 'Writing', url: 'https://b.example', authMode: 'oauth' }
+      ]
     }
+    const agentSignIn = vi.fn()
+    const applyConnectionConfig = vi.fn()
+    Object.assign(window.hermesDesktop, {
+      applyConnectionConfig,
+      cloud: {
+        status: vi.fn().mockResolvedValue({ signedIn: false }),
+        agentSignIn
+      }
+    })
+    render(<GatewaySettings embedded />)
+    const research = await screen.findByText('Research')
+    const row = research.closest('[data-slot]') ?? research.parentElement!.parentElement!
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Use gateway' }))
+    await waitFor(() => expect(selectConnection).toHaveBeenCalledWith('saved-a'))
+    expect(screen.getByText('Active in this window')).toBeTruthy()
+    expect(agentSignIn).not.toHaveBeenCalled()
+    expect(applyConnectionConfig).not.toHaveBeenCalled()
+    registry.value = null
   })
-  render(<GatewaySettings embedded />)
-  const research = await screen.findByText('Research')
-  const row = research.closest('[data-slot]') ?? research.parentElement!.parentElement!
-  fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Use gateway' }))
-  await waitFor(() => expect(selectConnection).toHaveBeenCalledWith('saved-a'))
-  expect(screen.getByText('Active in this window')).toBeTruthy()
-  expect(agentSignIn).not.toHaveBeenCalled()
-  expect(applyConnectionConfig).not.toHaveBeenCalled()
-  registry.value = null
-})
   it('authenticates and saves only the chosen discovered instance with its friendly name', async () => {
     registry.value = null
     getConnectionConfig.mockResolvedValue({ ...localConnection, mode: 'cloud' })

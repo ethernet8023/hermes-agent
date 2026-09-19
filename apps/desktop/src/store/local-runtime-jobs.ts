@@ -1,12 +1,12 @@
 import type { QueryClient } from '@tanstack/react-query'
 import {
+  MutationObserver,
   type Query,
   type QueryCacheNotifyEvent,
   type QueryKey,
   QueryObserver,
   type QueryObserverResult,
   queryOptions,
-  MutationObserver,
   useQuery,
   useQueryClient,
   type UseQueryOptions,
@@ -16,7 +16,13 @@ import { useEffect, useMemo } from 'react'
 
 import { $apiRequestScope, getApiRequestConnection, getApiRequestProfile } from '@/api/client'
 import type { LocalModelsScope } from '@/api/local-models'
-import { getLocalCatalog, getLocalHardware, getLocalModelsJobs, getLocalModelsStatus, installLocalRuntime } from '@/hermes'
+import {
+  getLocalCatalog,
+  getLocalHardware,
+  getLocalModelsJobs,
+  getLocalModelsStatus,
+  installLocalRuntime
+} from '@/hermes'
 import { translateNow } from '@/i18n'
 import { queryClient } from '@/lib/query-client'
 import { useStoresSelector } from '@/lib/use-session-slice'
@@ -401,19 +407,31 @@ interface RuntimeInstallResult {
   tag: string
 }
 
-export function localRuntimeInstallStarting(owner: LocalModelsOwner = localModelsOwner(), client: QueryClient = queryClient): boolean {
+export function localRuntimeInstallStarting(
+  owner: LocalModelsOwner = localModelsOwner(),
+  client: QueryClient = queryClient
+): boolean {
   return client.isMutating({ mutationKey: localModelsKey(owner, 'install') }) > 0
 }
 
-export function localRuntimeInstallBusy(owner: LocalModelsOwner = localModelsOwner(), client: QueryClient = queryClient): boolean {
+export function localRuntimeInstallBusy(
+  owner: LocalModelsOwner = localModelsOwner(),
+  client: QueryClient = queryClient
+): boolean {
   const jobs: readonly LocalRuntimeJob[] = client.getQueryData(localModelsKey(owner, 'jobs')) ?? EMPTY_JOBS
 
-  return localRuntimeInstallStarting(owner, client) || jobs.some((job: LocalRuntimeJob): boolean =>
-    isActive(job.status) && (job.kind === 'runtime-install' || job.kind === 'quickstart'))
+  return (
+    localRuntimeInstallStarting(owner, client) ||
+    jobs.some(
+      (job: LocalRuntimeJob): boolean =>
+        isActive(job.status) && (job.kind === 'runtime-install' || job.kind === 'quickstart')
+    )
+  )
 }
 
 export async function startLocalRuntimeInstall(
-  owner: LocalModelsOwner = localModelsOwner(), client: QueryClient = queryClient
+  owner: LocalModelsOwner = localModelsOwner(),
+  client: QueryClient = queryClient
 ): Promise<void> {
   if (localRuntimeInstallBusy(owner, client)) {
     return

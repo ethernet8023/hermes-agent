@@ -1,7 +1,7 @@
 import type { DesktopVersionInfo, RuntimeSource } from '@/global'
 import { useI18n } from '@/i18n'
-import { ExternalLink } from '@/lib/external-link'
 import { distributionLabelKey } from '@/lib/distribution-label'
+import { ExternalLink } from '@/lib/external-link'
 
 /**
  * Human label for an external build's runtime source: the resolution rung
@@ -31,6 +31,7 @@ export function VersionDetails({ version }: { version: DesktopVersionInfo }) {
   // distribution-label.ts. Nix and Docker are product names, rendered
   // verbatim; every other shape comes from the stamp via i18n.
   const distributionKey = distributionLabelKey(version)
+
   const distribution =
     version.distribution === 'nix'
       ? 'Nix'

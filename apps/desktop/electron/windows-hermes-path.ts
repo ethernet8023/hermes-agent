@@ -163,9 +163,7 @@ export async function resolveVenvHermesCommand(
 
   // Probe with the same semantics the real spawn uses: venv interpreter,
   // cwd at the checkout root, no PYTHONPATH.
-  if (
-    !(await canImportHermesCli(python, { cwd: directoryExists(root) ? root : undefined }))
-  ) {
+  if (!(await canImportHermesCli(python, { cwd: directoryExists(root) ? root : undefined }))) {
     rememberLog?.(
       `Ignoring venv Hermes at ${python}: runtime import probe failed (broken/partial venv); falling through to bootstrap.`
     )

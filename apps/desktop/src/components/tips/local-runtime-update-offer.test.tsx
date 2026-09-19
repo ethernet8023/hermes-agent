@@ -6,10 +6,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { SETTINGS_ROUTE } from '@/app/routes'
 import { I18nProvider } from '@/i18n'
 import { en } from '@/i18n/en'
+import { queryClient } from '@/lib/query-client'
 import { $activeGatewayRoute } from '@/store/gateway'
 import { $localModelsEnabled } from '@/store/local-models-flag'
 import { localModelsKey, localModelsOwner } from '@/store/local-runtime-jobs'
-import { queryClient } from '@/lib/query-client'
 import { $connection } from '@/store/session'
 import { $activeTip, $nextTipAt, $retiredTips, $tipsEnabled, $tipShownAt, retireActiveTip } from '@/store/tips'
 
@@ -169,7 +169,9 @@ it.each(['connection', 'profile', 'tips-off', 'job-started'])(
       }
 
       if (context === 'job-started') {
-        queryClient.setQueryData(localModelsKey(localModelsOwner(), 'jobs'), [{ kind: 'quickstart', status: 'running' }] as never)
+        queryClient.setQueryData(localModelsKey(localModelsOwner(), 'jobs'), [
+          { kind: 'quickstart', status: 'running' }
+        ] as never)
       }
 
       action.onSelect()
@@ -231,7 +233,9 @@ it.each(['remote', 'flag-off', 'tips-off', 'runtime-install', 'quickstart'])(
     }
 
     if (guard === 'runtime-install' || guard === 'quickstart') {
-      queryClient.setQueryData(localModelsKey(localModelsOwner(), 'jobs'), [{ kind: guard, status: 'running' }] as never)
+      queryClient.setQueryData(localModelsKey(localModelsOwner(), 'jobs'), [
+        { kind: guard, status: 'running' }
+      ] as never)
     }
 
     api.mockClear()
@@ -280,7 +284,13 @@ it('the real Update now button navigates and sends exactly one install POST, nev
   })
   expect(screen.getByRole('status').textContent).toBe(`${SETTINGS_ROUTE}?tab=providers&pview=local`)
   expect(api.mock.calls.filter(([request]) => request.method === 'POST').map(([request]) => request)).toEqual([
-    { body: { backend: null }, method: 'POST', path: '/api/local-models/runtime/install', connectionId: null, profile: 'default' }
+    {
+      body: { backend: null },
+      method: 'POST',
+      path: '/api/local-models/runtime/install',
+      connectionId: null,
+      profile: 'default'
+    }
   ])
   expect($activeTip.get()).toBeNull()
 })

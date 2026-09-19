@@ -56,10 +56,13 @@ describe('resolveUpdateCopy', () => {
     expect(r.body).toBe(copy.availableBody)
   })
 
-  it.each(['app-installer', 'microsoft-store'] as const)('%s uses Windows update copy without commit vocabulary', mechanism => {
-    const r = resolveUpdateCopy({ target: 'client', shownItems: 5, mechanism, copy })
-    expect(r.body).toBe(copy.availableBodyAppInstaller)
-  })
+  it.each(['app-installer', 'microsoft-store'] as const)(
+    '%s uses Windows update copy without commit vocabulary',
+    mechanism => {
+      const r = resolveUpdateCopy({ target: 'client', shownItems: 5, mechanism, copy })
+      expect(r.body).toBe(copy.availableBodyAppInstaller)
+    }
+  )
 
   it('app-installer mechanism with a known tag names the release', () => {
     const r = resolveUpdateCopy({
@@ -79,7 +82,14 @@ describe('resolveUpdateCopy', () => {
   })
 
   it('macOS feed updates name the release without Windows or commit vocabulary', () => {
-    expect(resolveUpdateCopy({ target: 'client', shownItems: 0, mechanism: 'electron-updater', latestTag: 'v0.29.0-canary.20260906000000', copy }).body)
-      .toBe(copy.availableBodyRelease('v0.29.0-canary.20260906000000'))
+    expect(
+      resolveUpdateCopy({
+        target: 'client',
+        shownItems: 0,
+        mechanism: 'electron-updater',
+        latestTag: 'v0.29.0-canary.20260906000000',
+        copy
+      }).body
+    ).toBe(copy.availableBodyRelease('v0.29.0-canary.20260906000000'))
   })
 })

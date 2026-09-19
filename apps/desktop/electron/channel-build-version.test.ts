@@ -17,21 +17,37 @@ const repo: string = path.resolve(desktop, '../..')
 
 function request(sequence: number = 65536, token: string = 'ab12cd34ef56ab78'): ChannelBuildRequest {
   return {
-    schema: 1, buildId: 'a'.repeat(32), channel: 'no-registry-needed', sequence,
-    repository: 'fixture/project', commit: 'b'.repeat(40), sourceVersion: '1.2.3',
-    version: `0.0.${sequence}`, windowsVersion: `0.${Math.floor(sequence / 65536)}.${sequence % 65536}.0`,
+    schema: 1,
+    buildId: 'a'.repeat(32),
+    channel: 'no-registry-needed',
+    sequence,
+    repository: 'fixture/project',
+    commit: 'b'.repeat(40),
+    sourceVersion: '1.2.3',
+    version: `0.0.${sequence}`,
+    windowsVersion: `0.${Math.floor(sequence / 65536)}.${sequence % 65536}.0`,
     identity: {
-      token, displayName: 'Hermes no-registry-needed', appId: `com.nousresearch.hermes-channel-${token}`,
-      appNamePascal: `HermesChannel${token}`, artifactNamePascal: `HermesChannel${token}`,
-      cliName: 'hermes-no-registry-needed', windowsExecutableName: 'hermes-no-registry-needed',
+      token,
+      displayName: 'Hermes no-registry-needed',
+      appId: `com.nousresearch.hermes-channel-${token}`,
+      appNamePascal: `HermesChannel${token}`,
+      artifactNamePascal: `HermesChannel${token}`,
+      cliName: 'hermes-no-registry-needed',
+      windowsExecutableName: 'hermes-no-registry-needed',
       msixAppIdWithOrg: `NousResearch.HermesChannel${token}`
     },
-    bundleEnv: { HERMES_GUEST_ONBOARDING: '1' }, publicBase: 'https://builds.example.test'
+    bundleEnv: { HERMES_GUEST_ONBOARDING: '1' },
+    publicBase: 'https://builds.example.test'
   }
 }
 
-interface PackagingFacts { identity: ProductIdentity; config: Configuration }
-interface StampPayload { runtime: { repoDir: string; commands: { hermes: string } } }
+interface PackagingFacts {
+  identity: ProductIdentity
+  config: Configuration
+}
+interface StampPayload {
+  runtime: { repoDir: string; commands: { hermes: string } }
+}
 
 function load(build: ChannelBuildRequest): PackagingFacts {
   process.env.HERMES_DESKTOP_VARIANT = 'bundled'
@@ -45,17 +61,38 @@ function load(build: ChannelBuildRequest): PackagingFacts {
 }
 
 afterEach((): void => {
-  for (const key of ['_HERMES_CHANNEL_REQUEST_JSON', 'HERMES_DESKTOP_VARIANT', 'HERMES_BUILD_COMMIT', 'HERMES_PAYLOAD_TAG']) {delete process.env[key]}
+  for (const key of [
+    '_HERMES_CHANNEL_REQUEST_JSON',
+    'HERMES_DESKTOP_VARIANT',
+    'HERMES_BUILD_COMMIT',
+    'HERMES_PAYLOAD_TAG'
+  ]) {
+    delete process.env[key]
+  }
 
-  for (const file of ['../product-identity.cjs', '../electron-builder.config.cjs']) {delete require.cache[require.resolve(file)]}
+  for (const file of ['../product-identity.cjs', '../electron-builder.config.cjs']) {
+    delete require.cache[require.resolve(file)]
+  }
 })
 
 test('channel packaging reuses admitted identity and rejects unsupported or unsafe identities', (): void => {
   const first: ChannelBuildRequest = request()
   const a: ReturnType<typeof load> = load(first)
-  const b: ReturnType<typeof load> = load({ ...first, ...request(65537), commit: 'c'.repeat(40), sourceVersion: '0.1.0' })
+  const b: ReturnType<typeof load> = load({
+    ...first,
+    ...request(65537),
+    commit: 'c'.repeat(40),
+    sourceVersion: '0.1.0'
+  })
 
-  for (const field of ['displayName', 'appId', 'appNamePascal', 'cliName', 'windowsExecutableName', 'msixAppIdWithOrg'] as const) {
+  for (const field of [
+    'displayName',
+    'appId',
+    'appNamePascal',
+    'cliName',
+    'windowsExecutableName',
+    'msixAppIdWithOrg'
+  ] as const) {
     assert.equal(a.identity[field], first.identity[field])
     assert.equal(a.identity[field], b.identity[field])
   }
@@ -70,33 +107,64 @@ test('channel packaging reuses admitted identity and rejects unsupported or unsa
   let displayName: string = ''
 
   try {
-    assert.equal(applyDesktopIdentity({
-      getPath: (): string => appData,
-      setPath: (_name: 'userData', value: string): void => { userData = value },
-      setName: (value: string): void => { displayName = value }
-    }, a.identity), first.identity.displayName)
+    assert.equal(
+      applyDesktopIdentity(
+        {
+          getPath: (): string => appData,
+          setPath: (_name: 'userData', value: string): void => {
+            userData = value
+          },
+          setName: (value: string): void => {
+            displayName = value
+          }
+        },
+        a.identity
+      ),
+      first.identity.displayName
+    )
     assert.equal(userData, path.join(appData, first.identity.appNamePascal))
     assert.equal(displayName, first.identity.displayName)
   } finally {
     fs.rmSync(appData, { recursive: true, force: true })
   }
 
-  assert.deepEqual(a.config.mac?.publish, [{ provider: 'generic', url: `${first.publicBase}/releases/channel-builds/${first.buildId}/darwin/`, channel: 'latest' }])
+  assert.deepEqual(a.config.mac?.publish, [
+    {
+      provider: 'generic',
+      url: `${first.publicBase}/releases/channel-builds/${first.buildId}/darwin/`,
+      channel: 'latest'
+    }
+  ])
   process.env.HERMES_DESKTOP_VARIANT = 'light'
   delete require.cache[require.resolve('../product-identity.cjs')]
-  assert.throws((): void => { require('../product-identity.cjs') }, /bundled/)
+  assert.throws((): void => {
+    require('../product-identity.cjs')
+  }, /bundled/)
   const invalid: ChannelBuildRequest = request()
   invalid.identity.cliName = 'con'
-  assert.throws((): void => { load(invalid) }, /identity/)
+  assert.throws((): void => {
+    load(invalid)
+  }, /identity/)
   invalid.identity.cliName = first.identity.cliName
   invalid.identity.windowsExecutableName = 'trailing.'
-  assert.throws((): void => { load(invalid) }, /identity/)
+  assert.throws((): void => {
+    load(invalid)
+  }, /identity/)
 })
 
 test('channel stamps verify the real checkout and retain source version and native ownership', async (): Promise<void> => {
-  const { resolveStamp, buildStampPayload, writeDesktopStamp }: {
+  const {
+    resolveStamp,
+    buildStampPayload,
+    writeDesktopStamp
+  }: {
     resolveStamp: (options: { env: NodeJS.ProcessEnv; repoRoot: string }) => InstallStamp
-    buildStampPayload: (stamp: InstallStamp, env: NodeJS.ProcessEnv, platform: string, payload: StampPayload) => InstallStamp
+    buildStampPayload: (
+      stamp: InstallStamp,
+      env: NodeJS.ProcessEnv,
+      platform: string,
+      payload: StampPayload
+    ) => InstallStamp
     writeDesktopStamp: (directory: string, stamp: InstallStamp) => void
   } = await import('../scripts/write-build-stamp.mjs')
 
@@ -104,9 +172,32 @@ test('channel stamps verify the real checkout and retain source version and nati
 
   try {
     execFileSync('git', ['init', '-q', dir])
-    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'fixture'], { cwd: dir })
-    const build: ChannelBuildRequest = { ...request(), commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim() }
-    const env: NodeJS.ProcessEnv = { ...process.env, HERMES_DESKTOP_VARIANT: 'bundled', _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(build), GITHUB_SHA: 'd'.repeat(40) }
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.name=Fixture',
+        '-c',
+        'user.email=fixture@example.test',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--allow-empty',
+        '-qm',
+        'fixture'
+      ],
+      { cwd: dir }
+    )
+    const build: ChannelBuildRequest = {
+      ...request(),
+      commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim()
+    }
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HERMES_DESKTOP_VARIANT: 'bundled',
+      _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(build),
+      GITHUB_SHA: 'd'.repeat(40)
+    }
     const provenance: InstallStamp = resolveStamp({ env, repoRoot: dir })
     const payload: StampPayload = { runtime: { repoDir: 'repo', commands: { hermes: 'bin/hermes' } } }
     const built: InstallStamp = buildStampPayload(provenance, env, 'darwin', payload)
@@ -119,34 +210,74 @@ test('channel stamps verify the real checkout and retain source version and nati
     assert.ok(Object.isFrozen(built.channelBuild?.identity))
     fs.mkdirSync(path.join(dir, 'out/agent-payload/repo'), { recursive: true })
     writeDesktopStamp(path.join(dir, 'out'), built)
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'out/install-stamp.json'), 'utf8')), JSON.parse(fs.readFileSync(path.join(dir, 'out/agent-payload/repo/install-stamp.json'), 'utf8')))
-    assert.throws((): void => { resolveStamp({ env: { ...env, _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(request()) }, repoRoot: dir }) }, /checkout/)
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(dir, 'out/install-stamp.json'), 'utf8')),
+      JSON.parse(fs.readFileSync(path.join(dir, 'out/agent-payload/repo/install-stamp.json'), 'utf8'))
+    )
+    assert.throws((): void => {
+      resolveStamp({ env: { ...env, _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(request()) }, repoRoot: dir })
+    }, /checkout/)
     delete process.env._HERMES_CHANNEL_REQUEST_JSON
     process.env.HERMES_PAYLOAD_TAG = 'v0.0.1'
     delete require.cache[require.resolve('../product-identity.cjs')]
     const official: ProductIdentity = require('../product-identity.cjs')
     delete process.env.HERMES_PAYLOAD_TAG
+
     const receiver: ChannelBuildRequest = {
-      ...build, channel: 'stable', sequence: 1, version: '0.0.1', windowsVersion: '0.0.1.0',
-      releaseTag: 'v0.0.1', receiverCandidate: true, bundleEnv: {},
+      ...build,
+      channel: 'stable',
+      sequence: 1,
+      version: '0.0.1',
+      windowsVersion: '0.0.1.0',
+      releaseTag: 'v0.0.1',
+      receiverCandidate: true,
+      bundleEnv: {},
       publicBase: 'https://builds.example.test/ci-disposable/1/2-1',
       identity: { ...official, token: build.identity.token }
     }
+
     const receiverEnv: NodeJS.ProcessEnv = { ...env, _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(receiver) }
-    const stable: InstallStamp = buildStampPayload(resolveStamp({ env: receiverEnv, repoRoot: dir }), receiverEnv, 'darwin', payload)
+    const stable: InstallStamp = buildStampPayload(
+      resolveStamp({ env: receiverEnv, repoRoot: dir }),
+      receiverEnv,
+      'darwin',
+      payload
+    )
     assert.equal(stable.channelBuild, undefined)
     assert.equal(stable.source, 'build')
     assert.equal(stable.tag, receiver.releaseTag)
     assert.equal(stable.displayVersion, receiver.version)
     assert.equal(stable.updateMechanism, 'electron-updater')
     const packaged: PackagingFacts = load(receiver)
-    assert.deepEqual(packaged.config.mac?.publish, [{ provider: 'generic', url: `${receiver.publicBase}/releases/darwin/stable/`, channel: 'stable' }])
-    const { verifyBundleStamp }: { verifyBundleStamp: (stamp: InstallStamp, options: {
-      commit: string; platform: string; channelRequest: ChannelBuildRequest
-    }) => string } = await import('../../../tests/install/e2e-assets/bundle-smoke-metadata.mjs')
-    assert.equal(verifyBundleStamp(stable, { commit: receiver.commit, platform: 'darwin', channelRequest: receiver }), receiver.version)
-    assert.throws((): void => { verifyBundleStamp(built, { commit: receiver.commit, platform: 'darwin', channelRequest: receiver }) })
-    execFileSync(process.env.HERMES_PYTHON || 'python3', ['-c', `
+    assert.deepEqual(packaged.config.mac?.publish, [
+      { provider: 'generic', url: `${receiver.publicBase}/releases/darwin/stable/`, channel: 'stable' }
+    ])
+
+    const {
+      verifyBundleStamp
+    }: {
+      verifyBundleStamp: (
+        stamp: InstallStamp,
+        options: {
+          commit: string
+          platform: string
+          channelRequest: ChannelBuildRequest
+        }
+      ) => string
+    } = await import('../../../tests/install/e2e-assets/bundle-smoke-metadata.mjs')
+
+    assert.equal(
+      verifyBundleStamp(stable, { commit: receiver.commit, platform: 'darwin', channelRequest: receiver }),
+      receiver.version
+    )
+    assert.throws((): void => {
+      verifyBundleStamp(built, { commit: receiver.commit, platform: 'darwin', channelRequest: receiver })
+    })
+    execFileSync(
+      process.env.HERMES_PYTHON || 'python3',
+      [
+        '-c',
+        `
 import json, sys
 from scripts.bundles.release_artifacts import stamp_matches
 stamp, request = json.loads(sys.argv[1]), json.loads(sys.argv[2])
@@ -158,26 +289,50 @@ except ValueError:
     pass
 else:
     raise AssertionError('receiver accepted preview updater ownership')
-`, JSON.stringify(stable), JSON.stringify(receiver)], { cwd: repo })
+`,
+        JSON.stringify(stable),
+        JSON.stringify(receiver)
+      ],
+      { cwd: repo }
+    )
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
-
 test('actual MSIX manifest writer consumes the channel quad across rollover instead of semver patch', (): void => {
   const root: string = fs.mkdtempSync(path.join(os.tmpdir(), 'channel-manifest-'))
   const app: string = path.join(root, 'apps/desktop')
-  interface ManifestFacts { version: string; semver: string; appId: string; xml: string }
-  interface RecordedMetadata { applicationId: string; version: string }
+  interface ManifestFacts {
+    version: string
+    semver: string
+    appId: string
+    xml: string
+  }
+  interface RecordedMetadata {
+    applicationId: string
+    version: string
+  }
 
   try {
-    for (const file of ['apps/desktop/product-identity.cjs', 'apps/desktop/electron-builder.config.cjs',
-      'apps/desktop/package.json', 'apps/desktop/update-feed.cjs', 'apps/desktop/assets/msix-manifest.xml',
-      'apps/desktop/scripts/before-build.mjs', 'apps/desktop/scripts/mac-sign.mjs',
-      'apps/desktop/scripts/payload-digests.mjs', 'apps/desktop/scripts/utils.mjs',
-      'scripts/msix-shared.mjs', 'scripts/release-content-types.json', 'scripts/build/python.mjs',
-      'scripts/bundles/desktop_prepare.py', 'scripts/releases/bundle_env.py', 'hermes_cli/release_channels.py', 'hermes_cli/__init__.py']) {
+    for (const file of [
+      'apps/desktop/product-identity.cjs',
+      'apps/desktop/electron-builder.config.cjs',
+      'apps/desktop/package.json',
+      'apps/desktop/update-feed.cjs',
+      'apps/desktop/assets/msix-manifest.xml',
+      'apps/desktop/scripts/before-build.mjs',
+      'apps/desktop/scripts/mac-sign.mjs',
+      'apps/desktop/scripts/payload-digests.mjs',
+      'apps/desktop/scripts/utils.mjs',
+      'scripts/msix-shared.mjs',
+      'scripts/release-content-types.json',
+      'scripts/build/python.mjs',
+      'scripts/bundles/desktop_prepare.py',
+      'scripts/releases/bundle_env.py',
+      'hermes_cli/release_channels.py',
+      'hermes_cli/__init__.py'
+    ]) {
       const destination: string = path.join(root, file)
       fs.mkdirSync(path.dirname(destination), { recursive: true })
       fs.copyFileSync(path.join(repo, file), destination)
@@ -192,7 +347,10 @@ test('actual MSIX manifest writer consumes the channel quad across rollover inst
     }
 
     fs.mkdirSync(path.join(app, 'build/agent-payload'), { recursive: true })
-    fs.writeFileSync(path.join(app, 'build/agent-payload/manifest.json'), JSON.stringify({ launchers: ['hermes-no-registry-needed', 'hermes-no-registry-needed-acp'] }))
+    fs.writeFileSync(
+      path.join(app, 'build/agent-payload/manifest.json'),
+      JSON.stringify({ launchers: ['hermes-no-registry-needed', 'hermes-no-registry-needed-acp'] })
+    )
     const facts: ManifestFacts[] = []
 
     for (const sequence of [65535, 65536, 65537, 0xffffffff]) {
@@ -223,7 +381,9 @@ test('actual MSIX manifest writer consumes the channel quad across rollover inst
       `
 
       const output: string = execFileSync(process.execPath, ['-e', script], {
-        cwd: root, encoding: 'utf8', env: { ...process.env, HERMES_DESKTOP_VARIANT: 'bundled', _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(build) }
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, HERMES_DESKTOP_VARIANT: 'bundled', _HERMES_CHANNEL_REQUEST_JSON: JSON.stringify(build) }
       })
 
       const row: ManifestFacts = JSON.parse(output.trim().split('\n').at(-1)!)
@@ -258,8 +418,11 @@ else:
 print(out.read_text(encoding='utf-8'))
 `
 
-      const recorded: string = execFileSync(process.env.HERMES_PYTHON || 'python3',
-        ['-c', recordScript, repo, root, JSON.stringify(build)], { encoding: 'utf8' })
+      const recorded: string = execFileSync(
+        process.env.HERMES_PYTHON || 'python3',
+        ['-c', recordScript, repo, root, JSON.stringify(build)],
+        { encoding: 'utf8' }
+      )
 
       const metadata: RecordedMetadata = JSON.parse(recorded)
       assert.equal(metadata.applicationId, build.identity.appNamePascal)
@@ -272,7 +435,9 @@ print(out.read_text(encoding='utf-8'))
       assert.ok(facts[index - 1].version.localeCompare(facts[index].version, undefined, { numeric: true }) < 0)
     }
 
-    assert.throws((): void => { load(request(0x100000000)) }, /sequence/)
+    assert.throws((): void => {
+      load(request(0x100000000))
+    }, /sequence/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

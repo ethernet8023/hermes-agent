@@ -56,7 +56,9 @@ test.skipIf(process.platform === 'win32')(
 
     const deps = {
       pool: new Map([['profile', { process: child }]]),
-      stopChild: (c: unknown): void => { void lifecycle.stop(c as ChildProcess) },
+      stopChild: (c: unknown): void => {
+        void lifecycle.stop(c as ChildProcess)
+      },
       waitForExit: (c: unknown): Promise<void> => lifecycle.stop(c as ChildProcess)
     }
 
@@ -137,11 +139,15 @@ test.skipIf(process.platform === 'win32')(
     child.once('exit', (): boolean => lifecycle.release(child))
     const entry = { process: child, releaseLocalBackendSlot: release }
     const entries = new Map([['claiming', entry]])
+
     const pool = createPoolStopper({
       pool: entries,
-      stopChild: (c: unknown): void => { void lifecycle.stop(c as ChildProcess) },
+      stopChild: (c: unknown): void => {
+        void lifecycle.stop(c as ChildProcess)
+      },
       waitForExit: (c: unknown): Promise<void> => lifecycle.stop(c as ChildProcess)
     })
+
     let finishClaim!: () => void
 
     const claim = new Promise<void>((resolve: () => void): void => {

@@ -12,7 +12,6 @@ import type {
   DesktopCloudAgent,
   DesktopCloudOrg,
   DesktopConnectionConfigInput,
-  DesktopConnectionProbeResult,
   DesktopRegistryConnection
 } from '@/global'
 import { useI18n } from '@/i18n'

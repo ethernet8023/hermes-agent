@@ -137,9 +137,4 @@ function resolveLinuxPasswordStore(options: { env?: NodeJS.ProcessEnv; platform?
   return { store: requested, warning: null }
 }
 
-export {
-  detectRemoteDisplay,
-  isWindowsBinaryPathInWsl,
-  isWslEnvironment,
-  resolveLinuxPasswordStore
-}
+export { detectRemoteDisplay, isWindowsBinaryPathInWsl, isWslEnvironment, resolveLinuxPasswordStore }

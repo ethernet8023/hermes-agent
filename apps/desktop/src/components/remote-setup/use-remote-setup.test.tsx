@@ -89,35 +89,70 @@ describe('remote setup owner', () => {
   })
 })
 
-it.each<RemoteSetupHost>(['first-run', 'settings', 'registry'])('stale probes and credential tests cannot authorize %s', async (host: RemoteSetupHost): Promise<void> => {
-  const probe: ReturnType<typeof deferred<DesktopConnectionProbeResult>> = deferred<DesktopConnectionProbeResult>()
-  const tested: ReturnType<typeof deferred<Awaited<ReturnType<Window['hermesDesktop']['testConnectionConfig']>>>> = deferred()
+it.each<RemoteSetupHost>(['first-run', 'settings', 'registry'])(
+  'stale probes and credential tests cannot authorize %s',
+  async (host: RemoteSetupHost): Promise<void> => {
+    const probe: ReturnType<typeof deferred<DesktopConnectionProbeResult>> = deferred<DesktopConnectionProbeResult>()
+    const tested: ReturnType<typeof deferred<Awaited<ReturnType<Window['hermesDesktop']['testConnectionConfig']>>>> =
+      deferred()
 
-  const bridge = {
-    probeConnectionConfig: vi.fn<Window['hermesDesktop']['probeConnectionConfig']>().mockReturnValue(probe.promise),
-    testConnectionConfig: vi.fn<Window['hermesDesktop']['testConnectionConfig']>().mockReturnValue(tested.promise)
-  } satisfies Pick<Window['hermesDesktop'], 'probeConnectionConfig' | 'testConnectionConfig'>
+    const bridge = {
+      probeConnectionConfig: vi.fn<Window['hermesDesktop']['probeConnectionConfig']>().mockReturnValue(probe.promise),
+      testConnectionConfig: vi.fn<Window['hermesDesktop']['testConnectionConfig']>().mockReturnValue(tested.promise)
+    } satisfies Pick<Window['hermesDesktop'], 'probeConnectionConfig' | 'testConnectionConfig'>
 
-  Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: bridge })
-  const { result }: RenderHookResult<ReturnType<typeof useRemoteSetup>, void> = renderHook((): ReturnType<typeof useRemoteSetup> => useRemoteSetup({ host }))
-  act((): void => { result.current.setAuthMode('oauth'); result.current.setUrl('https://a.example') })
-  await act(async (): Promise<void> => { await vi.advanceTimersByTimeAsync(500) })
-  act((): void => { result.current.setUrl('not-a-url') })
-  await act(async (): Promise<void> => { probe.resolve(probeResult('token', 'old')) })
-  expect(result.current.probeStatus).not.toBe('done')
-  expect(result.current.canTest).toBe(false)
-  expect(result.current.credentials.authMode).toBe('oauth')
+    Object.defineProperty(window, 'hermesDesktop', { configurable: true, value: bridge })
+    const {
+      result
+    }: RenderHookResult<ReturnType<typeof useRemoteSetup>, void> = renderHook((): ReturnType<typeof useRemoteSetup> =>
+      useRemoteSetup({ host })
+    )
+    act((): void => {
+      result.current.setAuthMode('oauth')
+      result.current.setUrl('https://a.example')
+    })
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    act((): void => {
+      result.current.setUrl('not-a-url')
+    })
+    await act(async (): Promise<void> => {
+      probe.resolve(probeResult('token', 'old'))
+    })
+    expect(result.current.probeStatus).not.toBe('done')
+    expect(result.current.canTest).toBe(false)
+    expect(result.current.credentials.authMode).toBe('oauth')
 
-  bridge.probeConnectionConfig.mockResolvedValue(probeResult('token', 'new'))
-  act((): void => { result.current.setAuthMode('token'); result.current.setUrl('https://b.example'); result.current.setToken('token-a') })
-  await act(async (): Promise<void> => { await vi.advanceTimersByTimeAsync(500) })
-  expect(result.current.canTest).toBe(true)
-  let pending!: Promise<void>
-  await act(async (): Promise<void> => { pending = result.current.test() })
-  expect(bridge.testConnectionConfig).toHaveBeenCalledExactlyOnceWith({ mode: 'remote', remoteUrl: 'https://b.example', remoteAuthMode: 'token', remoteToken: 'token-a' })
-  act((): void => { result.current.setToken('token-b') })
-  await act(async (): Promise<void> => { tested.resolve({ ok: true, baseUrl: 'https://b.example', version: null }); await pending })
-  expect(result.current.success).toBeNull()
-  expect(result.current.testing).toBe(false)
-  expect(result.current.canCommit).toBe(host !== 'first-run')
-})
+    bridge.probeConnectionConfig.mockResolvedValue(probeResult('token', 'new'))
+    act((): void => {
+      result.current.setAuthMode('token')
+      result.current.setUrl('https://b.example')
+      result.current.setToken('token-a')
+    })
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(result.current.canTest).toBe(true)
+    let pending!: Promise<void>
+    await act(async (): Promise<void> => {
+      pending = result.current.test()
+    })
+    expect(bridge.testConnectionConfig).toHaveBeenCalledExactlyOnceWith({
+      mode: 'remote',
+      remoteUrl: 'https://b.example',
+      remoteAuthMode: 'token',
+      remoteToken: 'token-a'
+    })
+    act((): void => {
+      result.current.setToken('token-b')
+    })
+    await act(async (): Promise<void> => {
+      tested.resolve({ ok: true, baseUrl: 'https://b.example', version: null })
+      await pending
+    })
+    expect(result.current.success).toBeNull()
+    expect(result.current.testing).toBe(false)
+    expect(result.current.canCommit).toBe(host !== 'first-run')
+  }
+)

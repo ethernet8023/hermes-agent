@@ -24,7 +24,9 @@ test('stages an actual HTTP descriptor and leaves a valid file intact on downloa
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
 
-  if (!address || typeof address === 'string') { throw new Error('missing server address') }
+  if (!address || typeof address === 'string') {
+    throw new Error('missing server address')
+  }
   const base = `http://127.0.0.1:${address.port}`
 
   try {

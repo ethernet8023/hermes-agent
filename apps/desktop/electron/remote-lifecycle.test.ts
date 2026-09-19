@@ -833,17 +833,19 @@ test('buildSpawnCommand atomically reserves the ownership slot through spawn and
   assert.ok(cmd.indexOf('lock_json') > cmd.indexOf('serve --isolated'))
 })
 
-test.skipIf(process.platform === 'win32')('detached backend does not inherit the update mutex descriptor', async (): Promise<void> => {
-  const shell: string = (await exec('command -v bash', { shell: 'bash' })).stdout.trim()
-  const directory: string = await mkdtemp(path.join(os.tmpdir(), 'hermes-update-mutex-'))
-  const hermesPath: string = path.join(directory, 'hermes')
-  const reportPath: string = path.join(directory, 'descriptor-report')
-  const logPath: string = path.join(directory, 'spawn.log')
+test.skipIf(process.platform === 'win32')(
+  'detached backend does not inherit the update mutex descriptor',
+  async (): Promise<void> => {
+    const shell: string = (await exec('command -v bash', { shell: 'bash' })).stdout.trim()
+    const directory: string = await mkdtemp(path.join(os.tmpdir(), 'hermes-update-mutex-'))
+    const hermesPath: string = path.join(directory, 'hermes')
+    const reportPath: string = path.join(directory, 'descriptor-report')
+    const logPath: string = path.join(directory, 'spawn.log')
 
-  try {
-    await writeFile(
-      hermesPath,
-      `#!${shell}
+    try {
+      await writeFile(
+        hermesPath,
+        `#!${shell}
 report=${expandRemotePath(reportPath)}
 : > "$report.tmp"
 for fd in /proc/$$/fd/*; do
@@ -854,36 +856,37 @@ for fd in /proc/$$/fd/*; do
 done
 mv "$report.tmp" "$report"
 `,
-      { encoding: 'utf8', mode: 0o700 }
-    )
+        { encoding: 'utf8', mode: 0o700 }
+      )
 
-    const command: string = buildSpawnCommand(hermesPath, '', {
-      hermesHome: path.join(directory, 'home'),
-      logPath
-    })
+      const command: string = buildSpawnCommand(hermesPath, '', {
+        hermesHome: path.join(directory, 'home'),
+        logPath
+      })
 
-    await exec(command, { shell, env: { ...process.env, HOME: directory, HERMES_HOME: directory } })
+      await exec(command, { shell, env: { ...process.env, HOME: directory, HERMES_HOME: directory } })
 
-    for (let attempt: number = 0; attempt < 100; attempt += 1) {
-      try {
-        const report: string = await readFile(reportPath, 'utf8')
-        assert.equal(report, '', 'the backend process must not retain the update mutex descriptor')
+      for (let attempt: number = 0; attempt < 100; attempt += 1) {
+        try {
+          const report: string = await readFile(reportPath, 'utf8')
+          assert.equal(report, '', 'the backend process must not retain the update mutex descriptor')
 
-        return
-      } catch (error: unknown) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
-          throw error
+          return
+        } catch (error: unknown) {
+          if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+            throw error
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 25))
         }
-
-        await new Promise(resolve => setTimeout(resolve, 25))
       }
-    }
 
-    assert.fail('the detached backend did not write its descriptor report')
-  } finally {
-    await rm(directory, { recursive: true, force: true })
+      assert.fail('the detached backend did not write its descriptor report')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   }
-})
+)
 
 test('spawnRemoteDashboard returns exact ownership artifacts', async () => {
   const ssh = fakeSsh([
@@ -1801,33 +1804,36 @@ test('remote SSH ownership capability requires both secure bootstrap flags', asy
   assert.equal(await remoteSupportsSshOwnership(unsupported, '/x/hermes'), false)
 })
 
-test.skipIf(process.platform === 'win32')('capability probe survives a zsh login shell on the remote (#111949)', async t => {
-  // sshd runs the remote command under the account's LOGIN shell. A bare
-  // `set -m` is fatal in a non-interactive zsh, so the watchdog-wrapped probe
-  // used to return nothing and a current remote was reported as unsupported.
-  const zsh = await exec('command -v zsh || true').then(r => r.stdout.trim())
+test.skipIf(process.platform === 'win32')(
+  'capability probe survives a zsh login shell on the remote (#111949)',
+  async t => {
+    // sshd runs the remote command under the account's LOGIN shell. A bare
+    // `set -m` is fatal in a non-interactive zsh, so the watchdog-wrapped probe
+    // used to return nothing and a current remote was reported as unsupported.
+    const zsh = await exec('command -v zsh || true').then(r => r.stdout.trim())
 
-  // CI installs zsh (js-tests.yml); locally a missing zsh must show as a
-  // skip, not a pass, or a wrapper regression stays green unnoticed.
-  if (!zsh) {
-    t.skip('zsh not installed')
+    // CI installs zsh (js-tests.yml); locally a missing zsh must show as a
+    // skip, not a pass, or a wrapper regression stays green unnoticed.
+    if (!zsh) {
+      t.skip('zsh not installed')
 
-    return
+      return
+    }
+
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'hermes-zsh-probe-'))
+
+    try {
+      const hermes = path.join(dir, 'hermes')
+      await writeFile(hermes, '#!/bin/sh\necho "--ssh-session-token-file --ssh-owner-nonce"\n', { mode: 0o700 })
+
+      const ssh = { exec: async (command: string) => (await exec(command, { shell: zsh })).stdout }
+
+      assert.equal(await remoteSupportsSshOwnership(ssh, hermes), true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   }
-
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'hermes-zsh-probe-'))
-
-  try {
-    const hermes = path.join(dir, 'hermes')
-    await writeFile(hermes, '#!/bin/sh\necho "--ssh-session-token-file --ssh-owner-nonce"\n', { mode: 0o700 })
-
-    const ssh = { exec: async (command: string) => (await exec(command, { shell: zsh })).stdout }
-
-    assert.equal(await remoteSupportsSshOwnership(ssh, hermes), true)
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-})
+)
 
 test('probes run under the remote watchdog so a hung CLI cannot orphan (#110478)', async () => {
   let versionProbe = ''
@@ -1861,7 +1867,10 @@ test('probes run under the remote watchdog so a hung CLI cannot orphan (#110478)
 
   assert.equal(await remoteSupportsSshOwnership(helpSsh, '/x/hermes'), true)
   assert.ok(helpProbe.includes('kill -9'), 'ownership probe wrapped in the remote watchdog')
-  assert.ok(/\$\(.*\(.*serve --help.*\) <\/dev\/null &/.test(helpProbe), 'watchdog nested around the inner serve --help')
+  assert.ok(
+    /\$\(.*\(.*serve --help.*\) <\/dev\/null &/.test(helpProbe),
+    'watchdog nested around the inner serve --help'
+  )
 })
 
 test('cleanupStale escalates to SIGKILL when the backend survives the graceful wait (#91668 quit-during-active-turn)', async () => {
@@ -2003,7 +2012,10 @@ test('connect() does not declare a live dashboard dead when the liveness probe a
 
   assert.equal(result.reused, false)
   assert.equal(result.pid, 777)
-  assert.ok(!ssh.calls.some(c => /(^|[^-\d])kill(?: -\w+)? 777\b/.test(c) && !/kill -0/.test(c)), 'must not reap a live backend')
+  assert.ok(
+    !ssh.calls.some(c => /(^|[^-\d])kill(?: -\w+)? 777\b/.test(c) && !/kill -0/.test(c)),
+    'must not reap a live backend'
+  )
 })
 
 test('cleanupStale reaps after one lost ownership answer and keeps the lockfile when none ever settles', async () => {
@@ -2015,7 +2027,10 @@ test('cleanupStale reaps after one lost ownership answer and keeps the lockfile 
   ])
 
   await cleanupStale(flaky, OWNERSHIP_ID, ownedLock({ pid: 777 }))
-  assert.ok(flaky.calls.some(c => /kill 777 &&/.test(c)), 'must reap the owned backend')
+  assert.ok(
+    flaky.calls.some(c => /kill 777 &&/.test(c)),
+    'must reap the owned backend'
+  )
   assert.ok(flaky.calls.some(c => /rm -f .*backend\.lock\.json/.test(c)))
 
   const silent = fakeSsh([[/print\("OWNED"/, '']])
@@ -2025,8 +2040,14 @@ test('cleanupStale reaps after one lost ownership answer and keeps the lockfile 
     (error: any) => error.kind === 'transient-transport-error'
   )
 
-  assert.ok(!silent.calls.some(c => /(^|[^-\d])kill(?: -\w+)? 777\b/.test(c) && !/kill -0/.test(c)), 'must not kill unproven')
-  assert.ok(!silent.calls.some(c => /rm -f .*backend\.lock\.json/.test(c)), 'record must survive for the next connect to reap')
+  assert.ok(
+    !silent.calls.some(c => /(^|[^-\d])kill(?: -\w+)? 777\b/.test(c) && !/kill -0/.test(c)),
+    'must not kill unproven'
+  )
+  assert.ok(
+    !silent.calls.some(c => /rm -f .*backend\.lock\.json/.test(c)),
+    'record must survive for the next connect to reap'
+  )
 })
 
 test('connect() post-spawn cleanup that cannot prove ownership keeps the original boot error', async () => {
@@ -2047,9 +2068,19 @@ test('connect() post-spawn cleanup that cannot prove ownership keeps the origina
   ])
 
   await assert.rejects(
-    connect(connectDeps(ssh, { platform: { os: 'Linux', arch: 'x86_64' }, waitForHermes: async () => { throw boot } })),
+    connect(
+      connectDeps(ssh, {
+        platform: { os: 'Linux', arch: 'x86_64' },
+        waitForHermes: async () => {
+          throw boot
+        }
+      })
+    ),
     (error: any) => error === boot && error.cleanupCause?.kind === 'transient-transport-error'
   )
 
-  assert.ok(!ssh.calls.some(c => /rm -f .*backend\.lock\.json/.test(c)), 'record must survive for the next connect to reap')
+  assert.ok(
+    !ssh.calls.some(c => /rm -f .*backend\.lock\.json/.test(c)),
+    'record must survive for the next connect to reap'
+  )
 })

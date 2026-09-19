@@ -2,10 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import {
-  GATEWAY_STOP_TIMEOUT_MS,
-  stopGatewayBeforeUpdate
-} from './gateway-stop-before-update'
+import { GATEWAY_STOP_TIMEOUT_MS, stopGatewayBeforeUpdate } from './gateway-stop-before-update'
 
 const CLI = 'C:\\Users\\x\\hermes\\hermes-agent\\venv\\Scripts\\hermes.exe'
 const HOME = 'C:\\Users\\x\\hermes'

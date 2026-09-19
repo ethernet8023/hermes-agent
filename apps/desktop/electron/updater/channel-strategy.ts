@@ -15,8 +15,16 @@ export interface ChannelStrategyDeps {
   mechanism: 'electron-updater' | 'app-installer'
   nativeFactory: (target: ChannelTarget) => UpdaterStrategy
 }
-interface NativeSelection { kind: 'native'; strategy: UpdaterStrategy; available: boolean }
-interface RetirementSelection { kind: 'retirement'; value: unknown; state: ChannelRetirementStatus['state'] }
+interface NativeSelection {
+  kind: 'native'
+  strategy: UpdaterStrategy
+  available: boolean
+}
+interface RetirementSelection {
+  kind: 'retirement'
+  value: unknown
+  state: ChannelRetirementStatus['state']
+}
 type Selection = NativeSelection | RetirementSelection | { kind: 'empty' }
 
 /** One selection owns a check/apply operation; background checks cannot retarget it. */
@@ -25,17 +33,25 @@ export class ChannelStrategy implements UpdaterStrategy {
   private selection: Selection | null = null
   private busy = false
 
-  constructor(private readonly deps: ChannelStrategyDeps) { this.mechanism = deps.mechanism }
+  constructor(private readonly deps: ChannelStrategyDeps) {
+    this.mechanism = deps.mechanism
+  }
 
   private enter(): void {
-    if (this.busy) { throw new Error('An update operation is already in progress.') }
+    if (this.busy) {
+      throw new Error('An update operation is already in progress.')
+    }
     this.busy = true
   }
 
   async check(): Promise<UpdaterStatusWire> {
     this.enter()
 
-    try { return await this.select() } finally { this.busy = false }
+    try {
+      return await this.select()
+    } finally {
+      this.busy = false
+    }
   }
 
   private async select(): Promise<UpdaterStatusWire> {
@@ -44,8 +60,11 @@ export class ChannelStrategy implements UpdaterStrategy {
     const result = await this.deps.resolver.resolve()
 
     const base: UpdaterStatusWire = {
-      supported: true, mechanism: this.mechanism, channel: this.deps.build.channel,
-      currentVersion: this.deps.build.version, fetchedAt: Date.now()
+      supported: true,
+      mechanism: this.mechanism,
+      channel: this.deps.build.channel,
+      currentVersion: this.deps.build.version,
+      fetchedAt: Date.now()
     }
 
     if (result.kind === 'empty') {
@@ -71,14 +90,23 @@ export class ChannelStrategy implements UpdaterStrategy {
       this.selection = { kind: 'retirement', value: result.retirement, state: 'discontinued' }
 
       return {
-        ...base, retirement: { state: 'discontinued', destination: result.retirement.target.channel.name, version: result.retirement.target.manifest.request.version }
+        ...base,
+        retirement: {
+          state: 'discontinued',
+          destination: result.retirement.target.channel.name,
+          version: result.retirement.target.manifest.request.version
+        }
       }
     }
 
     return await this.selectNative(base, result.target)
   }
 
-  private async selectNative(base: UpdaterStatusWire, target: ChannelTarget, options: { crossChannel?: boolean } = {}): Promise<UpdaterStatusWire> {
+  private async selectNative(
+    base: UpdaterStatusWire,
+    target: ChannelTarget,
+    options: { crossChannel?: boolean } = {}
+  ): Promise<UpdaterStatusWire> {
     if (!options.crossChannel && target.manifest.request.sequence <= this.deps.build.sequence) {
       this.selection = { kind: 'empty' }
 
@@ -88,24 +116,39 @@ export class ChannelStrategy implements UpdaterStrategy {
     const strategy = this.deps.nativeFactory(target)
     const status = await strategy.check()
 
-    if (status.error || status.updateAvailable === undefined) { throw new Error(status.error || 'Native update availability unknown') }
+    if (status.error || status.updateAvailable === undefined) {
+      throw new Error(status.error || 'Native update availability unknown')
+    }
     this.selection = { kind: 'native', strategy, available: status.updateAvailable }
 
-    return { ...status, ...base, latestTag: `v${target.manifest.request.version}`, targetSha: target.manifest.request.commit }
+    return {
+      ...status,
+      ...base,
+      latestTag: `v${target.manifest.request.version}`,
+      targetSha: target.manifest.request.commit
+    }
   }
 
   async apply(): Promise<UpdaterApplyResultWire> {
     this.enter()
 
     try {
-      if (!this.selection) { await this.select() }
+      if (!this.selection) {
+        await this.select()
+      }
       const selected = this.selection
 
-      if (selected?.kind === 'retirement') { return { ok: false, error: 'This build is discontinued; uninstall it and install an official release.' } }
+      if (selected?.kind === 'retirement') {
+        return { ok: false, error: 'This build is discontinued; uninstall it and install an official release.' }
+      }
 
-      if (selected?.kind === 'native' && selected.available) { return await selected.strategy.apply() }
+      if (selected?.kind === 'native' && selected.available) {
+        return await selected.strategy.apply()
+      }
 
       return { ok: true, mechanism: this.mechanism }
-    } finally { this.busy = false }
+    } finally {
+      this.busy = false
+    }
   }
 }

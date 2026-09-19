@@ -19,9 +19,9 @@ import {
   win32AppInstallerFeedPath
 } from '../app-updater'
 
-import { applyPackagedHandoff } from './packaged-handoff'
-import { channelPublicBase } from './channel-protocol'
 import type { ChannelTarget } from './channel'
+import { channelPublicBase } from './channel-protocol'
+import { applyPackagedHandoff } from './packaged-handoff'
 import type { RelaunchRegistration } from './relaunch'
 
 import type { UpdaterApplyResultWire, UpdaterStatusWire } from './index'
@@ -79,11 +79,19 @@ export function createChannelAppInstallerStrategy(
   target: ChannelTarget,
   verifyPrepared: (file: string, target: ChannelTarget) => Promise<void>
 ): AppInstallerStrategy {
-  if (target.package.platform !== 'win32') { throw new Error('Expected Windows channel target') }
+  if (target.package.platform !== 'win32') {
+    throw new Error('Expected Windows channel target')
+  }
+
   return new AppInstallerStrategy({
-    ...deps, channel: target.channel.name, feedBaseUrl: target.manifest.request.publicBase,
-    feed: { url: target.feedUrl, version: target.package.version,
-      verifyPrepared: (file: string): Promise<void> => verifyPrepared(file, target) }
+    ...deps,
+    channel: target.channel.name,
+    feedBaseUrl: target.manifest.request.publicBase,
+    feed: {
+      url: target.feedUrl,
+      version: target.package.version,
+      verifyPrepared: (file: string): Promise<void> => verifyPrepared(file, target)
+    }
   })
 }
 
@@ -94,9 +102,15 @@ export class AppInstallerStrategy {
 
   async check(): Promise<UpdaterStatusWire> {
     if (this.deps.feed) {
-      return { supported: true, mechanism: this.mechanism, currentVersion: this.deps.appVersion,
-        updateAvailable: newerWindowsVersion(this.deps.feed.version, this.deps.appVersion), fetchedAt: Date.now() }
+      return {
+        supported: true,
+        mechanism: this.mechanism,
+        currentVersion: this.deps.appVersion,
+        updateAvailable: newerWindowsVersion(this.deps.feed.version, this.deps.appVersion),
+        fetchedAt: Date.now()
+      }
     }
+
     const { code, stdout } = await this.deps.run(this.deps.python, this.deps.script)
     const check = parseCheckOutput(code, stdout)
 
@@ -106,11 +120,18 @@ export class AppInstallerStrategy {
   async apply(): Promise<UpdaterApplyResultWire> {
     const feedBaseUrl = this.deps.feedBaseUrl
     let sourceUri: string | undefined = this.deps.feed?.url
+
     if (sourceUri) {
       channelPublicBase(sourceUri)
       const base = channelPublicBase(feedBaseUrl)
-      if (!sourceUri.startsWith(`${base}/`) || new URL(sourceUri).origin !== new URL(base).origin) { throw new Error('Native feed authority mismatch') }
-      if (!newerWindowsVersion(this.deps.feed!.version, this.deps.appVersion)) { return { ok: true, mechanism: this.mechanism } }
+
+      if (!sourceUri.startsWith(`${base}/`) || new URL(sourceUri).origin !== new URL(base).origin) {
+        throw new Error('Native feed authority mismatch')
+      }
+
+      if (!newerWindowsVersion(this.deps.feed!.version, this.deps.appVersion)) {
+        return { ok: true, mechanism: this.mechanism }
+      }
     }
 
     if (!feedBaseUrl && !sourceUri) {
@@ -158,6 +179,7 @@ export class AppInstallerStrategy {
             prepare: async (url: string): Promise<string> => {
               const file = await this.deps.installer.prepare(url)
               await this.deps.feed?.verifyPrepared(file)
+
               return file
             },
             open: this.deps.installer.open
@@ -175,16 +197,27 @@ export class AppInstallerStrategy {
 
 function newerWindowsVersion(target: string, current: string): boolean {
   const parse = (version: string): number[] => {
-    if (!/^\d+\.\d+\.\d+\.\d+$/.test(version)) { throw new Error('Windows channel updates require native numeric versions') }
+    if (!/^\d+\.\d+\.\d+\.\d+$/.test(version)) {
+      throw new Error('Windows channel updates require native numeric versions')
+    }
     const parts = version.split('.').map(Number)
-    if (parts.some((part: number): boolean => part > 65535)) { throw new Error('Invalid Windows native version') }
+
+    if (parts.some((part: number): boolean => part > 65535)) {
+      throw new Error('Invalid Windows native version')
+    }
+
     return parts
   }
+
   const left = parse(target)
   const right = parse(current)
+
   for (let index = 0; index < 4; index += 1) {
-    if (left[index] !== right[index]) { return left[index] > right[index] }
+    if (left[index] !== right[index]) {
+      return left[index] > right[index]
+    }
   }
+
   return false
 }
 

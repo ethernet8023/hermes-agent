@@ -6,9 +6,8 @@ import type { SourceUpdate } from './checkout-source'
 it.each(['not-a-git-checkout', 'update-root-steward-owned-git-tree', 'fetch-failed'])(
   'preserves the Python refusal or error before handoff: %s',
   async (reason: string): Promise<void> => {
-    const status: SourceUpdate = reason === 'fetch-failed'
-      ? { supported: true, error: reason }
-      : { supported: false, reason }
+    const status: SourceUpdate =
+      reason === 'fetch-failed' ? { supported: true, error: reason } : { supported: false, reason }
 
     const deps: CheckoutStrategyDeps = {
       readSourceUpdate: vi.fn(async (): Promise<SourceUpdate> => status),

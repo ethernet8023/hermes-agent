@@ -29,10 +29,7 @@ import feedContract from '../update-feed.cjs'
  * from its own subtree so the two variants can never serve each other's
  * packages.
  */
-export function win32AppInstallerFeedPath(
-  channel: string,
-  light: boolean
-): string {
+export function win32AppInstallerFeedPath(channel: string, light: boolean): string {
   feedContract.darwinFeed(channel, light)
   const variant = light ? 'light/' : ''
 
@@ -86,10 +83,18 @@ export function parseCheckOutput(code: number, stdout: string): AppInstallerChec
   }
 
   if (typeof parsed?.available === 'boolean') {
-    return { available: parsed.available, availability: parsed.availability, error: parsed.error, sourceUri: parsed.source_uri }
+    return {
+      available: parsed.available,
+      availability: parsed.availability,
+      error: parsed.error,
+      sourceUri: parsed.source_uri
+    }
   }
 
-  return { available: null, error: parsed?.error || (code !== 0 ? `checker exited ${code}` : 'checker returned no availability') }
+  return {
+    available: null,
+    error: parsed?.error || (code !== 0 ? `checker exited ${code}` : 'checker returned no availability')
+  }
 }
 
 /** Open a local descriptor. The ms-appinstaller protocol is disabled by default. */
@@ -101,7 +106,8 @@ export async function triggerAppInstallerUpdate(
   beforeInstall?: () => void | Promise<void>,
   sourceUri?: string
 ): Promise<{ ok: true }> {
-  const appinstallerUrl = sourceUri ||
+  const appinstallerUrl =
+    sourceUri ||
     `${feedBaseUrl.replace(/\/+$/, '')}/${win32AppInstallerFeedPath(channel, light)}${channel}.appinstaller`
 
   const file = await installer.prepare(appinstallerUrl)
@@ -112,7 +118,9 @@ export async function triggerAppInstallerUpdate(
 
   const error = await installer.open(file)
 
-  if (error) { throw new Error(`App Installer could not open: ${error}`) }
+  if (error) {
+    throw new Error(`App Installer could not open: ${error}`)
+  }
 
   return { ok: true }
 }

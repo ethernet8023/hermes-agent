@@ -17,7 +17,9 @@ export class UpdateOperation {
   }
 
   async apply(run: () => Promise<UpdaterApplyResultWire>): Promise<UpdaterApplyResultWire> {
-    if (this.applying) { throw new Error('An update is already in progress.') }
+    if (this.applying) {
+      throw new Error('An update is already in progress.')
+    }
     this.applying = true
     let handedOff: boolean = false
 
@@ -27,7 +29,9 @@ export class UpdateOperation {
 
       return result
     } finally {
-      if (!handedOff) { this.applying = false }
+      if (!handedOff) {
+        this.applying = false
+      }
     }
   }
 }

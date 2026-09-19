@@ -16,16 +16,11 @@
 // or Store inference; the strategy reports its mechanism to the renderer.
 
 import type { InstallStamp } from '../install-stamp'
+
 import type { ChannelRetirementStatus } from './channel-strategy'
 
 export type UpdaterMechanism =
-  | 'app-installer'
-  | 'electron-updater'
-  | 'external'
-  | 'microsoft-store'
-  | 'windows-handoff'
-  | 'posix-handoff'
-  | 'manual'
+  'app-installer' | 'electron-updater' | 'external' | 'microsoft-store' | 'windows-handoff' | 'posix-handoff' | 'manual'
 
 /** The facts the mechanism dispatch keys on. Pure data — injectable for tests. */
 export interface MechanismFacts {
@@ -39,7 +34,9 @@ export interface MechanismFacts {
  * packaged app into a checkout, and Light needs no payload to update itself.
  */
 export function resolveUpdaterMechanism(facts: MechanismFacts): UpdaterMechanism {
-  if (facts.source === 'commit-build') { return 'external' }
+  if (facts.source === 'commit-build') {
+    return 'external'
+  }
 
   if (facts.updateMechanism && facts.updateMechanism !== 'self') {
     return facts.updateMechanism

@@ -164,38 +164,60 @@ test('shouldRemoveAppBundle requires packaged AND a resolved path', () => {
   assert.equal(shouldRemoveAppBundle(false, null), false)
 })
 
-test.skipIf(process.platform === 'win32').each(['gui', 'lite', 'full'] as const)('POSIX cleanup executes %s in its sandbox and preserves its sibling', async (mode: string): Promise<void> => {
-  const root: string = fs.mkdtempSync(path.join(os.tmpdir(), "uninstall-o'brien-"))
-  const app: string = path.join(root, 'App with spaces')
-  const sibling: string = path.join(root, 'App with spaces-other')
-  const recorder: string = path.join(root, "recorder's.cjs")
-  const resultFile: string = path.join(root, 'observed.json')
-  const script: string = path.join(root, 'cleanup.sh')
-  let child: ChildProcess | undefined
+test.skipIf(process.platform === 'win32').each(['gui', 'lite', 'full'] as const)(
+  'POSIX cleanup executes %s in its sandbox and preserves its sibling',
+  async (mode: string): Promise<void> => {
+    const root: string = fs.mkdtempSync(path.join(os.tmpdir(), "uninstall-o'brien-"))
+    const app: string = path.join(root, 'App with spaces')
+    const sibling: string = path.join(root, 'App with spaces-other')
+    const recorder: string = path.join(root, "recorder's.cjs")
+    const resultFile: string = path.join(root, 'observed.json')
+    const script: string = path.join(root, 'cleanup.sh')
+    let child: ChildProcess | undefined
 
-  try {
-    fs.mkdirSync(app); fs.mkdirSync(sibling)
-    fs.writeFileSync(recorder, `require('node:fs').writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({argv:process.argv.slice(2), home:process.env.HERMES_HOME, pythonPath:process.env.PYTHONPATH, cwd:process.cwd()}))`)
-    fs.writeFileSync(script, buildPosixCleanupScript({
-      desktopPid: 0, pythonExe: process.execPath, pythonPath: mode === 'gui' ? null : root,
-      agentRoot: root, uninstallArgs: [recorder, ...uninstallArgsForMode(mode)],
-      appPath: mode === 'lite' ? null : app, hermesHome: root
-    }))
-    child = spawn('bash', [script], { env: { ...process.env, PYTHONPATH: 'inherited', HERMES_HOME: root }, stdio: 'ignore' })
-    await once(child, 'close')
-    assert.equal(child.exitCode, 0)
-    assert.deepEqual(JSON.parse(fs.readFileSync(resultFile, 'utf8')), {
-      argv: ['-m', 'hermes_cli.uninstall', '--mode', mode], home: root,
-      pythonPath: mode === 'gui' ? 'inherited' : `${root}:inherited`, cwd: root
-    })
-    assert.equal(fs.existsSync(app), mode === 'lite')
-    assert.equal(fs.existsSync(sibling), true)
-    assert.equal(fs.existsSync(script), false)
-  } finally {
-    if (child && child.exitCode === null && child.signalCode === null) { child.kill(); await once(child, 'close') }
-    fs.rmSync(root, { recursive: true, force: true })
+    try {
+      fs.mkdirSync(app)
+      fs.mkdirSync(sibling)
+      fs.writeFileSync(
+        recorder,
+        `require('node:fs').writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({argv:process.argv.slice(2), home:process.env.HERMES_HOME, pythonPath:process.env.PYTHONPATH, cwd:process.cwd()}))`
+      )
+      fs.writeFileSync(
+        script,
+        buildPosixCleanupScript({
+          desktopPid: 0,
+          pythonExe: process.execPath,
+          pythonPath: mode === 'gui' ? null : root,
+          agentRoot: root,
+          uninstallArgs: [recorder, ...uninstallArgsForMode(mode)],
+          appPath: mode === 'lite' ? null : app,
+          hermesHome: root
+        })
+      )
+      child = spawn('bash', [script], {
+        env: { ...process.env, PYTHONPATH: 'inherited', HERMES_HOME: root },
+        stdio: 'ignore'
+      })
+      await once(child, 'close')
+      assert.equal(child.exitCode, 0)
+      assert.deepEqual(JSON.parse(fs.readFileSync(resultFile, 'utf8')), {
+        argv: ['-m', 'hermes_cli.uninstall', '--mode', mode],
+        home: root,
+        pythonPath: mode === 'gui' ? 'inherited' : `${root}:inherited`,
+        cwd: root
+      })
+      assert.equal(fs.existsSync(app), mode === 'lite')
+      assert.equal(fs.existsSync(sibling), true)
+      assert.equal(fs.existsSync(script), false)
+    } finally {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill()
+        await once(child, 'close')
+      }
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   }
-})
+)
 
 test('buildPosixCleanupScript waits for the PID, runs the uninstall module, removes bundle', (): void => {
   const script = buildPosixCleanupScript({

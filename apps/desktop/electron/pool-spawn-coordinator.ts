@@ -84,6 +84,7 @@ export function assertPoolEntryStillOwned(
     throw new Error(`Profile backend start for "${poolKey}" was cancelled during start.`)
   }
 }
+
 /** A retry deferment is expected background control flow, not a start failure. */
 export class BackgroundSlotRetryDeferredError extends Error {
   constructor(key: string) {
@@ -201,7 +202,9 @@ export class LocalBackendSpawnCoordinator {
   onChange(listener: () => void): () => void {
     this.#listeners.add(listener)
 
-    return () => { this.#listeners.delete(listener) }
+    return () => {
+      this.#listeners.delete(listener)
+    }
   }
 
   #changed(): void {

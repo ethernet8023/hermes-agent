@@ -37,40 +37,80 @@ for (const mode of [
     const start: SpawnWaiter = (command: string, args: string[], options: Parameters<SpawnWaiter>[2]): ChildProcess => {
       stage = options.cwd
       const readyFile: string = path.join(stage, 'ready.txt')
-      assert.equal(command, path.win32.join(process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
+      assert.equal(
+        command,
+        path.win32.join(
+          process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows',
+          'System32',
+          'WindowsPowerShell',
+          'v1.0',
+          'powershell.exe'
+        )
+      )
       assert.deepEqual(options, { cwd: stage, detached: true, stdio: 'ignore', windowsHide: true })
       assert.notEqual(stage, path.dirname(scriptPath))
       assert.deepEqual(fs.readFileSync(path.join(stage, 'update-relaunch-waiter.ps1')), fs.readFileSync(scriptPath))
       assert.deepEqual(args, [
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', path.join(stage, 'update-relaunch-waiter.ps1'),
-        '-ProcessId', String(process.pid), '-ProcessStartTimeMs', '1000000',
-        '-IdentityName', 'disposable-waiter-test', '-ReadyFile', readyFile, '-TimeoutSeconds', '900'
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        path.join(stage, 'update-relaunch-waiter.ps1'),
+        '-ProcessId',
+        String(process.pid),
+        '-ProcessStartTimeMs',
+        '1000000',
+        '-IdentityName',
+        'disposable-waiter-test',
+        '-ReadyFile',
+        readyFile,
+        '-TimeoutSeconds',
+        '900'
       ])
-      child = spawn(mode.missing ? path.join(stage, 'missing.exe') : process.execPath, ['-e', `
+      child = spawn(
+        mode.missing ? path.join(stage, 'missing.exe') : process.execPath,
+        [
+          '-e',
+          `
         const fs = require('node:fs');
         if (process.env.TEST_EXIT === 'yes') process.exit(3);
         if (process.env.TEST_READY === 'yes') fs.writeFileSync(process.env.READY_FILE, 'ready');
         setInterval(() => {}, 1000);
-      `], {
-        ...options,
-        env: { ...process.env, READY_FILE: readyFile, TEST_READY: mode.ready ? 'yes' : 'no', TEST_EXIT: mode.earlyExit ? 'yes' : 'no' }
-      })
+      `
+        ],
+        {
+          ...options,
+          env: {
+            ...process.env,
+            READY_FILE: readyFile,
+            TEST_READY: mode.ready ? 'yes' : 'no',
+            TEST_EXIT: mode.earlyExit ? 'yes' : 'no'
+          }
+        }
+      )
       originalKill = child.kill.bind(child)
 
-      if (mode.refuseKill) { child.kill = () => false }
-      child.once('close', () => { closed = true })
+      if (mode.refuseKill) {
+        child.kill = () => false
+      }
+      child.once('close', () => {
+        closed = true
+      })
 
       return child
     }
 
     try {
-      const starting: Promise<RelaunchWaiterHandle | undefined> = startRelaunchWaiter({
-        processId: process.pid,
-        processStartTimeMs: 1_000_000,
-        identityName: 'disposable-waiter-test',
-        scriptPath
-      }, { spawn: start, handshakeTimeoutMs: mode.ready ? 10_000 : 2_000, cancelTimeoutMs: 2_000, pollMs: 20 })
+      const starting: Promise<RelaunchWaiterHandle | undefined> = startRelaunchWaiter(
+        {
+          processId: process.pid,
+          processStartTimeMs: 1_000_000,
+          identityName: 'disposable-waiter-test',
+          scriptPath
+        },
+        { spawn: start, handshakeTimeoutMs: mode.ready ? 10_000 : 2_000, cancelTimeoutMs: 2_000, pollMs: 20 }
+      )
 
       if (!mode.ready && mode.refuseKill) {
         await assert.rejects(starting, /did not exit after cancellation/)
@@ -97,9 +137,11 @@ for (const mode of [
         assert.equal(handle.cancel(), cancelled, 'concurrent cancellation shares its result')
 
         if (mode.refuseKill || mode.refuseCleanup) {
-          await assert.rejects(cancelled, error => mode.refuseCleanup
-            ? error === cleanupError
-            : error instanceof Error && error.message.includes('did not exit after cancellation'))
+          await assert.rejects(cancelled, error =>
+            mode.refuseCleanup
+              ? error === cleanupError
+              : error instanceof Error && error.message.includes('did not exit after cancellation')
+          )
           assert.equal(handle.cancel(), cancelled)
           assert.equal(closed, !mode.refuseKill)
           assert.equal(fs.existsSync(stage), true)
@@ -118,19 +160,36 @@ for (const mode of [
     } finally {
       vi.restoreAllMocks()
 
-      if (child && originalKill) { child.kill = originalKill }
+      if (child && originalKill) {
+        child.kill = originalKill
+      }
       await stop(child)
 
-      if (stage) {fs.rmSync(stage, { recursive: true, force: true })}
+      if (stage) {
+        fs.rmSync(stage, { recursive: true, force: true })
+      }
     }
   }, 20_000)
 }
 
 test('missing scripts refuse startup before spawning a waiter', async (): Promise<void> => {
   let spawned: boolean = false
-  assert.equal(await startRelaunchWaiter({
-    processId: process.pid, processStartTimeMs: 1_000_000,
-    identityName: 'disposable-waiter-test', scriptPath: path.join(scriptPath, 'absent.ps1')
-  }, { spawn: (): never => { spawned = true; throw new Error('missing scripts must not spawn') } }), undefined)
+  assert.equal(
+    await startRelaunchWaiter(
+      {
+        processId: process.pid,
+        processStartTimeMs: 1_000_000,
+        identityName: 'disposable-waiter-test',
+        scriptPath: path.join(scriptPath, 'absent.ps1')
+      },
+      {
+        spawn: (): never => {
+          spawned = true
+          throw new Error('missing scripts must not spawn')
+        }
+      }
+    ),
+    undefined
+  )
   assert.equal(spawned, false)
 })

@@ -86,7 +86,10 @@ describe('macOS strategy', () => {
     await expect(new MacStrategy(deps).apply()).rejects.toThrow('pinned channel version')
     expect(events).toEqual(['check'])
     deps.expectedVersion = '0.29.0'
-    deps.verifyDownload = async (): Promise<void> => { throw new Error('artifact digest mismatch') }
+
+    deps.verifyDownload = async (): Promise<void> => {
+      throw new Error('artifact digest mismatch')
+    }
     await expect(new MacStrategy(deps).apply()).rejects.toThrow('artifact digest')
     expect(events).not.toContain('verify')
     expect(events).not.toContain('stop')

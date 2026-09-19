@@ -61,6 +61,7 @@ export function distributionLabelKey(version: DistributionLabelInput): Distribut
     if (version.installedByScript) {
       return 'versionDetailsDistributionSourceInstaller'
     }
+
     return version.source && version.source !== 'unknown' ? 'versionDetailsDistributionSource' : null
   }
 

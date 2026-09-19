@@ -126,11 +126,15 @@ const REFUSED_MODEL: LocalCatalogModel = {
 
 function setInstallStarting(starting: boolean): void {
   queryClient.getMutationCache().clear()
+
   if (starting) {
-    queryClient.getMutationCache().build(queryClient, {
-      mutationKey: localModelsKey(localModelsOwner(), 'install'),
-      mutationFn: (): Promise<void> => new Promise<void>((): void => {})
-    }).execute(undefined)
+    queryClient
+      .getMutationCache()
+      .build(queryClient, {
+        mutationKey: localModelsKey(localModelsOwner(), 'install'),
+        mutationFn: (): Promise<void> => new Promise<void>((): void => {})
+      })
+      .execute(undefined)
   }
 }
 

@@ -34,7 +34,11 @@ it('leaves fallback selection available for missing, invalid or non-string confi
   const config: string = join(home, 'config.yaml')
 
   const documents: string[] = [
-    '', 'updates: [', 'null', 'updates: null', 'updates: []',
+    '',
+    'updates: [',
+    'null',
+    'updates: null',
+    'updates: []',
     'other: {desktop_feed_base_url: https://other.example}',
     'updates: {desktop_feed_base_url: false}',
     'updates: {desktop_feed_base_url: 123}',

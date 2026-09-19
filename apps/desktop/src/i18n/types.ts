@@ -64,7 +64,7 @@ export interface Translations {
     message: string
     copyUrl: string
     close: string
-  };
+  }
   catalog: {
     listView: string
     cardView: string
@@ -103,7 +103,7 @@ export interface Translations {
     installHint: string
     results: (count: number) => string
     back: string
-  };
+  }
   connectors: {
     title: string
     connect: string

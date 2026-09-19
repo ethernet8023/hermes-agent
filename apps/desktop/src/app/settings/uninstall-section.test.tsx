@@ -28,9 +28,13 @@ it.each(['external', 'missing-policy', 'probe-failed', 'loading'] as const)(
   'does not offer uninstall actions when ownership is %s',
   async (state: 'external' | 'missing-policy' | 'probe-failed' | 'loading'): Promise<void> => {
     const getSummary: ReturnType<typeof vi.fn> = vi.fn(async (): Promise<DesktopUninstallSummary> => {
-      if (state === 'probe-failed') { throw new Error('IPC unavailable') }
+      if (state === 'probe-failed') {
+        throw new Error('IPC unavailable')
+      }
 
-      if (state === 'loading') { return new Promise<DesktopUninstallSummary>((): void => {}) }
+      if (state === 'loading') {
+        return new Promise<DesktopUninstallSummary>((): void => {})
+      }
 
       if (state === 'missing-policy') {
         const { code_removal_allowed: _ignored, ...oldSummary }: ReturnType<typeof summary> = summary(true)
@@ -44,7 +48,9 @@ it.each(['external', 'missing-policy', 'probe-failed', 'loading'] as const)(
     const run: ReturnType<typeof vi.fn> = vi.fn()
 
     vi.stubGlobal('hermesDesktop', { uninstall: { summary: getSummary, run } })
-    await act(async (): Promise<void> => { render(<UninstallSection />) })
+    await act(async (): Promise<void> => {
+      render(<UninstallSection />)
+    })
     expect(getSummary).toHaveBeenCalledOnce()
     expect(screen.queryByText('Uninstall Hermes')).toBeNull()
     expect(screen.queryByRole('button', { name: /Uninstall/ })).toBeNull()
@@ -62,5 +68,7 @@ it('keeps owned-install removal modes and confirms the selected mode', async ():
   fireEvent.click(await screen.findByRole('button', { name: /Uninstall Chat GUI only/ }))
   expect(run).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Yes, uninstall' }))
-  await waitFor((): void => { expect(run).toHaveBeenCalledWith('gui') })
+  await waitFor((): void => {
+    expect(run).toHaveBeenCalledWith('gui')
+  })
 })

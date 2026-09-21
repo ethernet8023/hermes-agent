@@ -106,6 +106,38 @@ async def get_sandbox_status(profile: Optional[str] = None, provision: bool = Fa
         return await scoped_to_thread(profile, lambda: _status_payload(provision_shell=provision, workspace=workspace))
 
 
+def provision_sandbox_bins() -> None:
+    """Install the kit and the shell into the writable pm store when missing.
+
+    A sealed install carries both pins in its payload, so there is nothing to
+    fetch and a missing copy is a rebuild, not a download. A source install
+    downloads only the pin the store lacks. Raises ``SealedInstall`` or
+    ``InstallError``; the caller leaves the toggle off and shows the message.
+    """
+    from pm.install import ensure, is_installed, sealed
+    from pm.package import InstallError
+
+    if sealed():
+        missing = [name for name in ("mxc-kit", "busybox") if not is_installed(name)]
+        if missing:
+            raise SealedInstall(missing)
+        return
+    for name in ("mxc-kit", "busybox"):
+        if not is_installed(name):
+            ensure(name, explicit=True)
+
+
+class SealedInstall(Exception):
+    """The payload ships its own kit, and this one does not have it."""
+
+    def __init__(self, missing: list[str]):
+        self.missing = missing
+        super().__init__(
+            "this install is sealed and does not ship: "
+            + ", ".join(missing)
+            + " — rebuild the bundle to get the sandbox kit")
+
+
 def _apply_backend_switch_to_this_process() -> None:
     """Make a terminal-backend change reach the running server without a restart.
 
@@ -135,7 +167,12 @@ async def update_sandbox_policy(body: SandboxPolicyUpdate, profile: Optional[str
         backend_changed = False
         with config_write_scope(body.profile or profile):
             if body.enabled:
-                record = status(provision_shell=True)
+                from pm.package import InstallError
+                try:
+                    provision_sandbox_bins()
+                except (SealedInstall, InstallError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                record = status(provision_shell=False)
                 if not record["available"]:
                     raise HTTPException(status_code=400, detail=record["reason"] or "MXC is not available on this host.")
             config = load_config()

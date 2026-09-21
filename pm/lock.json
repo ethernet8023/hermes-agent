@@ -38,6 +38,19 @@
       },
       "version": "2.0.0"
     },
+    "busybox": {
+      "artifacts": {
+        "win32-arm64": {
+          "sha256": "e67f873d19d58c535cc9f0c4965ffd622e19b7bab87e3da89cb2185fb54464d7",
+          "url": "https://frippery.org/files/busybox/busybox-w64a-FRP-6075-g169694ebd.exe"
+        },
+        "win32-x64": {
+          "sha256": "6e263d154d8548d1eb936f65d1d8312c80df31c45974e48d6335e4dcc0f4f34c",
+          "url": "https://frippery.org/files/busybox/busybox-w64u-FRP-6075-g169694ebd.exe"
+        }
+      },
+      "version": "FRP-6075-g169694ebd"
+    },
     "chromium": {
       "artifacts": {
         "darwin-arm64": {
@@ -357,6 +370,15 @@
         }
       },
       "version": "10362"
+    },
+    "mxc-kit": {
+      "artifacts": {
+        "win32-arm64": {
+          "sha256": "275ba11a63fe3f00e1b8a13fcedda61223c1422e32d0bba3cfbc6ed840574a6f",
+          "url": "https://github.com/jquesnelle/mxc-kit-binaries/archive/refs/heads/ca7ea12a-arm64.zip"
+        }
+      },
+      "version": "0.0.0+a08a5e3952c5"
     },
     "node": {
       "artifacts": {

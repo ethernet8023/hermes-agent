@@ -284,24 +284,23 @@ def test_network_tools_are_refused_at_invocation_while_the_sandbox_is_offline(mo
 # ── host settings and status ─────────────────────────────────────────────────
 
 def test_resolve_settings_reads_config_first_then_env_bridge(monkeypatch):
-    s = mxc_host.resolve_settings({"mxc_readwrite_paths": ["C:/a"], "mxc_network": True, "mxc_wxc_exec_path": "C:/w.exe"})
+    s = mxc_host.resolve_settings({"mxc_readwrite_paths": ["C:/a"], "mxc_network": True})
     assert s.policy.readwrite_paths == (os.path.expandvars("C:/a"),) and s.policy.network is True
-    assert s.wxc_exec_path == "C:/w.exe" and s.shell_path is None
     monkeypatch.setenv("TERMINAL_MXC_READONLY_PATHS", json.dumps(["C:/ro"]))
     monkeypatch.setenv("TERMINAL_MXC_NETWORK", "true")
     env_only = mxc_host.resolve_settings({})
     assert env_only.policy.readonly_paths == ("C:/ro",) and env_only.policy.network is True
 
 
-@pytest.mark.windows_only
+@pytest.mark.platforms("windows")
 def test_status_reports_missing_launcher_in_plain_language(monkeypatch):
     monkeypatch.setattr(mxc_host, "find_wxc_exec", lambda configured=None: None)
     record = mxc_host.status(settings=mxc_host.resolve_settings({}))
     assert record["available"] is False and record["wxc_exec_path"] is None
-    assert "wxc-exec.exe" in record["reason"] and "terminal.mxc_wxc_exec_path" in record["reason"]
+    assert "wxc-exec.exe" in record["reason"] and "pm store" in record["reason"]
 
 
-@pytest.mark.linux_only
+@pytest.mark.platforms("linux")
 def test_status_on_a_non_windows_host_names_the_platform():
     record = mxc_host.status(settings=mxc_host.resolve_settings({}))
     assert record["platform_supported"] is False and record["available"] is False
@@ -378,24 +377,22 @@ def test_backend_is_registered_and_is_not_a_container_backend():
     from hermes_cli.config_defaults import DEFAULT_CONFIG
     assert "mxc" in backends._ENV_BUILDERS and "mxc" in backends._BACKEND_SPECS
     assert _is_container_backend("mxc") is False
-    for key in ("mxc_wxc_exec_path", "mxc_shell_path", "mxc_readwrite_paths", "mxc_readonly_paths", "mxc_network"):
+    for key in ("mxc_readwrite_paths", "mxc_readonly_paths", "mxc_network"):
         assert key in DEFAULT_CONFIG["terminal"], key
         assert TERMINAL_CONFIG_ENV_MAP[key] == f"TERMINAL_{key.upper()}"
 
 
 def test_mxc_keys_are_bridged_at_every_config_to_env_site():
-    """cli.py, gateway/run.py and ``hermes config set`` must agree on the bridged terminal keys,
+    """gateway/run.py and ``hermes config set`` must agree on the bridged terminal keys,
     and the sandbox host module must read the same env names as its fallback."""
     import inspect
-    import cli
     import gateway.run as gateway_run
     from hermes_cli.config import TERMINAL_CONFIG_ENV_MAP
     gateway_source = inspect.getsource(gateway_run)
     host_source = inspect.getsource(mxc_host)
-    for key in ("mxc_wxc_exec_path", "mxc_shell_path", "mxc_readwrite_paths", "mxc_readonly_paths",
+    for key in ("mxc_readwrite_paths", "mxc_readonly_paths",
                 "mxc_network", "mxc_debug"):
         env_name = f"TERMINAL_{key.upper()}"
-        assert cli._TERMINAL_ENV_MAPPINGS[key] == env_name
         assert f'"{key}": "{env_name}"' in gateway_source
         assert TERMINAL_CONFIG_ENV_MAP[key] == env_name
         assert env_name in host_source

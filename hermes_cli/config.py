@@ -2100,7 +2100,7 @@ TERMINAL_CONFIG_ENV_MAP = {
             "docker_extra_args", "docker_shm_size", "docker_run_as_host_user", "docker_snap_compat",
             "docker_persist_across_processes", "docker_shared_container_key",
             "docker_orphan_reaper", "sandbox_dir", "persistent_shell",
-            "mxc_wxc_exec_path", "mxc_shell_path", "mxc_readwrite_paths", "mxc_readonly_paths",
+            "mxc_readwrite_paths", "mxc_readonly_paths",
             "mxc_network", "mxc_debug")}}
 
 

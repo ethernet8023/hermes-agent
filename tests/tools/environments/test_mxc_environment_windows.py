@@ -14,14 +14,13 @@ import pytest
 
 from tools.environments import mxc_host
 
-pytestmark = pytest.mark.windows_only
+pytestmark = pytest.mark.platforms("windows")
 
 
 def _provisioned_shell() -> str | None:
-    """The sandbox shell installed by a real opt-in on this machine; tests never download it."""
-    local = os.environ.get("LOCALAPPDATA", "")
-    candidate = os.path.join(local, "hermes", "bin", mxc_host.BUSYBOX_LOCAL_NAME) if local else ""
-    return candidate if candidate and os.path.isfile(candidate) else None
+    """The sandbox shell in the pm store; tests never download it."""
+    binary = mxc_host.store_binary("busybox")
+    return str(binary) if binary is not None else None
 
 
 @pytest.fixture
@@ -29,7 +28,6 @@ def live_env(monkeypatch):
     shell = _provisioned_shell()
     if shell is None:
         pytest.skip("sandbox shell not provisioned on this machine (enable the sandbox once first)")
-    monkeypatch.setenv("TERMINAL_MXC_SHELL_PATH", shell)
     record = mxc_host.status(provision_shell=False)
     if not record["available"]:
         pytest.skip(f"MXC unavailable here: {record['reason']}")
@@ -127,7 +125,6 @@ def test_a_refused_workspace_rehomes_to_the_default_instead_of_failing(monkeypat
     shell = _provisioned_shell()
     if shell is None:
         pytest.skip("sandbox shell not provisioned on this machine (enable the sandbox once first)")
-    monkeypatch.setenv("TERMINAL_MXC_SHELL_PATH", shell)
     if not mxc_host.status(provision_shell=False)["available"]:
         pytest.skip("MXC unavailable here")
     from tools.environments.mxc import MxcEnvironment

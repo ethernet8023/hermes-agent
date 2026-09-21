@@ -31,25 +31,6 @@ logger = logging.getLogger(__name__)
 
 _IS_WINDOWS = sys.platform == "win32"
 
-# Well-known install locations for the MXC kit, in precedence order.
-WXC_EXEC_CANDIDATES = (
-    r"C:\mxc-kit\bin\wxc-exec.exe",
-    r"C:\mxc\wxc-exec.exe",
-)
-
-# busybox-w32 (GPLv2, https://frippery.org/busybox/) is the in-sandbox POSIX shell. Pinned to a
-# specific release and checksum so provisioning cannot silently pick up a different binary.
-BUSYBOX_RELEASE = "FRP-6075-g169694ebd"
-BUSYBOX_BASE_URL = "https://frippery.org/files/busybox/"
-BUSYBOX_BUILDS = {
-    # machine -> (file name on the release server, sha256)
-    "arm64": (f"busybox-w64a-{BUSYBOX_RELEASE}.exe",
-              "e67f873d19d58c535cc9f0c4965ffd622e19b7bab87e3da89cb2185fb54464d7"),
-    "amd64": (f"busybox-w64u-{BUSYBOX_RELEASE}.exe",
-              "6e263d154d8548d1eb936f65d1d8312c80df31c45974e48d6335e4dcc0f4f34c"),
-}
-BUSYBOX_LOCAL_NAME = "busybox-sh.exe"
-
 # Probing is cheap, but every status read would otherwise spawn a process; verdicts change only
 # when the host does (kit installed, host prep run), so a short cache is safe.
 _PROBE_TTL_SECONDS = 60.0
@@ -90,8 +71,6 @@ class MxcPolicy:
 
 @dataclass(frozen=True)
 class MxcSettings:
-    wxc_exec_path: Optional[str]
-    shell_path: Optional[str]
     policy: MxcPolicy
     debug: bool = False
     raw: dict = field(default_factory=dict)
@@ -144,8 +123,6 @@ def resolve_settings(terminal_cfg: Optional[dict] = None) -> MxcSettings:
                 return raw if not isinstance(default, bool) else raw.strip().lower() in ("1", "true", "yes", "on")
         return raw
 
-    wxc = str(pick("mxc_wxc_exec_path", "TERMINAL_MXC_WXC_EXEC_PATH", "") or "").strip() or None
-    shell = str(pick("mxc_shell_path", "TERMINAL_MXC_SHELL_PATH", "") or "").strip() or None
     network = pick("mxc_network", "TERMINAL_MXC_NETWORK", False)
     if isinstance(network, str):
         network = network.strip().lower() in ("1", "true", "yes", "on")
@@ -156,23 +133,49 @@ def resolve_settings(terminal_cfg: Optional[dict] = None) -> MxcSettings:
     debug = pick("mxc_debug", "TERMINAL_MXC_DEBUG", False)
     if isinstance(debug, str):
         debug = debug.strip().lower() in ("1", "true", "yes", "on")
-    return MxcSettings(wxc_exec_path=wxc, shell_path=shell, policy=policy, debug=bool(debug), raw=dict(cfg))
+    return MxcSettings(policy=policy, debug=bool(debug), raw=dict(cfg))
 
 
 # ── wxc-exec discovery and probe ─────────────────────────────────────────────
 
-def find_wxc_exec(configured: Optional[str] = None) -> Optional[str]:
-    """Absolute path of ``wxc-exec.exe`` or None. Order: explicit config, PATH, well-known dirs."""
-    if configured:
-        candidate = os.path.expandvars(os.path.expanduser(configured))
-        return candidate if os.path.isfile(candidate) else None
-    found = shutil.which("wxc-exec.exe") or shutil.which("wxc-exec")
-    if found:
-        return found
-    for candidate in WXC_EXEC_CANDIDATES:
-        if os.path.isfile(candidate):
-            return candidate
+def store_binary(name: str):
+    """The pm store's binary for *name*, or None when this install has no copy.
+
+    The store is the only source for the kit and the shell. A sealed install
+    carries them in the payload store, which is read first; a source install
+    and a toggle provision land in the writable store, which is the fallback.
+    A hand copy on PATH or under ``C:\\mxc-kit\\bin`` is not consulted.
+    """
+    try:
+        from pm.paths import lockfile_path, store_root, writable_store_root
+        from pm.registry import get_package
+        from pm.store import current_target
+        from pm.lock import Lockfile
+
+        package = get_package(name)
+        target = current_target()
+        version = Lockfile(lockfile_path()).version(name)
+        if not version or package.missing_reason(target):
+            return None
+        for root in dict.fromkeys((store_root(), writable_store_root())):
+            binary = package.binary(root / package.store_entry(version, target), target)
+            if binary is not None and binary.is_file():
+                return binary
+    except Exception:
+        logger.debug("mxc: pm store lookup for %s failed", name, exc_info=True)
+        return None
     return None
+
+
+def find_wxc_exec(configured: Optional[str] = None) -> Optional[str]:
+    """Absolute path of ``wxc-exec.exe`` from the pm store, or None.
+
+    *configured* is accepted and ignored: the config key that used to name a
+    hand-installed kit is gone, and the store is the only source.
+    """
+    del configured
+    binary = store_binary("mxc-kit")
+    return str(binary) if binary is not None else None
 
 
 def run_probe(wxc_exec: str, *, timeout: float = 15.0) -> dict:
@@ -220,81 +223,19 @@ def clear_probe_cache() -> None:
 
 # ── shell provisioning ───────────────────────────────────────────────────────
 
-def _machine_key() -> Optional[str]:
-    machine = (platform.machine() or "").lower()
-    if machine in ("arm64", "aarch64"):
-        return "arm64"
-    if machine in ("amd64", "x86_64"):
-        return "amd64"
-    return None
-
-
-def _host_machine_key() -> Optional[str]:
-    """The OS architecture, not the interpreter's: Hermes may run as an emulated x64 process on
-    an ARM64 host, and the sandbox shell must match the OS."""
-    if _IS_WINDOWS:
-        try:
-            import ctypes
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            process_machine = ctypes.c_ushort()
-            native_machine = ctypes.c_ushort()
-            handle = ctypes.c_void_p(kernel32.GetCurrentProcess())
-            if kernel32.IsWow64Process2(handle, ctypes.byref(process_machine), ctypes.byref(native_machine)):
-                return {0xAA64: "arm64", 0x8664: "amd64"}.get(native_machine.value)
-        except Exception:
-            logger.debug("mxc: IsWow64Process2 unavailable", exc_info=True)
-    return _machine_key()
-
-
-def default_shell_path() -> Path:
-    from hermes_constants import get_hermes_home
-    return get_hermes_home() / "bin" / BUSYBOX_LOCAL_NAME
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def ensure_shell(configured: Optional[str] = None, *, download: bool = True) -> tuple[Optional[str], Optional[str]]:
     """``(shell_path, error)``: the POSIX shell binary for the sandbox.
 
-    A configured path is used as-is. Otherwise the pinned busybox-w32 build for the host
-    architecture is expected under ``$HERMES_HOME/bin`` and downloaded there (checksum
-    verified, written atomically) when missing and *download* is allowed.
+    The shell is the pinned busybox-w32 in the pm store. Nothing is downloaded
+    here — the sandbox toggle provisions the pin, and a missing copy is reported
+    as missing so the toggle can show the error instead of a half-installed
+    backend. *configured* and *download* are accepted and ignored.
     """
-    if configured:
-        candidate = os.path.expandvars(os.path.expanduser(configured))
-        if os.path.isfile(candidate):
-            return candidate, None
-        return None, f"terminal.mxc_shell_path does not exist: {configured}"
-    target = default_shell_path()
-    if target.is_file():
-        return str(target), None
-    key = _host_machine_key()
-    if key not in BUSYBOX_BUILDS:
-        return None, f"no pinned busybox-w32 build for this architecture ({platform.machine() or 'unknown'}); set terminal.mxc_shell_path"
-    if not download:
-        return None, "sandbox shell (busybox-w32) is not installed yet"
-    name, expected = BUSYBOX_BUILDS[key]
-    url = BUSYBOX_BASE_URL + name
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(".download")
-        with urllib.request.urlopen(url, timeout=60) as response, open(tmp, "wb") as out:  # noqa: S310 - pinned https URL
-            shutil.copyfileobj(response, out)
-        actual = _sha256(tmp)
-        if actual != expected:
-            tmp.unlink(missing_ok=True)
-            return None, f"downloaded {name} failed checksum verification"
-        os.replace(tmp, target)
-    except Exception as exc:  # network down, disk full, ...
-        return None, f"could not download the sandbox shell ({name}): {exc}"
-    logger.info("mxc: installed sandbox shell %s -> %s", name, target)
-    return str(target), None
+    del configured, download
+    binary = store_binary("busybox")
+    if binary is not None:
+        return str(binary), None
+    return None, "sandbox shell (busybox-w32) is not installed yet"
 
 
 # ── workspace ancestors ──────────────────────────────────────────────────────
@@ -588,11 +529,10 @@ def status(*, provision_shell: bool = False, settings: Optional[MxcSettings] = N
     if not _IS_WINDOWS:
         record["reason"] = "MXC sandboxing is a Windows feature; this host is not Windows."
         return record
-    wxc = find_wxc_exec(settings.wxc_exec_path)
+    wxc = find_wxc_exec()
     record["wxc_exec_path"] = wxc
     if wxc is None:
-        hint = settings.wxc_exec_path or ", ".join(WXC_EXEC_CANDIDATES)
-        record["reason"] = f"wxc-exec.exe (the MXC kit) was not found at {hint}. Install MXC or set terminal.mxc_wxc_exec_path."
+        record["reason"] = "wxc-exec.exe (the MXC kit) is not in the pm store. Flip the sandbox on to provision it, or rebuild this sealed install."
         return record
     probe = run_probe(wxc)
     record["probe"] = probe
@@ -601,7 +541,7 @@ def status(*, provision_shell: bool = False, settings: Optional[MxcSettings] = N
         record["reason"] = ("This Windows build does not support MXC process containers"
                             + (f": {probe['error']}" if probe.get("error") else "."))
         return record
-    shell, shell_error = ensure_shell(settings.shell_path, download=provision_shell)
+    shell, shell_error = ensure_shell()
     record["shell_path"] = shell
     if shell is None:
         record["reason"] = shell_error

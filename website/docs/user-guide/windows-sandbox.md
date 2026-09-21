@@ -23,21 +23,21 @@ of a second, so Hermes starts a new one for every single command.
 
 - Windows 11 with the MXC process-container support (Insider builds from 26300 onward at the time
   of writing). Hermes checks this for you and tells you plainly when a machine cannot run it.
-- The MXC kit, specifically `wxc-exec.exe`. Hermes looks in `C:\mxc-kit\bin` and `C:\mxc\bin` and
-  on `PATH`; if it lives elsewhere, set `terminal.mxc_wxc_exec_path`.
+- The MXC kit and the sandbox shell ship with Hermes. Both are pinned pm tools, so a sealed
+  install carries them and a source install downloads them the first time you turn the sandbox
+  on. There is no path to set and no separate kit install.
 - One elevated command, run once per machine, so containers can traverse the drive root:
-  `wxc-host-prep.exe prepare-system-drive` (from the same kit).
-- A POSIX shell for the container. Git for Windows' bash cannot start inside an AppContainer, so
-  Hermes uses a pinned, checksum-verified `busybox-w32` build and downloads it into
-  `%LOCALAPPDATA%\hermes\bin` the first time you turn the sandbox on. To use your own copy, set
-  `terminal.mxc_shell_path`.
+  `wxc-host-prep.exe prepare-system-drive`, from the kit in the pm store.
+- Windows ARM64. The kit exists for that architecture only; other platforms show the sandbox as
+  unavailable.
 
 ## Turning it on
 
 In Hermes Desktop, open **Settings → Safety** and find **Windows sandbox**. The panel shows
 whether this machine can run MXC and, if not, why. Flip **Sandbox agent actions** on. That sets
-`terminal.backend` to `mxc`, provisions the shell if needed, and takes effect on the agent's next
-command in every session; nothing needs restarting. A conversation that is already under way is
+`terminal.backend` to `mxc`, provisions the kit and shell if this install does not ship them, and
+takes effect on the agent's next command in every session; nothing needs restarting. A download
+that fails leaves the switch off and shows the reason. A conversation that is already under way is
 told about the change on its next command: the note carries the sandbox rules, the POSIX shell,
 and how to handle a refusal, and the same happens in reverse when you turn the sandbox off.
 
@@ -202,8 +202,6 @@ workspace is created, using the .NET path rather than `icacls`.
 ```yaml
 terminal:
   backend: mxc
-  mxc_wxc_exec_path: ""         # Path to wxc-exec.exe; empty = C:\mxc-kit\bin, C:\mxc\bin, PATH
-  mxc_shell_path: ""            # POSIX shell for the container; empty = managed busybox-w32
   mxc_readwrite_paths: []       # Extra folders the agent may read and write
   mxc_readonly_paths: []        # Extra folders the agent may read
   mxc_network: false            # Allow outbound network from sandboxed commands
@@ -225,6 +223,7 @@ For a machine that will show the sandbox to an audience, the following order avo
 3. Install Hermes Desktop and a local model, and confirm a normal conversation works.
 4. Create the demonstration workspace directly under the drive root, for example `C:\Demo`, and
    open it as the session's project folder; git works there with no further preparation.
-5. Turn on the sandbox in **Settings → Safety** while online, so the shell downloads.
+5. Turn on the sandbox in **Settings → Safety**. A source install downloads the kit and shell
+   then; a sealed install already has them.
 6. Run one task that stays inside the workspace and one that reaches outside it, and grant the
    folder from the tool card, so every path has been exercised before the audience arrives.

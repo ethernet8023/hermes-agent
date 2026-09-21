@@ -293,10 +293,10 @@ class MxcEnvironment(BaseEnvironment):
         return self._settings_override or mxc_host.resolve_settings()
 
     def _resolve_launcher(self, settings: mxc_host.MxcSettings) -> tuple[str, str]:
-        wxc = mxc_host.find_wxc_exec(settings.wxc_exec_path)
+        wxc = mxc_host.find_wxc_exec()
         if wxc is None:
             raise RuntimeError(mxc_host.status(settings=settings)["reason"])
-        shell, error = mxc_host.ensure_shell(settings.shell_path, download=True)
+        shell, error = mxc_host.ensure_shell()
         if shell is None:
             raise RuntimeError(error)
         return wxc, shell

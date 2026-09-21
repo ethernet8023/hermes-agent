@@ -1068,6 +1068,90 @@ class LlamaCppMetal(LlamaCpp):
 
 
 @register
+class MxcKit(BinaryPackage):
+    """The Windows MXC launcher kit, built by hand and published as a branch
+    archive rather than a release. There is no version index to follow, so a
+    bump is a hand edit of the URL and hash in the lockfile. Only an arm64 kit
+    exists; other targets stay a declared gap so a bundle for them builds and
+    says so instead of staging an exe it cannot run."""
+
+    name = "mxc-kit"
+    optional = True
+    on_path = False  # wxc-exec is invoked by absolute path, never via PATH
+    probe_version = False  # `wxc-exec --probe` needs the MXC kernel, not just the exe
+    flatten = True
+    binary_rel = {"win32": "bin/wxc-exec.exe"}
+    gaps = {t: "the MXC kit is Windows-only" for t in ALL_TARGETS if not t.startswith("win32")}
+
+    def fetch_url(self, version: str, target: str) -> str:
+        return ("https://github.com/jquesnelle/mxc-kit-binaries/archive/refs/heads/"
+                "ca7ea12a-arm64.zip")
+
+    def missing_reason(self, target: str) -> Optional[str]:
+        if target == "win32-x64":
+            return "only an arm64 MXC kit exists so far"
+        return super().missing_reason(target)
+
+
+_BUSYBOX_ARCH = {"win32-arm64": "w64a", "win32-x64": "w64u"}
+
+
+@register
+class Busybox(BinaryPackage):
+    """busybox-w32, the POSIX shell the MXC sandbox runs. Git Bash cannot
+    start inside an AppContainer, so the container gets this instead. The
+    upstream publishes bare exes and no checksums, so the lockfile hash is
+    computed by downloading, and an update follows the newest build both
+    Windows arches serve."""
+
+    name = "busybox"
+    optional = True
+    on_path = False
+    probe_version = False
+    binary_rel = {"win32": "busybox-sh.exe"}
+    gaps = {t: "the sandbox shell is Windows-only" for t in ALL_TARGETS if not t.startswith("win32")}
+
+    def fetch_url(self, version: str, target: str) -> str:
+        arch = _BUSYBOX_ARCH[target]
+        return f"https://frippery.org/files/busybox/busybox-{arch}-{version}.exe"
+
+    def unpack(self, archive: Path, staged: Path, target: str) -> None:
+        staged.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(archive, staged / "busybox-sh.exe")
+
+    def _listing(self) -> str:
+        import urllib.request
+
+        with urllib.request.urlopen("https://frippery.org/files/busybox/", timeout=60) as response:
+            return response.read().decode("utf-8", "replace")
+
+    def _fetch(self, url: str, dest: Path) -> None:
+        import urllib.request
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=120) as response, open(dest, "wb") as out:
+            shutil.copyfileobj(response, out)
+
+    def latest_versions(self, target: str, locked=None) -> list[str]:
+        import re
+
+        builds: dict[str, set[str]] = {}
+        for arch, name in re.findall(r"busybox-(w64[a-z])-(FRP-\d+-g[0-9a-f]+)\.exe", self._listing()):
+            builds.setdefault(name, set()).add(arch)
+        shared = [name for name, arches in builds.items() if arches >= set(_BUSYBOX_ARCH.values())]
+        return sorted(shared, key=lambda name: int(name.split("-")[1]), reverse=True)
+
+    def known_sha256(self, version: str, url: str) -> Optional[str]:
+        import hashlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="busybox-pin-") as scratch:
+            dest = Path(scratch) / "busybox.exe"
+            self._fetch(url, dest)
+            return hashlib.sha256(dest.read_bytes()).hexdigest()
+
+
+@register
 class LlamaCppCpu(LlamaCpp):
     name = "llamacpp-cpu"
     backend = "cpu"

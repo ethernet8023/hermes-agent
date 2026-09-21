@@ -2013,7 +2013,13 @@ def _bridge_terminal_config_to_env(_terminal_cfg: dict) -> None:
         "docker_shared_container_key": "TERMINAL_DOCKER_SHARED_CONTAINER_KEY",
         "docker_orphan_reaper": "TERMINAL_DOCKER_ORPHAN_REAPER",
         "sandbox_dir": "TERMINAL_SANDBOX_DIR",
-        "persistent_shell": "TERMINAL_PERSISTENT_SHELL"}
+        "persistent_shell": "TERMINAL_PERSISTENT_SHELL",
+        "mxc_wxc_exec_path": "TERMINAL_MXC_WXC_EXEC_PATH",
+        "mxc_shell_path": "TERMINAL_MXC_SHELL_PATH",
+        "mxc_readwrite_paths": "TERMINAL_MXC_READWRITE_PATHS",
+        "mxc_readonly_paths": "TERMINAL_MXC_READONLY_PATHS",
+        "mxc_network": "TERMINAL_MXC_NETWORK",
+        "mxc_debug": "TERMINAL_MXC_DEBUG"}
     for _cfg_key, _env_var in _terminal_env_map.items():
         if _cfg_key not in _terminal_cfg:
             continue

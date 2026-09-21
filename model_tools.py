@@ -781,6 +781,15 @@ def _pre_dispatch_guards(function_name: str, function_args: Dict[str, Any], skip
         if block_message is not None:
             return function_args, (tool_error(block_message), "plugin_block", block_message)
 
+    # Sandbox network policy: with the sandbox on and its network off, the host-side network
+    # toolsets are refused here, whatever the model's tool list says (a tool snapshot is frozen
+    # for the life of a conversation). The tools stay visible so the refusal, and its reason,
+    # is what the model and the user see.
+    from tools.environments.mxc_host import OFFLINE_REASON, host_network_withheld_toolsets
+    withheld = host_network_withheld_toolsets()
+    if withheld and get_toolset_for_tool(function_name) in withheld:
+        return function_args, (tool_error(OFFLINE_REASON), "sandbox_offline", OFFLINE_REASON)
+
     # ACP/Zed edit approval before any file mutation. The requester is bound
     # via ContextVar only for ACP sessions, so CLI/gateway paths are unaffected.
     try:

@@ -2235,8 +2235,10 @@ def _snapshot_primary_runtime(agent):
 
 def _init_usage_state(agent):
     from agent.runtime_cwd import scope_terminal_cwd
+    from agent.terminal_backend_briefing import TerminalBackendBriefing
     agent._subdirectory_hints = SubdirectoryHintTracker(
         working_dir=scope_terminal_cwd() or None, enabled=not agent.skip_context_files)
+    agent._terminal_backend_briefing = TerminalBackendBriefing()
     _set_defaults(agent, _USAGE_STATE)
 
 

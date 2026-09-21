@@ -29,6 +29,7 @@ import type {
   ToolMeta,
   ToolMetaSpec,
   ToolPart,
+  ToolSandboxInfo,
   ToolStatus,
   ToolTitleAction,
   ToolTone,
@@ -699,6 +700,39 @@ function toolErrorText(part: ToolPart, result: Record<string, unknown>): string 
   }
 
   return ''
+}
+
+// The Windows sandbox backend attaches `sandbox: {backend, container, denied}` to terminal
+// results. File tools route through the same sandbox but only carry its plain-text note, so
+// the "denied:" lines of that note are the fallback source. Either way the renderer gets one
+// structured shape to offer the grant from.
+const SANDBOX_NOTE_DENIED = /^\s*denied:\s*(.+?)\s*$/gm
+
+export function sandboxInfo(part: ToolPart, result: Record<string, unknown>): ToolSandboxInfo | undefined {
+  const raw = result.sandbox
+
+  if (raw && typeof raw === 'object' && typeof (raw as { backend?: unknown }).backend === 'string') {
+    const record = raw as { backend: string; container?: unknown; denied?: unknown }
+    const denied = Array.isArray(record.denied) ? record.denied.filter((p): p is string => typeof p === 'string') : []
+
+    return {
+      backend: record.backend,
+      container: typeof record.container === 'string' ? record.container : undefined,
+      denied
+    }
+  }
+
+  const text =
+    firstStringField(result, ['output', 'error', 'message', 'detail']) ||
+    (typeof part.result === 'string' ? part.result : '')
+
+  if (!text.includes('[Sandbox]')) {
+    return undefined
+  }
+
+  const denied = Array.from(text.matchAll(SANDBOX_NOTE_DENIED), match => match[1])
+
+  return denied.length ? { backend: 'mxc', denied } : undefined
 }
 
 function toolStatus(part: ToolPart, resultRecord: Record<string, unknown>): ToolStatus {
@@ -1456,7 +1490,11 @@ export function buildToolView(part: ToolPart, inlineDiff: string): ToolView {
   const argsRecord = parseMaybeObject(part.args)
   const resultRecord = toolResultRecord(part)
   const meta = toolMeta(part.toolName)
-  const status = toolStatus(part, resultRecord)
+  const sandbox = sandboxInfo(part, resultRecord)
+  const rawStatus = toolStatus(part, resultRecord)
+  // A sandbox refusal is policy doing its job, not a broken tool: amber, never red, and the
+  // renderer offers the grant. A hard error elsewhere in the same result still wins.
+  const status: ToolStatus = sandbox?.denied.length && rawStatus !== 'error' ? 'warning' : rawStatus
   // Skip residual error-heuristic text once status is success (stale isError
   // envelope over a landed memory write would otherwise foul the subtitle).
   const error = status === 'success' ? '' : toolErrorText(part, resultRecord)
@@ -1484,11 +1522,14 @@ export function buildToolView(part: ToolPart, inlineDiff: string): ToolView {
     : titleParts.title
 
   const titleEnriched = title !== baseTitle
-  const baseSubtitle = error || toolSubtitle(part, argsRecord, resultRecord)
+  const baseSubtitle = sandbox?.denied.length
+    ? translateNow('assistant.tool.sandboxBlocked')
+    : error || toolSubtitle(part, argsRecord, resultRecord)
 
   const keepSubtitleWithTitle =
     part.toolName === 'terminal' ||
     part.toolName === 'execute_code' ||
+    Boolean(sandbox?.denied.length) ||
     (isFileEditTool(part.toolName) && Boolean(baseSubtitle.trim()))
 
   const subtitle = titleEnriched && !error && !keepSubtitleWithTitle ? '' : baseSubtitle
@@ -1535,6 +1576,7 @@ export function buildToolView(part: ToolPart, inlineDiff: string): ToolView {
     inlineDiff,
     previewTarget: toolPreviewTarget(part.toolName, argsRecord, resultRecord),
     rendersAnsi: rendersAnsi || undefined,
+    sandbox,
     searchQuery: searchQuery || undefined,
     searchHits: searchHits?.length ? searchHits : undefined,
     stderr: hasSplitStreams ? stderrRaw || undefined : undefined,

@@ -1085,12 +1085,16 @@ def _commit_tool_result(
     _record_persisted_path_for_stub(agent, tool_call_id, persisted_result)
 
     subdir_hints = agent._subdirectory_hints.check_tool_call(function_name, function_args)
-    if subdir_hints:
+    briefing = getattr(agent, "_terminal_backend_briefing", None)
+    backend_note = briefing.check_tool_call(effective_task_id) if briefing is not None else None
+    for hint in (subdir_hints, backend_note):
+        if not hint:
+            continue
         if _is_multimodal_tool_result(persisted_result):
             # Hint goes on the text summary part so the model still sees it; image blocks untouched.
-            _append_subdir_hint_to_multimodal(persisted_result, subdir_hints)
+            _append_subdir_hint_to_multimodal(persisted_result, hint)
         else:
-            persisted_result += subdir_hints
+            persisted_result += hint
 
     # Multimodal dicts become an OpenAI-style content list; text-only servers get a
     # string-safe fallback so a rejected image result never poisons history.

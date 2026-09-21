@@ -270,6 +270,9 @@ def finalize_foreground_result(
         ("hint", failure_hint or None),
         ("sudo_auth_failed", True if sudo_auth_failed else None),
         ("sudo_cache_cleared", True if sudo_cache_cleared else None),
+        # Sandbox backends report which container ran the command and any policy denials so the
+        # model and the UI can tell "the OS refused this" from an ordinary command failure.
+        ("sandbox", result.get("sandbox") or None),
     ]
     for key, value in optional_fields:
         if value is not None:

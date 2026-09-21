@@ -109,6 +109,17 @@ _ADMISSION_INTERRUPTED_ERROR = (
     "search on the same root. Retry when ready.")
 
 _SEARCH_TIMEOUT_MARKER_RE = re.compile(r"\n?\[Command timed out after \d+s\]\s*$")
+_ACCESS_REFUSAL_RE = re.compile(r"permission denied|access is denied|operation not permitted", re.I)
+
+
+def _access_refusal(probe_output: str, marker: str = "not_found") -> str:
+    """The environment's refusal text from an existence probe, or "" when the probe reports a
+    plain miss. The probe emits the OS error ahead of its *marker* line; anything a sandbox
+    appended (its policy note) rides along so the caller can show it verbatim."""
+    if not _ACCESS_REFUSAL_RE.search(probe_output):
+        return ""
+    lines = [line for line in probe_output.splitlines() if line.strip() and line.strip() != marker]
+    return "\n".join(lines).strip()
 
 
 def _search_stdout_and_limit(result: ExecuteResult) -> tuple[str, Optional[str]]:
@@ -485,11 +496,15 @@ class SearchMixin:
 
     def _path_exists_probe(self, path: str) -> ExecuteResult:
         """Existence probe; stdout contains "exists" or "not_found" (or the probe's
-        ``cwd_error`` when the exec wrapper itself failed)."""
+        ``cwd_error`` when the exec wrapper itself failed). When the path is not
+        reachable, the OS's own error for it precedes "not_found", so a permission
+        refusal (a sandbox policy, an unreadable directory) is distinguishable from a
+        path that does not exist."""
         if self._native_read_enabled():
             full = path if os.path.isabs(path) else os.path.join(getattr(self.env, "cwd", None) or self.cwd, path)
             return ExecuteResult(stdout="exists" if os.path.exists(full) else "not_found")
-        return self._exec(f"test -e {self._escape_shell_arg(path)} && echo exists || echo not_found")
+        quoted = self._escape_shell_arg(path)
+        return self._exec(f"test -e {quoted} && echo exists || {{ ls -d {quoted} 2>&1 >/dev/null | head -1; echo not_found; }}")
 
     def _dispatch_search(self, pattern: str, path: str, target: str,
                          file_glob: Optional[str], limit: int, offset: int,
@@ -715,10 +730,13 @@ class SearchMixin:
         # probe of its own.
         base = (f"find -H {' '.join(q_roots)}{protected_prune}{hidden_prune} -type f "
                 f"! -name '.*' -name {self._escape_shell_arg(search_pattern)}")
+        # find's own diagnostics travel on stdout, prefixed "find: ", so a refusal below the root
+        # (a folder the sandbox lets the container see but not enter) can be reported as such;
+        # path lines never start with that prefix.
         if order == "modified":
-            cmd = "set -o pipefail; " + base + f" -printf '%T@ %p\\n' 2>/dev/null | sort -rn | head -n {fetch_limit}"
+            cmd = "set -o pipefail; " + base + f" -printf '%T@ %p\\n' 2>&1 | sort -rn | head -n {fetch_limit}"
         else:
-            cmd = "set -o pipefail; " + base + f" -print 2>/dev/null | head -n {fetch_limit}"
+            cmd = "set -o pipefail; " + base + f" -print 2>&1 | head -n {fetch_limit}"
 
         keys = _filename_search_root_keys(self.env, roots, self.cwd)
         if not _acquire_filename_search_roots(keys):
@@ -733,7 +751,11 @@ class SearchMixin:
         # SIGPIPE when head closes after fetch_limit rows — benign only when the
         # payload proves the bound was reached; a shorter payload is a hard failure.
         raw_files: List[str] = []
+        diagnostics: List[str] = []
         for line in stdout.splitlines():
+            if line.startswith("find: ") or line.startswith("[Sandbox]") or line.startswith("  "):
+                diagnostics.append(line)
+                continue
             if order == "modified":
                 parts = line.split(" ", 1)
                 if len(parts) != 2 or not parts[0].replace(".", "", 1).isdigit():
@@ -747,6 +769,9 @@ class SearchMixin:
                 return SearchResult(error=(
                     "Exact modification-time order requires GNU find with "
                     "-printf support; install ripgrep 14+ or use order='discovery'."))
+            refused = _access_refusal("\n".join(diagnostics), marker="")
+            if refused:
+                return SearchResult(error=f"Access under {', '.join(roots)} was refused:\n{refused}")
             return SearchResult(error="File search failed while running bounded find traversal.")
 
         from tools.environments.local import LocalEnvironment, _IS_WINDOWS, _msys_to_windows_path

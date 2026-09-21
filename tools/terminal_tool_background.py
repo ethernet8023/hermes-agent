@@ -93,6 +93,12 @@ def _spawn(process_registry, *, env, env_type, command, cwd, effective_task_id, 
     if env_type == "local":
         return process_registry.spawn_local(
             env_vars=env.env if hasattr(env, 'env') else None, use_pty=effective_pty, **common)
+    # A backend whose sandbox is one launcher process per command (MXC) keeps that launcher
+    # alive for the whole background command instead of nohup-ing inside a container that
+    # would exit with the wrapper shell. The registry tracks the launcher like a local Popen.
+    if hasattr(env, "spawn_background_process"):
+        proc = env.spawn_background_process(command, cwd)
+        return process_registry.adopt_local(proc, notify_on_complete=False, **common)
     return process_registry.spawn_via_env(env=env, **common)
 
 

@@ -205,14 +205,20 @@ def _fs_find_git_root(start: Path) -> str | None:
 def _fs_default_cwd() -> str:
     cfg_terminal = load_config().get("terminal") or {}
     raw = str(cfg_terminal.get("cwd") or os.environ.get("TERMINAL_CWD") or "").strip()
+    resolved = str(Path.cwd())
     if raw and raw not in {".", "auto", "cwd"}:
         try:
             candidate = Path(raw).expanduser().resolve(strict=False)
             if candidate.is_dir():
-                return str(candidate)
+                resolved = str(candidate)
         except (OSError, RuntimeError):
             pass
-    return str(Path.cwd())
+    if str(cfg_terminal.get("backend") or "").strip().lower() == "mxc":
+        # Same rule the gateway applies at session creation: a folder the sandbox refuses as a
+        # workspace becomes the sandbox's default workspace, so a fresh draft lands somewhere usable.
+        from tools.environments.mxc_host import sandbox_workspace_for
+        return sandbox_workspace_for(resolved)
+    return resolved
 
 
 def _fs_git_branch(cwd: str) -> str:

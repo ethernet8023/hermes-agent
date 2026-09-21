@@ -1183,6 +1183,32 @@ export const zh = defineLocale({
       screenRecording: '屏幕录制',
       driverHealth: '驱动健康状态'
     },
+    sandbox: {
+      heading: 'Windows 沙箱',
+      description:
+        '智能体运行的每条命令和文件操作都在全新的 Windows 进程容器（MXC）中进行。只有工作区和你在此授予的文件夹可以访问，其余一切都会被操作系统拒绝。',
+      statusAvailable: '可用',
+      statusDegraded: '可用（受限）',
+      statusUnavailable: '不可用',
+      toggleLabel: '沙箱化智能体操作',
+      toggleDescription: '在内核强制隔离的容器中运行每条命令。自下一条命令起在所有对话中生效，包括正在进行的对话。',
+      shellNote: '首次开启时会下载沙箱 shell。',
+      workspaceRule: '每个会话只能在其自己的项目文件夹内写入（显示在输入框旁）；没有项目文件夹的会话在用户目录下的 Hermes 文件夹中工作。除下方列出的文件夹外，其他位置均为只读或被拒绝。粘贴到输入框的图片和文本始终可读。',
+      foldersTitle: '其他文件夹',
+      isolationRule: '沙箱中的命令同样无法读写剪贴板、修改注册表、创建计划任务，也无法查看或终止其他运行中的程序。本机的凭据和环境变量绝不会传入。',
+      foldersEmpty: '没有额外文件夹。智能体只能访问工作区。',
+      addReadOnly: '添加只读文件夹',
+      addReadWrite: '添加读写文件夹',
+      remove: '移除',
+      modeRead: '只读',
+      modeReadWrite: '读写',
+      networkLabel: '允许网络访问',
+      networkDescription: '默认关闭：智能体处于离线状态。沙箱中的命令无法访问互联网或本机服务，网页搜索与浏览工具也会被停用，直到你开启此项。',
+      containers: count => `自 Hermes 启动以来已启动 ${count} 个容器`,
+      recheck: '重新检查',
+      enableFailed: '无法开启沙箱',
+      updateFailed: '无法更新沙箱策略'
+    },
     about: {
       updates: '更新'
     },
@@ -3126,6 +3152,22 @@ export const zh = defineLocale({
 
   composer: {
     message: '消息',
+    sandbox: {
+      heading: '沙箱（MXC）',
+      titleOn: '沙箱已开启：命令在 Windows 容器中运行',
+      titleOff: '沙箱已关闭：命令直接在本机运行',
+      on: '开',
+      off: '关',
+      descriptionOn: folder =>
+        `此会话的每条命令都在内核强制隔离的 Windows 容器中运行。它只能写入 ${folder}；本机其他位置均为只读或被拒绝，除非你授予访问权限。`,
+      descriptionOff: '开启沙箱后，此会话的每条命令都会在内核强制隔离的 Windows 容器中运行。',
+      networkOn: '已允许网络访问。',
+      networkOff: '网络访问已关闭。',
+      isolated: '剪贴板、注册表和其他运行中的程序均不可访问。',
+      openSettings: '打开沙箱设置',
+      turnOnFailed: '无法开启沙箱',
+      turnOffFailed: '无法关闭沙箱'
+    },
     wakingProfile: profile => `正在唤醒 ${profile}…`,
     placeholderStarting: '正在启动 Hermes…',
     placeholderReconnecting: '正在重新连接 Hermes…',
@@ -4347,6 +4389,15 @@ export const zh = defineLocale({
       statusDone: '完成',
       resultUnavailable: '结果不可用',
       resultInterrupted: '已中断',
+      sandboxBlocked: '已被沙箱策略拦截',
+      sandboxBlockedDetail: path => `Windows 拒绝访问 ${path}。它不在授予智能体的文件夹范围内。`,
+      sandboxAllowRead: '允许读取',
+      sandboxAllowReadWrite: '允许读写',
+      sandboxGrantedTitle: '已授予访问权限',
+      sandboxGranted: path => `已授予对 ${path} 的访问权限。请让 Hermes 再试一次。`,
+      sandboxRetryDraft: (path, mode) => `我已授予你对 ${path} 的${mode}权限，请再试一次。`,
+      sandboxGrantFailed: '无法授予访问权限',
+      sandboxPill: 'MXC',
       memoryWriteNoted: '已记下记忆写入',
       actions: {
         read: '已读取',

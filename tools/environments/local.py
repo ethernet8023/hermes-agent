@@ -874,6 +874,7 @@ class LocalEnvironment(BaseEnvironment):
 
     _sudo_nopasswd_probe_supported = True
     _profile_scoped_passthrough = True
+    windows_path_form = "msys"  # Git Bash on Windows; a no-op form elsewhere
     # Commands run on the Hermes host itself — controller-side platform behavior
     # (macOS TCC pruning, etc.) legitimately applies here.
     is_local = True

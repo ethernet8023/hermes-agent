@@ -464,6 +464,47 @@ class TestSearchPathValidation:
         assert result.error is not None
         assert "not found" in result.error.lower() or "Path not found" in result.error
 
+    def test_search_reports_a_refused_root_as_refused_not_missing(self, mock_env):
+        """A root the environment refuses to stat (sandbox policy, unreadable directory) must not be
+        reported as "Path not found": the path exists and the model already had it right."""
+        def side_effect(command, **kwargs):
+            if "test -e" in command:
+                return {"output": "ls: /locked/dir: Permission denied\n\n[Sandbox] policy note\nnot_found",
+                        "returncode": 1}
+            return {"output": "", "returncode": 0}
+        mock_env.execute.side_effect = side_effect
+        ops = ShellFileOperations(mock_env)
+        result = ops.search("pattern", path="/locked/dir")
+        assert result.error is not None
+        assert "refused" in result.error and "Permission denied" in result.error
+        assert "[Sandbox] policy note" in result.error
+        assert "Path not found" not in result.error
+
+    def test_read_reports_a_refused_file_as_refused_not_missing(self, mock_env):
+        from tools.file_operations import MISSING_SENTINEL
+        def side_effect(command, **kwargs):
+            if "wc -c" in command:
+                return {"output": f"ls: /locked/secret.txt: Permission denied\n{MISSING_SENTINEL}\n\n[Sandbox] policy note",
+                        "returncode": 0}
+            return {"output": "", "returncode": 0}
+        mock_env.execute.side_effect = side_effect
+        ops = ShellFileOperations(mock_env)
+        result = ops.read_file("/locked/secret.txt")
+        assert result.error is not None
+        assert "refused" in result.error and "[Sandbox] policy note" in result.error
+        assert "File not found" not in result.error
+
+    def test_read_of_a_truly_missing_file_is_still_not_found(self, mock_env):
+        from tools.file_operations import MISSING_SENTINEL
+        def side_effect(command, **kwargs):
+            if "wc -c" in command:
+                return {"output": f"ls: /gone.txt: No such file or directory\n{MISSING_SENTINEL}", "returncode": 0}
+            return {"output": "", "returncode": 0}
+        mock_env.execute.side_effect = side_effect
+        ops = ShellFileOperations(mock_env)
+        result = ops.read_file("/gone.txt")
+        assert result.error is not None and "File not found" in result.error
+
 
     def test_search_rg_error_exit_code(self, mock_env):
         """search() should report error when rg returns exit code 2."""

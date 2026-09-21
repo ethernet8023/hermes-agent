@@ -266,6 +266,11 @@ async def _expand_reference(
             git_args = _GIT_REFERENCE_ARGS[ref.kind](ref)
             return _expand_git_reference(ref, cwd, git_args, "git " + " ".join(git_args))
         if ref.kind == "url":
+            from tools.environments.mxc_host import OFFLINE_REASON, host_network_withheld
+            if host_network_withheld():
+                # The shared website gate would refuse the fetch anyway; say why up front so the
+                # model (and the user) see a policy decision rather than an empty extraction.
+                return f"{ref.raw}: not fetched. {OFFLINE_REASON}", None
             content = await _fetch_url_content(ref.target, url_fetcher=url_fetcher)
             if not content:
                 return f"{ref.raw}: no content extracted", None

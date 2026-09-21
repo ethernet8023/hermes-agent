@@ -1247,6 +1247,38 @@ export interface ComputerUseCheck {
   message: string
 }
 
+/** One grant in the Windows sandbox policy (terminal.mxc_readwrite_paths / mxc_readonly_paths). */
+export type SandboxGrantMode = 'read' | 'readwrite'
+
+export interface SandboxAncestorReadiness {
+  ready: boolean
+  /** Ancestor folders the container cannot yet discover (git needs them). */
+  missing: string[]
+  /** Subset of `missing` that only an administrator can prepare. */
+  needs_admin: string[]
+  /** Ready-to-paste command for an elevated prompt, when `needs_admin` is non-empty. */
+  admin_command: string
+}
+
+export interface SandboxStatus {
+  platform_supported: boolean
+  available: boolean
+  degraded: boolean
+  /** Plain-language reason the sandbox cannot run here (null when available). */
+  reason: string | null
+  warnings: string[]
+  tier: string | null
+  wxc_exec_path: string | null
+  shell_path: string | null
+  shell_missing: boolean
+  os_build: string
+  enabled: boolean
+  policy: { readwrite_paths: string[]; readonly_paths: string[]; network: boolean }
+  containers_started: number
+  workspace?: string
+  workspace_ancestors?: SandboxAncestorReadiness
+}
+
 export interface ComputerUseStatus {
   /** `sys.platform`: "darwin" | "win32" | "linux" | ... */
   platform: string

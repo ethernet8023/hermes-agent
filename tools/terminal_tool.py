@@ -619,7 +619,7 @@ def _resolve_config_cwd(env_type: str, mount_docker_cwd: bool) -> tuple:
     path is remapped to /workspace and tracked as host_cwd; otherwise host paths
     are discarded in favor of the backend default.
     """
-    default_cwd = _safe_getcwd() if env_type == "local" else _DEFAULT_CWD_BY_BACKEND.get(env_type, "/root")
+    default_cwd = _safe_getcwd() if env_type in ("local", "mxc") else _DEFAULT_CWD_BY_BACKEND.get(env_type, "/root")
     cwd = _tenv("TERMINAL_CWD", default_cwd)
     from hermes_cli.config import _is_ssh_remote_tilde_cwd
     if cwd and not _is_ssh_remote_tilde_cwd(env_type, cwd):
@@ -1186,7 +1186,9 @@ def _pre_exec_block(
             logger.warning("Blocked dangerous workdir: %s (command: %s)",
                            workdir[:200], _safe_command_preview(command))
             raise _Rejected(_error_json(workdir_error, status="blocked"))
-    if env_type == "local":
+    # Host-filesystem backends (local, and the Windows MXC sandbox) run against the checkout that
+    # backs this interpreter, so both need the self-repo git-mutation guard.
+    if env_type in ("local", "mxc"):
         blocked = self_repo_block(command=command, cwd=cwd, workdir=workdir, session_key=session_key)
         if blocked:
             raise _Rejected(blocked)

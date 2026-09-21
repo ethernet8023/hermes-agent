@@ -790,6 +790,31 @@ export interface Translations {
       screenRecording: string
       driverHealth: string
     }
+    sandbox: {
+      heading: string
+      description: string
+      statusAvailable: string
+      statusDegraded: string
+      statusUnavailable: string
+      toggleLabel: string
+      toggleDescription: string
+      shellNote: string
+      workspaceRule: string
+      isolationRule: string
+      foldersTitle: string
+      foldersEmpty: string
+      addReadOnly: string
+      addReadWrite: string
+      remove: string
+      modeRead: string
+      modeReadWrite: string
+      networkLabel: string
+      networkDescription: string
+      containers: (count: number) => string
+      recheck: string
+      enableFailed: string
+      updateFailed: string
+    }
     about: {
       updates: string
     }
@@ -2532,6 +2557,21 @@ export interface Translations {
 
   composer: {
     message: string
+    sandbox: {
+      heading: string
+      titleOn: string
+      titleOff: string
+      on: string
+      off: string
+      descriptionOn: (folder: string) => string
+      descriptionOff: string
+      networkOn: string
+      networkOff: string
+      isolated: string
+      openSettings: string
+      turnOnFailed: string
+      turnOffFailed: string
+    }
     wakingProfile: (profile: string) => string
     placeholderStarting: string
     placeholderReconnecting: string
@@ -3765,6 +3805,15 @@ export interface Translations {
       /** Over-budget / rejected memory write title — not "Saved to memory". */
       resultUnavailable: string
       resultInterrupted: string
+      sandboxBlocked: string
+      sandboxBlockedDetail: (path: string) => string
+      sandboxAllowRead: string
+      sandboxAllowReadWrite: string
+      sandboxGrantedTitle: string
+      sandboxGranted: (path: string) => string
+      sandboxRetryDraft: (path: string, mode: string) => string
+      sandboxGrantFailed: string
+      sandboxPill: string
       memoryWriteNoted: string
       actions: {
         read: string

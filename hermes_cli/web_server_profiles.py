@@ -338,7 +338,12 @@ _TERMINAL_BACKENDS: List[Dict[str, str]] = [
          "Run commands in a Singularity/Apptainer container (HPC-friendly, rootless)."),
         ("modal", "Modal", "Run commands in a Modal cloud sandbox."),
         ("daytona", "Daytona", "Run commands in a Daytona cloud sandbox."),
-        ("ssh", "SSH", "Run commands on a remote host over SSH."))]
+        ("ssh", "SSH", "Run commands on a remote host over SSH."),
+        # Windows-only: the row is listed only where the OS can run it.
+        *((("mxc", "Windows Sandbox (MXC)",
+            "Run every command in a kernel-enforced Windows process container: only the workspace and "
+            "folders you grant are reachable, and network is off unless allowed."),)
+          if sys.platform == "win32" else ()))]
 
 
 def _plugin_terminal_backend_rows() -> List[Dict[str, str]]:

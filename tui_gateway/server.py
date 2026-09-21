@@ -622,7 +622,7 @@ def _launch_configured_cwd() -> str | None:
 def _default_session_cwd() -> str:
     """Fallback cwd when no explicit / stored / profile cwd (mirrors :func:`_completion_cwd`'s tail so created
     AND resumed sessions land in the configured ``terminal.cwd``)."""
-    return _launch_configured_cwd() or os.getenv("TERMINAL_CWD") or os.getcwd()
+    return _sandbox_workspace(_launch_configured_cwd() or os.getenv("TERMINAL_CWD") or os.getcwd())
 
 
 def write_json(obj: dict) -> bool:
@@ -2456,7 +2456,8 @@ def _hydrate_session_cwd(sid: str, key: str, session_db, profile_home: str | Non
             if row and row.get("cwd"):
                 with _sessions_lock:
                     if sid in _sessions:
-                        _sessions[sid]["cwd"] = row["cwd"]
+                        # A stored home/drive-root cwd re-homes under the sandbox exactly as at creation.
+                        _sessions[sid]["cwd"] = _sandbox_workspace(row["cwd"])
             elif hasattr(db, "update_session_cwd"):
                 try:
                     _persist_session_cwd_and_schedule_git_meta(_sessions[sid], _sessions[sid]["cwd"], db=db)

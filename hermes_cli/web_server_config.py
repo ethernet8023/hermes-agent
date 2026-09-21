@@ -3,6 +3,7 @@
 
 import logging
 import os
+import sys
 from dataclasses import replace
 from fastapi import HTTPException
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -384,8 +385,10 @@ def _schema_with_dynamic_provider_options() -> Dict[str, Dict[str, Any]]:
             plugin_names = sorted({row["name"] for row in _plugin_terminal_backend_rows()} - set(tb_options))
         except Exception:
             plugin_names = []
-        if plugin_names:
-            merge("terminal.backend", [*tb_options, *plugin_names])
+        # The MXC sandbox exists only on Windows; offering it elsewhere would be a dead option.
+        extra = [*(["mxc"] if sys.platform == "win32" and "mxc" not in tb_options else []), *plugin_names]
+        if extra:
+            merge("terminal.backend", [*tb_options, *extra])
 
     return {**CONFIG_SCHEMA, **overlay} if overlay else CONFIG_SCHEMA
 

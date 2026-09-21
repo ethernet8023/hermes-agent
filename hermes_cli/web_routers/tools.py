@@ -122,6 +122,16 @@ def _probe_daytona_backend(_cfg) -> tuple:
     return ("needs_setup", "Set DAYTONA_API_KEY to use the Daytona backend.")
 
 
+def _probe_mxc_backend(_cfg) -> tuple:
+    from tools.environments.mxc_host import status as mxc_status
+    record = mxc_status(provision_shell=False)
+    if record["available"]:
+        return ("ready", "Degraded: " + "; ".join(record["warnings"]) if record["degraded"] else "")
+    if record.get("shell_missing"):
+        return ("ready", "The sandbox shell is installed on first use.")
+    return ("needs_setup", record["reason"] or "MXC is not available on this host.")
+
+
 _BACKEND_PROBES = {
     "local": lambda _cfg: ("ready", ""),
     "docker": _probe_docker_backend,
@@ -129,6 +139,7 @@ _BACKEND_PROBES = {
     "ssh": _probe_ssh_backend,
     "modal": _probe_modal_backend,
     "daytona": _probe_daytona_backend,
+    "mxc": _probe_mxc_backend,
 }
 
 

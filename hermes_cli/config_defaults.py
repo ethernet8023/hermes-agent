@@ -356,6 +356,16 @@ DEFAULT_CONFIG = {
         # default for images whose entrypoints must start as root (e.g. the bundled Hermes image,
         # which drops to `hermes` via s6-setuidgid). When on, SETUID/SETGID caps are omitted.
         "docker_run_as_host_user": False,
+        # Windows MXC sandbox (terminal.backend: mxc). Every command runs in a fresh, kernel-enforced
+        # process container: the session's working directory is read/write, everything else is
+        # denied unless granted below, and network access is off unless mxc_network is true. Edits
+        # apply to the next command; nothing restarts.
+        "mxc_wxc_exec_path": "",       # path to wxc-exec.exe; "" = search PATH and the MXC kit's default dirs
+        "mxc_shell_path": "",          # POSIX shell run inside the container; "" = managed busybox-w32
+        "mxc_readwrite_paths": [],     # extra folders the sandbox may read and write
+        "mxc_readonly_paths": [],      # extra folders the sandbox may read
+        "mxc_network": False,          # allow outbound network from inside the sandbox
+        "mxc_debug": False,            # pass --debug to wxc-exec (verbose launcher diagnostics)
         # Snap-packaged Docker under AppArmor (Ubuntu cloud images; LP#1908448) refuses to exec
         # anything under `--init` or `--security-opt no-new-privileges` ("operation not
         # permitted"). True drops those two flags; every other hardening stays. See #9730.

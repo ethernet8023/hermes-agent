@@ -154,6 +154,10 @@ class BaseEnvironment(ABC):
 
     # Subclasses that embed stdin as a heredoc (Modal, Daytona) set this.
     _stdin_mode: str = "pipe"  # "pipe" or "heredoc"
+    # How shell file operations spell Windows paths for this backend's shell: "posix" (paths
+    # pass through; remote backends), "msys" (Git Bash's /c/Users/x), or "native" (a POSIX
+    # shell on Windows that takes C:/Users/x).
+    windows_path_form: str = "posix"
 
     # True only when commands execute on the SAME host as the Hermes process
     # (LocalEnvironment); controller-host facts then describe the execution target.

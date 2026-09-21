@@ -31,8 +31,18 @@ def _completion_cwd(params: dict | None = None) -> str:
     with contextlib.suppress(Exception):
         resolved = os.path.abspath(os.path.expanduser(str(raw)))
         if os.path.isdir(resolved):
-            return resolved
-    return os.getcwd()
+            return _sandbox_workspace(resolved)
+    return _sandbox_workspace(os.getcwd())
+
+
+def _sandbox_workspace(cwd: str) -> str:
+    """Under the Windows sandbox a folder the policy refuses as a workspace (home, drive root, a parent of
+    HERMES_HOME) is replaced by the sandbox's default workspace, so a session without a project folder
+    starts somewhere it can actually work. Other backends use *cwd* as is."""
+    if _effective_terminal_backend() != "mxc":
+        return cwd
+    from tools.environments.mxc_host import sandbox_workspace_for
+    return sandbox_workspace_for(cwd)
 
 
 def _workdir_terminal_cfg(key: str) -> str:
@@ -53,9 +63,11 @@ def _terminal_task_cwd(session: dict | None) -> str:
 def _terminal_task_cwd_with_source(session: dict | None) -> tuple[str, str]:
     """``(cwd, source)``: ``"session"`` for THIS session's workspace (``explicit_cwd``/tracked dir), ``"process"`` for
     the global ``TERMINAL_CWD``/``terminal.cwd`` fallback — under per-session docker isolation that is a PREVIOUS
-    session's launch artifact, so terminal_tool refuses it as a bind-mount source."""
+    session's launch artifact, so terminal_tool refuses it as a bind-mount source. Backends that run on the host's
+    own filesystem (local, the Windows sandbox) keep the session's tracked directory: for the sandbox that is the
+    folder the policy re-homed the session to, and the process-wide fallback may be exactly the folder it refused."""
     backend = _effective_terminal_backend()
-    if backend != "local":
+    if backend not in _HOST_FILESYSTEM_BACKENDS:
         # THIS session's explicit workspace beats the LAST session's env var.
         if session and session.get("explicit_cwd") and session.get("cwd"):
             return str(session["cwd"]), "session"
@@ -115,7 +127,12 @@ def _heal_dead_cwd(cwd: str) -> str:
 
 def _is_local_terminal_backend() -> bool:
     backend = (os.environ.get("TERMINAL_ENV") or "").strip().lower()
-    return not backend or backend == "local"
+    return not backend or backend in _HOST_FILESYSTEM_BACKENDS
+
+
+# Backends whose commands see the host's own filesystem, so a session's tracked directory is a real
+# folder on this machine (healable, and authoritative over the process-wide fallback).
+_HOST_FILESYSTEM_BACKENDS = frozenset({"local", "mxc"})
 
 
 def _effective_terminal_backend() -> str:
@@ -531,6 +548,13 @@ def _set_session_cwd(session: dict, cwd: str) -> str:
     resolved = os.path.abspath(os.path.expanduser(cwd))
     if not os.path.isdir(resolved):
         raise ValueError(f"working directory does not exist: {cwd}")
+    if _effective_terminal_backend() == "mxc":
+        # An explicit pick of a folder the sandbox cannot use is an error the user should see, not a
+        # silent redirect to the default workspace.
+        from tools.environments.mxc_host import unsafe_workspace_reason
+        refusal = unsafe_workspace_reason(resolved)
+        if refusal:
+            raise ValueError(refusal)
     # An explicit user choice: persisted as the workspace (not the launch-dir fallback), superseding a settle-adopted cwd.
     session.update(cwd=resolved, explicit_cwd=True, cwd_from_settle=False)
     _register_session_cwd(session)

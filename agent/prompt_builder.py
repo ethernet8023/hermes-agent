@@ -984,6 +984,33 @@ def _clear_backend_probe_cache() -> None:
 
 def _local_host_hints() -> list[str]:
     """Host OS / home / cwd block for a local terminal backend (tools run on this host)."""
+    return _host_hints(shell_hint=_WINDOWS_BASH_SHELL_HINT)
+
+
+_MXC_SANDBOX_HINT = (
+    "Sandbox: every `terminal`, file-tool, `search_files` and `execute_code` action runs inside a fresh Windows MXC "
+    "process container on this host. The container sees the real filesystem but may only READ the folders granted "
+    "in the sandbox policy and only WRITE inside the session's working directory (plus any read/write grants); "
+    "everything else is denied by the OS, and network access is off unless the policy allows it (while it is off, "
+    "web search and browsing tools are refused as well; the user can allow network in the same panel). "
+    "A denied action "
+    "comes back with `Permission denied` plus a `[Sandbox]` note listing what is currently allowed. When that "
+    "happens, do not look for a way around it: tell the user which folder or capability you need and ask them to "
+    "grant it (Hermes desktop: Settings > Safety > Sandbox). Grants take effect on your next command.\n"
+    "Shell: the container runs busybox `sh` (POSIX, not bash): no arrays, `[[ ]]`, or process substitution; use "
+    "`.` to source files. Paths are native Windows paths with forward slashes (`C:/Users/x/project`); MSYS-style "
+    "`/c/...` paths do NOT work here, and `/tmp` is not writable; use `$TEMP` for scratch files. Native tools "
+    "(python, node, git, curl.exe) are on PATH and take `C:/...` paths."
+)
+
+
+def _mxc_backend_hints() -> list[str]:
+    """Host block for the Windows MXC sandbox backend: the machine is the real host (paths and
+    home are valid), but every action is contained by a per-command process container."""
+    return _host_hints(shell_hint=_MXC_SANDBOX_HINT)
+
+
+def _host_hints(*, shell_hint: str) -> list[str]:
     import platform
 
     host = (
@@ -1011,7 +1038,7 @@ def _local_host_hints() -> list[str]:
         "Use the 'User home directory' above to construct paths under C:\\Users\\<user>\\, never the hostname."
     )
     # Windows-local terminal runs bash, not PowerShell — without this the model issues PowerShell syntax.
-    return ["\n".join(host_lines), _WINDOWS_BASH_SHELL_HINT]
+    return ["\n".join(host_lines), shell_hint]
 
 
 def _remote_backend_hint(backend: str) -> str:
@@ -1055,13 +1082,40 @@ def _embedder_environment_hint() -> str:
         (_config_readonly("agent.environment_hint").get("agent", {}) or {}).get("environment_hint", "")).strip()
 
 
+def active_terminal_backend() -> str:
+    """The ``terminal.backend`` in force for the current scope (``local`` when unset)."""
+    return (_tenv_read("TERMINAL_ENV") or "local").strip().lower()
+
+
+def terminal_backend_switch_note(previous: str, current: str) -> str:
+    """Re-briefing for a conversation whose terminal backend changed after its system prompt was
+    built. The prompt is byte-stable for the life of a conversation, so this rides the first tool
+    result under the new backend instead: what changed, then the same environment block the new
+    backend would have had in the prompt."""
+    if current == "mxc":
+        lead = ("[Environment changed] The Windows sandbox was turned on. From this point every command runs "
+                "inside an MXC process container; the notes below replace the shell notes in your briefing.")
+        return f"\n\n{lead}\n{_MXC_SANDBOX_HINT}"
+    if current == "local":
+        what = ("The Windows sandbox was turned off. Commands now run directly on this host with the user's "
+                "permissions; there is no sandbox policy to ask about." if previous == "mxc" else
+                f"The terminal backend changed from `{previous}` to `local`: your tools now run on the "
+                "Hermes host itself.")
+        return f"\n\n[Environment changed] {what}\n" + "\n\n".join(_local_host_hints())
+    lead = f"[Environment changed] The terminal backend changed from `{previous}` to `{current}`."
+    return f"\n\n{lead}\n{_remote_backend_hint(current)}"
+
+
 def build_environment_hints() -> str:
     """Execution-environment block: local backends get host OS/home/cwd; remote/sandbox
     backends get ONLY the backend's own state (the agent's tools cannot touch the host).
     WSL and embedder hints are appended."""
-    backend = (_tenv_read("TERMINAL_ENV") or "local").strip().lower()
+    backend = active_terminal_backend()
     is_remote_backend = backend in _REMOTE_TERMINAL_BACKENDS or _plugin_backend_is_remote(backend)
-    hints = [_remote_backend_hint(backend)] if is_remote_backend else _local_host_hints()
+    if backend == "mxc":
+        hints = _mxc_backend_hints()
+    else:
+        hints = [_remote_backend_hint(backend)] if is_remote_backend else _local_host_hints()
     hints += [WSL_ENVIRONMENT_HINT] if is_wsl() else []
     return "\n\n".join(h for h in (*hints, _embedder_environment_hint()) if h)
 

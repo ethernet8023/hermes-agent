@@ -970,6 +970,36 @@ export const en: Translations = {
       screenRecording: 'Screen Recording',
       driverHealth: 'Driver health'
     },
+    sandbox: {
+      heading: 'Windows sandbox',
+      description:
+        'Every command and file operation the agent runs happens inside a fresh Windows process container (MXC). Only the workspace and the folders you grant here are reachable; everything else is refused by the operating system.',
+      statusAvailable: 'Available',
+      statusDegraded: 'Available (limited)',
+      statusUnavailable: 'Not available',
+      toggleLabel: 'Sandbox agent actions',
+      toggleDescription:
+        'Run every command in a kernel-enforced container. Takes effect on the next command in every conversation, including ones already under way.',
+      shellNote: 'The sandbox shell is downloaded the first time you turn this on.',
+      workspaceRule:
+        'Each conversation can write only inside its own project folder, shown in the composer; a conversation without a project folder works in the Hermes folder under your user profile. Everything else is read-only or denied unless listed below. Images and text you paste into the composer are always readable.',
+      foldersTitle: 'Additional folders',
+      isolationRule:
+        'Sandboxed commands also cannot read or write the clipboard, change the registry, schedule tasks, or see or stop other running programs. Credentials and environment variables from this machine are never passed in.',
+      foldersEmpty: 'No extra folders. The agent can only touch the workspace.',
+      addReadOnly: 'Add read-only folder',
+      addReadWrite: 'Add read & write folder',
+      remove: 'Remove',
+      modeRead: 'Read-only',
+      modeReadWrite: 'Read & write',
+      networkLabel: 'Allow network access',
+      networkDescription:
+        "Off by default: the agent is offline. Sandboxed commands cannot reach the internet or this machine's services, and web search and browsing tools are refused until you turn this on.",
+      containers: count => (count === 1 ? '1 container started since Hermes launched' : `${count} containers started since Hermes launched`),
+      recheck: 'Recheck',
+      enableFailed: 'Could not turn on the sandbox',
+      updateFailed: 'Could not update the sandbox policy'
+    },
     about: {
       updates: 'Updates'
     },
@@ -2986,6 +3016,22 @@ export const en: Translations = {
 
   composer: {
     message: 'Message',
+    sandbox: {
+      heading: 'Sandbox (MXC)',
+      titleOn: 'Sandbox on: commands run in a Windows container',
+      titleOff: 'Sandbox off: commands run directly on this machine',
+      on: 'On',
+      off: 'Off',
+      descriptionOn: folder =>
+        `Every command from this conversation runs in a kernel-enforced Windows container. It can write only inside ${folder}; everything else on this machine is read-only or denied unless you grant it.`,
+      descriptionOff: 'Turn the sandbox on to run every command from this conversation in a kernel-enforced Windows container.',
+      networkOn: 'Network access is allowed.',
+      networkOff: 'Network access is off.',
+      isolated: 'The clipboard, the registry and other running programs are off-limits.',
+      openSettings: 'Open sandbox settings',
+      turnOnFailed: 'Could not turn on the sandbox',
+      turnOffFailed: 'Could not turn off the sandbox'
+    },
     wakingProfile: profile => `Waking up ${profile}…`,
     placeholderStarting: 'Starting Hermes...',
     placeholderReconnecting: 'Reconnecting to Hermes…',
@@ -4451,6 +4497,15 @@ export const en: Translations = {
       statusDone: 'Done',
       resultUnavailable: 'Result unavailable',
       resultInterrupted: 'Interrupted',
+      sandboxBlocked: 'Blocked by sandbox policy',
+      sandboxBlockedDetail: path => `Windows refused access to ${path}. It is outside the folders granted to the agent.`,
+      sandboxAllowRead: 'Allow reading',
+      sandboxAllowReadWrite: 'Allow read & write',
+      sandboxGrantedTitle: 'Access granted',
+      sandboxGranted: path => `Granted access to ${path}. Ask Hermes to try again.`,
+      sandboxRetryDraft: (path, mode) => `I've granted you ${mode} access to ${path}. Please try again.`,
+      sandboxGrantFailed: 'Could not grant access',
+      sandboxPill: 'MXC',
       memoryWriteNoted: 'Memory write noted',
       actions: {
         read: 'Read',

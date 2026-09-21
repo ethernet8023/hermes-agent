@@ -687,6 +687,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # environment block contains the current cwd/backend and belongs after
     # project context, not ahead of a large shared AGENTS.md block.
     environment_hints = _pb.build_environment_hints()
+    # The prompt now describes this backend; a later switch is announced on a tool result.
+    briefing = getattr(agent, "_terminal_backend_briefing", None)
+    if briefing is not None:
+        briefing.record_prompt_backend(_pb.active_terminal_backend())
     coding_prefix_parts, coding_workspace_parts, coding_trailing_parts = _coding_parts(agent)
     stable_parts.extend(coding_prefix_parts)
     post_workspace_parts = _post_workspace_parts(agent)

@@ -29,7 +29,7 @@ from tools.file_operations_common import (
     _UTF8_BOM, _detect_line_ending, _has_bom, _normalize_line_endings, _strip_bom,
     _strip_terminal_fence_leaks, normalize_read_pagination, normalize_search_pagination)
 from tools.file_operations_lint import LINTERS_INPROC, LintMixin, _FAIL_CLOSED_INPROC_EXTS
-from tools.file_operations_search import SearchMixin
+from tools.file_operations_search import SearchMixin, _access_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,8 @@ NOT_REGULAR_SENTINEL = "__hermes_not_regular__"
 # compound command only reports its *last* exit status, so the missing-file
 # signal that ``_probe_regular_file`` carries in ``exit 1`` travels in-band.
 MISSING_SENTINEL = "__hermes_missing__"
+# The path exists as a regular file but could not be opened for reading.
+UNREADABLE_SENTINEL = "__hermes_unreadable__"
 
 _READ_SENTINEL_PREFIX = "__HERMES_RF_"
 _WRITE_SENTINEL_PREFIX = "__HERMES_WF_"
@@ -363,24 +365,29 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return path
 
     def _escape_shell_arg(self, arg: str, translate_path: bool = True) -> str:
-        """Escape a string for safe use in shell commands.
+        """Single-quote ``arg`` for the shell in the environment's own path dialect.
 
-        On Windows native drive paths (``C:\\Users\\x`` / ``C:/Users/x``)
-        and mixed MSYS leftovers (``/c/Users\\x``) are rewritten to the
-        Git Bash ``/c/Users/x`` form via ``_bash_safe_path``: bash eats
-        backslashes and MSYS otherwise mangles drive paths into the
-        ``Directory \\drivers\\etc does not exist`` failure class. Reuses
-        the env-layer translator so shell file ops and the terminal ``cd``
-        agree on the path form. No-op off Windows and for plain POSIX paths.
+        On Windows a Git Bash shell wants the MSYS ``/c/Users/x`` form (bash eats
+        backslashes; MSYS otherwise mangles drive paths into the
+        ``Directory \\drivers\\etc does not exist`` failure class) while a native
+        POSIX shell such as the sandbox's wants ``C:/Users/x``. The environment
+        declares which via ``windows_path_form`` so shell file ops and the terminal
+        ``cd`` agree. POSIX backends take paths as they are.
 
-        ``translate_path=False`` skips that translation for non-path values
-        such as regex patterns. Backslash compensation applies only to the
-        local Windows argv transport. Serialized shell text stays literal.
+        ``translate_path=False`` skips that translation for non-path values such as
+        regex patterns. Backslash compensation applies only to the local Windows argv
+        transport. Serialized shell text stays literal.
         """
-        from tools.environments.local import _IS_WINDOWS, _bash_safe_path
+        from tools.environments.local import _IS_WINDOWS, _bash_safe_path, _msys_to_windows_path
 
         if translate_path:
-            arg = _bash_safe_path(arg)
+            form = getattr(self.env, "windows_path_form", None)
+            if not isinstance(form, str):
+                form = "msys" if _IS_WINDOWS else "posix"
+            if form == "msys":
+                arg = _bash_safe_path(arg)
+            elif form == "native" and arg:
+                arg = _msys_to_windows_path(arg).replace("\\", "/")
         elif _IS_WINDOWS and getattr(self.env, "is_local", False):
             arg = arg.replace("\\", "\\\\")
         # Use single quotes and escape any single quotes in the string
@@ -486,12 +493,22 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         # not run (container still starting, removed out-of-band, transport down) — not a missing file.
         # Reporting that as "File not found" made the model trust a false negative for the whole session.
         stat_result = self._exec(
-            f"if [ -f {arg} ]; then wc -c < {arg} 2>/dev/null; "
+            f"if [ -f {arg} ]; then wc -c < {arg} 2>&1 || echo {UNREADABLE_SENTINEL}; "
             f"elif [ -e {arg} ]; then echo {NOT_REGULAR_SENTINEL}; "
-            f"else echo {MISSING_SENTINEL}; fi")
+            f"else ls -d {arg} 2>&1 >/dev/null | head -1; echo {MISSING_SENTINEL}; fi")
         stat_output = _strip_terminal_fence_leaks(stat_result.stdout).strip()
-        if stat_output == MISSING_SENTINEL:
+        if MISSING_SENTINEL in stat_output:
+            # The OS error precedes the sentinel: a refusal (sandbox policy, unreadable directory)
+            # is not a missing file, and calling it one makes the model distrust a path it had right.
+            refused = _access_refusal(stat_output, marker=MISSING_SENTINEL)
+            if refused:
+                return 0, f"Access to {path} was refused:\n{refused}"
             return 0, "missing"
+        if UNREADABLE_SENTINEL in stat_output:
+            # The file is visible (its parent may be listed) but cannot be opened: under a sandbox
+            # that is a policy refusal on the file itself, not a transport failure.
+            refused = _access_refusal(stat_output, marker=UNREADABLE_SENTINEL)
+            return 0, (f"Access to {path} was refused:\n{refused}" if refused else "env_unavailable")
         if stat_output == NOT_REGULAR_SENTINEL:
             return 0, "not_regular"
         if stat_result.exit_code != 0:
@@ -1474,6 +1491,11 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             return SearchResult(error=(f"Terminal environment unavailable: could not stat {path} "
                                        "(the sandbox may still be starting or was removed). Retry shortly."))
         if "not_found" in exists_probe:
+            refused = _access_refusal(exists_probe)
+            if refused:
+                # The path may well exist; the environment refused to look. Saying "not found"
+                # sends the model hunting for a path it already had.
+                return SearchResult(error=f"Access to {path} was refused:\n{refused}")
             # Models often pass several paths in one string: search the parts that exist.
             multi = self._try_multi_path_search(
                 pattern, path, target, file_glob, limit, offset, output_mode, context, order)

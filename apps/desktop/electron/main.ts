@@ -11596,6 +11596,9 @@ async function spawnPoolBackend(
           // optional marker probe fails, retain legacy PID-only tracking.
           ...parentIdentityEnv,
           HERMES_WEB_DIST: webDist,
+          // Where the composer stages pasted images and text, so a sandboxed backend can always
+          // read what the user attached (the folder itself is never granted: it holds tokens).
+          HERMES_DESKTOP_USER_DATA: app.getPath('userData'),
           ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
         },
         GUEST_ONBOARDING
@@ -12369,6 +12372,7 @@ async function runHermesStart(): Promise<Awaited<ReturnType<typeof backendConnec
             // optional marker probe fails, retain legacy PID-only tracking.
             ...parentIdentityEnv,
             HERMES_WEB_DIST: webDist,
+            HERMES_DESKTOP_USER_DATA: app.getPath('userData'),
             ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
           },
           GUEST_ONBOARDING

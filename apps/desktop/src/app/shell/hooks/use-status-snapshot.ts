@@ -4,6 +4,7 @@ import { getStatus } from '@/hermes'
 import { type I18nContextValue, useI18n } from '@/i18n'
 import { evaluateRuntimeReadiness, type RuntimeReadinessResult } from '@/lib/runtime-readiness'
 import { refreshFreeTierStatus, setFreeTierRoute } from '@/store/free-tier'
+import { refreshSandboxStatus } from '@/store/sandbox'
 import { $setupReadyTick } from '@/store/live-sync'
 import { dismissNotification, notify } from '@/store/notifications'
 import type { StatusResponse } from '@/types/hermes'
@@ -67,10 +68,12 @@ export function useStatusSnapshot(
 
       // The free-tier verdict is a local, zero-network read that writes
       // straight to its own store and swallows its failures — nothing here
-      // waits on it or reads the result.
+      // waits on it or reads the result. The sandbox verdict (Windows MXC)
+      // is the same shape: a loopback status read into its own store.
       const [inferenceResult] = await Promise.allSettled([
         evaluateRuntimeReadiness(requestGateway),
-        refreshFreeTierStatus(requestGateway)
+        refreshFreeTierStatus(requestGateway),
+        refreshSandboxStatus()
       ])
 
       if (cancelled || inferenceResult.status !== 'fulfilled') {

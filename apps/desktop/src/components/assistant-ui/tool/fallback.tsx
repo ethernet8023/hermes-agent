@@ -83,6 +83,7 @@ import {
 } from './fallback-model'
 import { isToolCallPart, summarizeToolRun } from './run-summary'
 import { ToolRunTicker } from './run-ticker'
+import { SandboxDenialCallout } from './sandbox-callout'
 
 // `true` when a ToolEntry is rendered inside an embedding wrapper that owns
 // the per-row chrome (timer / preview). The flat ToolGroupSlot sets this
@@ -629,11 +630,21 @@ function ToolEntry({ part }: ToolEntryProps) {
             {!isFileEdit && !isPending && view.durationLabel && (
               <span className={cn(SCAFFOLD_META_CLASS, memoryMetaClass)}>{view.durationLabel}</span>
             )}
+            {!isPending && view.sandbox && (
+              <span
+                className={cn(SCAFFOLD_META_CLASS, 'uppercase tracking-wide')}
+                data-testid="sandbox-pill"
+                title={view.sandbox.container}
+              >
+                {t.assistant.tool.sandboxPill}
+              </span>
+            )}
           </span>
         </DisclosureRow>
       </div>
       {open && (
         <div className="relative grid w-full min-w-0 max-w-full gap-1.5 overflow-hidden p-1.5">
+          {view.sandbox && view.sandbox.denied.length > 0 && <SandboxDenialCallout sandbox={view.sandbox} />}
           {copyAction.text && (
             <CopyButton
               appearance="inline"

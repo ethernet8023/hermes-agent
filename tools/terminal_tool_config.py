@@ -62,7 +62,9 @@ def _is_host_cwd(path: str) -> bool:
     return path.startswith(_HOST_CWD_PREFIXES) or bool(_WINDOWS_DRIVE_RE.match(path))
 
 _CONTAINER_BACKENDS = frozenset({"docker", "singularity", "modal", "daytona", "vercel_sandbox"})
-_BUILTIN_BACKENDS = _CONTAINER_BACKENDS | {"local", "ssh", "managed_modal"}
+# ``mxc`` sandboxes commands on the host filesystem (host paths stay valid), so it is a built-in
+# backend but not a container backend.
+_BUILTIN_BACKENDS = _CONTAINER_BACKENDS | {"local", "ssh", "managed_modal", "mxc"}
 
 
 def _plugin_registry_lookup(env_type: str, fn_name: str, default, *args):

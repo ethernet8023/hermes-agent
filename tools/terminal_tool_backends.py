@@ -51,7 +51,7 @@ def terminal_backend_unavailable_reason() -> Optional[str]:
 
 _VERCEL_SANDBOX_DEFAULT_CWD = "/vercel/sandbox"
 _SUPPORTED_VERCEL_RUNTIMES = ("node24", "node22", "python3.13")
-_BUILTIN_BACKENDS = "local, docker, singularity, modal, daytona, vercel_sandbox, ssh"
+_BUILTIN_BACKENDS = "local, docker, singularity, modal, daytona, vercel_sandbox, ssh, mxc"
 
 # Config -> kwargs shapers, driven by (out_key, config_key, default) tables. The container table's
 # (key, default) literal is intentionally greppable; tools/terminal_tool.py keeps its own for the AST test.
@@ -206,6 +206,12 @@ def _build_ssh_env(*, cwd, timeout, ssh_config, probe_only=False, **_):
                            key_path=ssh_config.get("key", ""), cwd=cwd, timeout=timeout, probe_only=probe_only)
 
 
+def _build_mxc_env(*, cwd, timeout, task_id, **_):
+    # Windows-only module: imported lazily so the table stays importable everywhere.
+    from tools.environments.mxc import MxcEnvironment
+    return MxcEnvironment(cwd=cwd, timeout=timeout, task_id=task_id)
+
+
 def _build_plugin_env(*, env_type, image, cwd, timeout, cc, task_id, **_):
     provider = _get_plugin_env_provider(env_type)
     if provider is not None:
@@ -230,7 +236,7 @@ def _build_plugin_env(*, env_type, image, cwd, timeout, cc, task_id, **_):
 # Built-in backend -> builder. Anything else is looked up in the plugin registry.
 _ENV_BUILDERS = {"local": _build_local_env, "docker": _build_docker_env, "singularity": _build_singularity_env,
                  "modal": _build_modal_env, "daytona": _build_daytona_env, "vercel_sandbox": _build_vercel_env,
-                 "ssh": _build_ssh_env}
+                 "ssh": _build_ssh_env, "mxc": _build_mxc_env}
 
 
 def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
@@ -309,6 +315,14 @@ def _daytona_post(config: Dict[str, Any]) -> bool:
     return get_secret("DAYTONA_API_KEY") is not None
 
 
+def _mxc_pre(config: Dict[str, Any]) -> bool:
+    """Windows host, wxc-exec present, OS contract live; the sandbox shell may still be
+    provisioned on first use, which is not a rejection."""
+    from tools.environments.mxc_host import unavailable_reason
+    reason = unavailable_reason()
+    return True if reason is None else _reject(reason)
+
+
 _BACKEND_SPECS: Dict[str, Dict[str, Any]] = {
     "local": {},
     "docker": {"binary": (lambda: importlib.import_module("tools.environments.docker").find_docker(), "version",
@@ -319,6 +333,7 @@ _BACKEND_SPECS: Dict[str, Dict[str, Any]] = {
               "module": ("modal", "modal is required for direct modal terminal backend. Run hermes setup terminal and select Modal.")},
     "vercel_sandbox": {"pre": _check_vercel},
     "daytona": {"post": _daytona_post},
+    "mxc": {"pre": _mxc_pre},
 }
 
 

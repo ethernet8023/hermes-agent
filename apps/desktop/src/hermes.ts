@@ -28,6 +28,7 @@ export * from './api/sessions'
 export * from './api/skills'
 export * from './api/system'
 export * from './api/toolsets'
+export * from './api/sandbox'
 
 export type {
   ActionResponse,

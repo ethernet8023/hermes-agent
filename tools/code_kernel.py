@@ -690,7 +690,6 @@ def _acquire_kernel_owned(key: Tuple, reset: bool, *, pinned: bool, owner: str):
     cap, idle_timeout = _lifecycle_limits()
     with _REGISTRY.lock:
         now = time.monotonic()
-        expired = _pop_idle_expired(now, idle_timeout)
         kernel = _KERNELS.get(key)
         state_reset = kernel is not None and (reset or kernel.dead())
         if kernel is not None and kernel.retiring and not reset:

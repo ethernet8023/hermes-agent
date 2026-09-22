@@ -28,8 +28,6 @@ def _available(**overrides):
 @pytest.fixture
 def client(_isolate_hermes_home, monkeypatch, tmp_path):
     monkeypatch.setattr(mxc_host, "status", lambda **_: _available())
-    monkeypatch.setattr(mxc_host, "_icacls",
-                        lambda directory, *args, **kw: __import__("subprocess").CompletedProcess([], 0, "", ""))
     default = tmp_path / "default-workspace"
     default.mkdir()
     monkeypatch.setattr(mxc_host, "default_workspace", lambda: str(default))
@@ -44,7 +42,6 @@ def test_enabling_provisions_both_pins_before_flipping_the_backend(client, monke
 
     provisioned = []
     monkeypatch.setattr(sandbox_routes, "provision_sandbox_bins", lambda: provisioned.append(True))
-    monkeypatch.setattr(sandbox_routes, "_apply_backend_switch_to_this_process", lambda: None)
 
     resp = client.post("/api/sandbox/policy", json={"enabled": True})
     assert resp.status_code == 200

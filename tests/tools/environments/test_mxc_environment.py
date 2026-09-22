@@ -32,7 +32,7 @@ def _kwargs(cwd="C:/proj", snap="C:/tmp/hermes-snap-x.sh"):
 
 # ── container config ─────────────────────────────────────────────────────────
 
-@pytest.mark.windows_only
+@pytest.mark.platforms("windows")
 def test_container_config_is_one_shot_processcontainer_with_explicit_network_and_ui():
     cfg = build_container_config(
         container_id="c1", command_line='"C:\\bb.exe" sh C:\\t\\cmd.sh', cwd="C:/proj",
@@ -54,13 +54,13 @@ def test_container_config_network_toggle_maps_to_egress_default():
     assert on["network"]["egress"]["default"] == "allow"
 
 
-@pytest.mark.windows_only
+@pytest.mark.platforms("windows")
 def test_grant_paths_dedupe_case_insensitively_and_drop_relative_entries():
     grants = normalize_grant_paths(["C:/Proj", "c:\\proj\\", "relative/dir", "", "D:/other"])
     assert [g.lower() for g in grants] == [os.path.normpath("c:/proj").lower(), os.path.normpath("d:/other").lower()]
 
 
-@pytest.mark.windows_only
+@pytest.mark.platforms("windows")
 def test_readonly_grant_never_duplicates_a_readwrite_grant():
     cfg = build_container_config(container_id="c", command_line="x", cwd="C:/p", env={}, readwrite_paths=["C:/p"],
                                 readonly_paths=["c:/P", "C:/tools"], network=False)

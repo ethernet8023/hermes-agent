@@ -204,7 +204,7 @@ export function saveHermesConfig(
 ): Promise<{ ok: boolean }> {
   const scope = resolveConfigWriteScope(config, profile)
 
-  return saveWithPolicyRefresh(config, currentSandboxOwner(profile), () =>
+  return saveWithPolicyRefresh(config, currentSandboxOwner(scope.profile), () =>
     window.hermesDesktop.api<{ ok: boolean }>({
       ...scope,
       path: preserveLanguage ? '/api/config?preserve_language=true' : '/api/config',

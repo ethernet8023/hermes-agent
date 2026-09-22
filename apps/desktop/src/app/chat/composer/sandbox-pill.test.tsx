@@ -1,17 +1,34 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { atom } from 'nanostores'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { type SessionView, SessionViewProvider } from '@/app/chat/session-view'
 import { en } from '@/i18n/en'
 import { $routeRequest } from '@/store/recovery-requests'
-import { $sandboxStatus } from '@/store/sandbox'
+import { invalidateSandboxStatus, publishSandboxStatus, sandboxState } from '@/store/sandbox'
+import { $sessionTiles, recordSessionEventScope } from '@/store/session-states'
+const owner = { connectionId: 'sandbox-test-owner', profile: 'alpha' }
+const seed = (value: SandboxStatus) => publishSandboxStatus(value, owner)
+beforeEach(() => {
+  recordSessionEventScope({ session_id: 'rt', ...owner })
+  $sessionTiles.set([{ storedSessionId: 'st', runtimeId: 'rt' }])
+})
+import { setApiRequestConnection, setApiRequestProfile } from '@/api/client'
+import { ensureGatewayAgent } from '@/store/profile'
 import type { SandboxStatus } from '@/types/hermes'
 
 import { SandboxPill } from './sandbox-pill'
+vi.mock('@/store/profile', async original => ({
+  ...(await original<Record<string, unknown>>()),
+  ensureGatewayAgent: vi.fn(async (connection: string, profile: string) => {
+    setApiRequestConnection(connection)
+    setApiRequestProfile(profile)
+  })
+}))
 
-vi.mock('@/api/sandbox', () => ({
+vi.mock('@/api/sandbox', async original => ({
+  ...(await original<Record<string, unknown>>()),
   getSandboxStatus: vi.fn(() => new Promise(() => undefined)),
   updateSandboxPolicy: vi.fn()
 }))
@@ -65,23 +82,47 @@ const mount = (cwd = 'C:\\Users\\me\\Hermes') =>
 
 afterEach(() => {
   cleanup()
-  $sandboxStatus.set(null)
+  $sessionTiles.set([])
+  sandboxState(owner).set({ status: null, confirmed: false, busy: false, error: null })
+  invalidateSandboxStatus(owner)
 })
 
 describe('SandboxPill', () => {
+  it('offers keyboard explanation without changing policy or moving focus', async () => {
+    seed(status())
+    mount()
+    const pill = screen.getByTestId('sandbox-pill')
+    await act(async () => pill.focus())
+    const settings = await screen.findByRole('button', { name: en.composer.sandbox.openSettings })
+    expect(pill.ownerDocument.activeElement).toBe(pill)
+    expect(pill.getAttribute('aria-expanded')).toBe('true')
+    settings.focus()
+    expect(pill.ownerDocument.activeElement).toBe(settings)
+  })
+
+  it('keeps recovery available without displaying a confirmed ring', async () => {
+    seed(status({ available: false, reason: 'missing kit' }))
+    updateMock.mockResolvedValueOnce(status({ enabled: false, available: false }))
+    mount()
+    const pill = screen.getByTestId('sandbox-pill')
+    expect(pill).toHaveProperty('disabled', false)
+    expect(screen.queryByTestId('sandbox-pill-arc')).toBeNull()
+    await act(async () => fireEvent.click(pill))
+    expect(updateMock).toHaveBeenCalledWith({ enabled: false }, owner)
+  })
   it('is absent where the backend cannot sandbox at all, or the kit is not in place', () => {
-    $sandboxStatus.set(status({ platform_supported: false }))
+    seed(status({ enabled: false, platform_supported: false }))
     const first = mount()
     expect(screen.queryByTestId('sandbox-pill')).toBeNull()
     first.unmount()
 
-    $sandboxStatus.set(status({ available: false, reason: 'wxc-exec not found' }))
+    seed(status({ enabled: false, available: false, reason: 'wxc-exec not found' }))
     mount()
     expect(screen.queryByTestId('sandbox-pill')).toBeNull()
   })
 
   it("names this conversation's folder and the network state while the sandbox is on", async () => {
-    $sandboxStatus.set(status({ enabled: true }))
+    seed(status({ enabled: true }))
     mount('C:\\Users\\me\\Hermes')
     const pill = screen.getByTestId('sandbox-pill')
     expect(pill.getAttribute('data-state-sandbox')).toBe('on')
@@ -95,7 +136,9 @@ describe('SandboxPill', () => {
   })
 
   it('explains the off state and routes to the sandbox settings', async () => {
-    $sandboxStatus.set(status({ enabled: false }))
+    setApiRequestConnection('different-source')
+    setApiRequestProfile('different-profile')
+    seed(status({ enabled: false }))
     mount()
     const pill = screen.getByTestId('sandbox-pill')
     expect(pill.getAttribute('data-state-sandbox')).toBe('off')
@@ -113,10 +156,11 @@ describe('SandboxPill', () => {
     const request = $routeRequest.get()
     expect(request?.seq).toBeGreaterThan(before)
     expect(request?.path).toBe('/settings?tab=config:safety')
+    expect(ensureGatewayAgent).toHaveBeenCalledWith(owner.connectionId, owner.profile)
   })
 
   it('clicking the shield flips the sandbox through the policy route and every surface sees it', async () => {
-    $sandboxStatus.set(status({ enabled: false }))
+    seed(status({ enabled: false }))
     updateMock.mockResolvedValueOnce(status({ enabled: true }))
     mount()
 
@@ -124,8 +168,8 @@ describe('SandboxPill', () => {
       fireEvent.click(screen.getByTestId('sandbox-pill'))
     })
 
-    expect(updateMock).toHaveBeenCalledWith({ enabled: true })
-    expect($sandboxStatus.get()?.enabled).toBe(true)
+    expect(updateMock).toHaveBeenCalledWith({ enabled: true }, owner)
+    expect(sandboxState(owner).get().status?.enabled).toBe(true)
     expect(screen.getByTestId('sandbox-pill').getAttribute('data-state-sandbox')).toBe('on')
   })
 })

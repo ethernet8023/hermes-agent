@@ -428,6 +428,22 @@ export const ar = defineLocale({
       billingOverview: 'نظرة عامة',
       billingPlans: 'الخطط'
     },
+    sandbox: {
+      heading: 'عزل Windows',
+      description: 'تعمل أدوات الطرفية والملفات المدعومة داخل حاويات عمليات Windows ‏(MXC). تُرفض الأدوات غير المعزولة؛ ويبقى الاستدلال على المضيف ووظائف Hermes الداخلية الثابتة خدمات موثوقة خارج الحاوية.',
+      statusAvailable: 'متاح', statusDegraded: 'متاح بحدود', statusUnavailable: 'غير متاح',
+      statusUnknown: 'لم يتم تأكيد الحماية. أعد فحص الخلفية أو أوقف العزل لاستعادة العمل.',
+      modelOutputBlocked: 'حُجبت المعاينة بسبب MXC: لا يمكن لمحتوى المساعد قراءة ملفات المضيف أو تحميل محتوى بعيد أو تشغيل نصوص برمجية هنا.',
+      modelOutputUnconfirmed: 'حُجبت المعاينة حتى يتم تأكيد مالك هذا المحتوى وسياسة العزل.',
+      toggleLabel: 'عزل أدوات الطرفية والملفات', toggleDescription: 'ينطبق على كل محادثات هذا الملف الشخصي. يتوقف التنفيذ السابق على المضيف قبل اكتمال التغيير؛ ويستخدم الأمر المدعوم التالي السياسة الجديدة.',
+      shellNote: 'عند التفعيل الأول، ينزّل Hermes الصدفة المُدارة ما لم تكن قد ضبطت صدفة مخصصة.',
+      workspaceRule: 'تكتب كل محادثة في مجلد المشروع الذي يختاره المستخدم أو مساحة Hermes الافتراضية. يشمل منح المجلدات الإضافية جميع المجلدات الفرعية. لأدوات التشغيل والمساحة المؤقتة الخاصة والمرفقات الملصقة المدعومة وصول داخلي محدود.',
+      foldersTitle: 'مجلدات إضافية', foldersEmpty: 'لا توجد أذونات إضافية لمجلدات المستخدم.',
+      isolationRule: 'لا تستطيع الأوامر المدعومة استخدام حافظة المضيف أو سجلّه أو عملياته الأخرى. تُمرر متغيرات بيئة تشغيل محددة فقط، دون بيانات اعتماد المضيف.',
+      addReadOnly: 'إضافة مجلد للقراءة فقط', addReadWrite: 'إضافة مجلد للقراءة والكتابة', remove: 'إزالة', modeRead: 'قراءة فقط', modeReadWrite: 'قراءة وكتابة', networkLabel: 'السماح بالوصول إلى الشبكة',
+      networkDescription: 'يتحكم في اتصالات الحاوية الصادرة والبحث واستخراج صفحات الويب. تبقى أتمتة المتصفح والتحكم بسطح المكتب وMCP والموصلات وأدوات التوليد وexecute_code مرفوضة حتى مع تفعيل الشبكة. الاستدلال على المضيف والإدارة الداخلية الموثوقة خارج نطاق هذا المفتاح.',
+      containers: count => `تم تشغيل ${count} حاوية منذ بدء Hermes`, recheck: 'إعادة الفحص', enableFailed: 'تعذر تفعيل العزل', updateFailed: 'تعذر تحديث سياسة العزل'
+    },
     closeSettings: 'إغلاق الإعدادات',
     exportConfig: 'تصدير الإعدادات',
     importConfig: 'استيراد الإعدادات',
@@ -2105,6 +2121,14 @@ export const ar = defineLocale({
     }
   },
   composer: {
+    sandbox: {
+      heading: 'العزل (MXC)', titleOn: 'إيقاف العزل لكل محادثات هذا الملف الشخصي', titleOff: 'تفعيل العزل لكل محادثات هذا الملف الشخصي', on: 'مفعّل', off: 'متوقف', unknown: 'غير مؤكد', unavailable: 'غير متاح',
+      descriptionOn: folder => `يستخدم هذا الملف الشخصي MXC لأدوات الطرفية والملفات المدعومة. تعمل هذه المحادثة في ${folder} وفي المجلدات الإضافية المسموح بها وفروعها من الإعدادات.`,
+      descriptionOff: 'فعّل العزل لأدوات الطرفية والملفات المدعومة في كل محادثات هذا الملف الشخصي.',
+      networkOn: 'الوصول إلى الشبكة مسموح.', networkOff: 'الوصول إلى الشبكة متوقف.',
+      isolated: 'تبقى الأدوات غير المعزولة محظورة حتى مع تفعيل الشبكة. يظل الاستدلال على المضيف ووظائف Hermes الداخلية الثابتة خدمات موثوقة.',
+      openSettings: 'فتح إعدادات العزل', turnOnFailed: 'تعذر تفعيل العزل', turnOffFailed: 'تعذر إيقاف العزل'
+    },
     message: 'الرسالة',
     wakingProfile: profile => `جار إيقاظ ${profile}`,
     placeholderStarting: 'جار بدء Hermes...',
@@ -3030,6 +3054,13 @@ export const ar = defineLocale({
       questionProgress: (answered, total) => `تمت الإجابة على ${answered} من ${total}`
     },
     tool: {
+      sandboxBlocked: 'محظور بسياسة العزل',
+      sandboxRecursiveScope: path => `يشمل جميع الملفات والمجلدات الفرعية داخل ${path}. ينطبق الإذن على كل محادثات هذا الملف الشخصي.`,
+      sandboxBlockedDetail: path => `رفض Windows الوصول إلى ${path} لأنه خارج المجلدات المسموح بها.`,
+      sandboxAllowRead: 'السماح بالقراءة', sandboxAllowReadWrite: 'السماح بالقراءة والكتابة', sandboxGrantedTitle: 'تم منح الوصول',
+      sandboxGranted: path => `تم السماح بالوصول إلى ${path}. اطلب من Hermes المحاولة مجددًا.`,
+      sandboxRetryDraft: (path, mode) => `منحتك إذن ${mode} إلى ${path}. حاول مجددًا.`,
+      sandboxGrantFailed: 'تعذر منح الوصول', sandboxPill: 'MXC',
       copyCode: 'نسخ الكود',
       renderingImage: 'جار عرض الصورة...',
       copyOutput: 'نسخ الإخراج',

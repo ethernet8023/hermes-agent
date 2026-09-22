@@ -364,6 +364,24 @@ export const ja = defineLocale({
       billingOverview: '概要',
       billingPlans: 'プラン'
     },
+    sandbox: {
+      heading: 'Windows サンドボックス',
+      description: '対応するターミナル・ファイルツールは Windows プロセスコンテナー（MXC）で実行されます。隔離されないツールは拒否され、ホストの推論と Hermes の固定の内部管理機能はコンテナー外の信頼済みサービスとして動作します。',
+      statusAvailable: '利用可能', statusDegraded: '利用可能（制限あり）', statusUnavailable: '利用不可',
+      statusUnknown: '保護を確認できません。バックエンドを再確認するか、サンドボックスをオフにして復旧してください。',
+      modelOutputBlocked: 'MXC によりプレビューを停止しています。アシスタントのコンテンツは、ここでホストのファイルやリモートコンテンツを読み込んだり、スクリプトを実行したりできません。',
+      modelOutputUnconfirmed: 'このコンテンツの所有者とサンドボックスポリシーを確認するまで、プレビューを停止します。',
+      toggleLabel: 'ターミナル・ファイルツールを隔離',
+      toggleDescription: 'このプロファイルのすべての会話に適用されます。変更完了前に従来のホスト実行を停止し、次の対応コマンドから新しいポリシーを使用します。',
+      shellNote: '独自のシェルが設定されていなければ、初回有効化時に管理対象のシェルをダウンロードします。',
+      workspaceRule: '各会話はユーザーが選択したプロジェクトフォルダー、または既定の Hermes 作業領域に書き込みます。追加フォルダーの許可には子フォルダーも含まれます。実行ツール、専用の一時領域、対応する貼り付け添付には限定的な内部アクセスがあります。',
+      foldersTitle: '追加フォルダー', foldersEmpty: '追加のユーザーフォルダー許可はありません。',
+      isolationRule: '対応コマンドはホストのクリップボード、レジストリ、他のプロセスを使用できません。選択された実行環境変数のみが渡され、ホストの認証情報は除外されます。',
+      addReadOnly: '読み取り専用フォルダーを追加', addReadWrite: '読み書きフォルダーを追加', remove: '削除', modeRead: '読み取り専用', modeReadWrite: '読み書き',
+      networkLabel: 'ネットワークアクセスを許可',
+      networkDescription: 'サンドボックスの外向き通信と Web 検索・抽出を制御します。有効時もブラウザー自動操作、デスクトップ操作、MCP、コネクター、生成ツール、execute_code は拒否されます。ホストの推論と信頼済みの内部管理は対象外です。',
+      containers: count => `Hermes 起動後に開始したコンテナー: ${count}`, recheck: '再確認', enableFailed: 'サンドボックスを有効にできませんでした', updateFailed: 'ポリシーを更新できませんでした'
+    },
     plugins: {
       installModal: {
         installFromGit: 'Git からインストール',
@@ -2457,6 +2475,15 @@ export const ja = defineLocale({
   },
 
   composer: {
+    sandbox: {
+      heading: 'サンドボックス（MXC）', titleOn: 'このプロファイルの全会話でサンドボックスをオフにする', titleOff: 'このプロファイルの全会話でサンドボックスをオンにする',
+      on: 'オン', off: 'オフ', unknown: '未確認', unavailable: '利用不可',
+      descriptionOn: folder => `このプロファイルの対応するターミナル・ファイルツールは MXC を使用します。この会話は ${folder} と設定で追加許可したフォルダー内で作業します。`,
+      descriptionOff: 'サンドボックスをオンにして、このプロファイルの全会話で対応するターミナル・ファイルツールを隔離します。',
+      networkOn: 'ネットワークアクセスは許可されています。', networkOff: 'ネットワークアクセスはオフです。',
+      isolated: 'ネットワークがオンでも未隔離ツールは拒否されます。ホストの推論と Hermes の固定の内部管理は信頼済みサービスです。',
+      openSettings: 'サンドボックス設定を開く', turnOnFailed: 'サンドボックスを有効にできませんでした', turnOffFailed: 'サンドボックスを無効にできませんでした'
+    },
     message: 'メッセージ',
     wakingProfile: profile => `${profile} を起動中…`,
     placeholderStarting: 'Hermes を起動中...',
@@ -3476,6 +3503,13 @@ export const ja = defineLocale({
       lateAnswerHint: 'この質問はもう回答を待っていません。選択肢を選ぶとフォローアップメッセージとして下書きされます。'
     },
     tool: {
+      sandboxBlocked: 'サンドボックスポリシーで拒否',
+      sandboxRecursiveScope: path => `${path} 内のすべてのファイルと子フォルダーを含みます。この許可はこのプロファイルの全会話に適用されます。`,
+      sandboxBlockedDetail: path => `Windows が ${path} へのアクセスを拒否しました。許可されたフォルダーの範囲外です。`,
+      sandboxAllowRead: '読み取りを許可', sandboxAllowReadWrite: '読み書きを許可', sandboxGrantedTitle: 'アクセスを許可しました',
+      sandboxGranted: path => `${path} へのアクセスを許可しました。再試行を依頼してください。`,
+      sandboxRetryDraft: (path, mode) => `${path} に「${mode}」のアクセスを許可しました。再試行してください。`,
+      sandboxGrantFailed: 'アクセスを許可できませんでした', sandboxPill: 'MXC',
       copyCode: 'コードをコピー',
       renderingImage: '画像をレンダリング中',
       copyOutput: '出力をコピー',

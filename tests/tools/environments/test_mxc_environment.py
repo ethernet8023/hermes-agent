@@ -1,7 +1,7 @@
 """Windows MXC terminal backend: policy-to-container-config generation, the POSIX session scripts,
 denial interpretation, workspace safety, host status verdicts, and the wiring into the terminal tool.
 
-Everything here is host-independent (pure functions plus stubbed probes). The live-container
+Most tests are host-independent; native Windows path contracts are marked. The live-container
 contract is in ``test_mxc_environment_windows.py`` (``windows_only``).
 """
 
@@ -32,6 +32,7 @@ def _kwargs(cwd="C:/proj", snap="C:/tmp/hermes-snap-x.sh"):
 
 # ── container config ─────────────────────────────────────────────────────────
 
+@pytest.mark.windows_only
 def test_container_config_is_one_shot_processcontainer_with_explicit_network_and_ui():
     cfg = build_container_config(
         container_id="c1", command_line='"C:\\bb.exe" sh C:\\t\\cmd.sh', cwd="C:/proj",
@@ -53,11 +54,13 @@ def test_container_config_network_toggle_maps_to_egress_default():
     assert on["network"]["egress"]["default"] == "allow"
 
 
+@pytest.mark.windows_only
 def test_grant_paths_dedupe_case_insensitively_and_drop_relative_entries():
     grants = normalize_grant_paths(["C:/Proj", "c:\\proj\\", "relative/dir", "", "D:/other"])
     assert [g.lower() for g in grants] == [os.path.normpath("c:/proj").lower(), os.path.normpath("d:/other").lower()]
 
 
+@pytest.mark.windows_only
 def test_readonly_grant_never_duplicates_a_readwrite_grant():
     cfg = build_container_config(container_id="c", command_line="x", cwd="C:/p", env={}, readwrite_paths=["C:/p"],
                                 readonly_paths=["c:/P", "C:/tools"], network=False)
@@ -131,7 +134,7 @@ def test_denial_note_names_policy_and_git_remedy():
     note = denial_note([os.path.normpath("C:/Users/t/x"), GIT_ANCESTOR_DENIAL], workspace="C:\\proj", policy=policy)
     assert "[Sandbox]" in note and "C:\\proj" in note and "C:\\extra" in note
     assert "network: off" in note and "read-only: (none)" in note
-    assert "Prepare workspace" in note
+    assert "Hermes does not change host ACLs" in note
     assert "Do not try to work around the sandbox" in note
 
 
@@ -148,7 +151,7 @@ def test_unsafe_workspace_refuses_home_drive_root_and_hermes_home_parents(tmp_pa
     assert "drive root" in unsafe_workspace_reason(os.path.splitdrive(str(tmp_path))[0] + os.sep)
     assert "Hermes's own data directory" in unsafe_workspace_reason(str(tmp_path / "data"))
     assert unsafe_workspace_reason(str(tmp_path / "proj")) is None
-    assert unsafe_workspace_reason(str(hermes_home / "hermes-agent")) is None, "a same-named folder elsewhere is fine"
+    assert "data directory" in unsafe_workspace_reason(str(hermes_home / "hermes-agent"))
 
 
 def test_unsafe_workspace_refuses_the_install_tree_and_its_parents(tmp_path, monkeypatch):
@@ -158,7 +161,7 @@ def test_unsafe_workspace_refuses_the_install_tree_and_its_parents(tmp_path, mon
     monkeypatch.setattr(os.path, "expanduser", lambda p: str(tmp_path / "home") if p == "~" else p)
     assert "program files" in unsafe_workspace_reason(str(install))
     assert "program files" in unsafe_workspace_reason(str(install.parent))
-    assert unsafe_workspace_reason(str(install.parent / "some-other-project")) is None
+    assert unsafe_workspace_reason(str(tmp_path / "some-other-project")) is None
 
 
 def test_sandbox_workspace_for_redirects_unsafe_folders_to_a_created_default_inside_home(tmp_path, monkeypatch):
@@ -207,89 +210,20 @@ def test_attachment_staging_dirs_grant_only_the_composer_folders(tmp_path, monke
     assert grants == [str(user_data / "composer-images")], "missing subfolders are skipped, the parent is never granted"
 
 
-def test_host_network_toolsets_are_withheld_only_when_the_sandbox_is_on_and_offline():
-    assert mxc_host.host_network_withheld_toolsets({"backend": "local", "mxc_network": False}) == ()
-    assert mxc_host.host_network_withheld_toolsets({"backend": "mxc", "mxc_network": True}) == ()
-    withheld = mxc_host.host_network_withheld_toolsets({"backend": "mxc", "mxc_network": False})
-    assert "web" in withheld and "browser" in withheld
-
-
-def test_offline_verdict_is_cached_on_the_config_file_identity(tmp_path, monkeypatch):
-    """The shared website gate asks per URL, so the config must not be re-parsed per call, but an
-    edit to the file must be seen."""
-    config = tmp_path / "config.yaml"
-    config.write_text("terminal:\n  backend: mxc\n  mxc_network: false\n", encoding="utf-8")
-    monkeypatch.setattr(mxc_host, "_IS_WINDOWS", True)
-    monkeypatch.setattr("hermes_cli.config.get_config_path", lambda: config)
-    calls = []
-
-    def fake_toolsets(terminal_cfg=None):
-        calls.append(1)
-        return ("web", "browser") if len(calls) == 1 else ()
-    monkeypatch.setattr(mxc_host, "host_network_withheld_toolsets", fake_toolsets)
-    mxc_host._offline_cache = (None, False)
-    assert mxc_host.host_network_withheld() is True
-    assert mxc_host.host_network_withheld() is True
-    assert len(calls) == 1, "same file identity: no re-read"
-    config.write_text("terminal:\n  backend: mxc\n  mxc_network: true\n\n", encoding="utf-8")
-    assert mxc_host.host_network_withheld() is False
-    assert len(calls) == 2
-
-
-def test_shared_website_gate_refuses_every_url_while_the_sandbox_is_offline(monkeypatch):
-    from tools.website_policy import check_website_access
-    monkeypatch.setattr(mxc_host, "host_network_withheld", lambda: True)
-    blocked = check_website_access("https://example.com/report.pdf")
-    assert blocked is not None and blocked["source"] == "sandbox" and "Allow network access" in blocked["message"]
-    monkeypatch.setattr(mxc_host, "host_network_withheld", lambda: False)
-    assert check_website_access("https://example.com/report.pdf") is None
-
-
-def test_url_context_reference_is_not_fetched_while_the_sandbox_is_offline(tmp_path, monkeypatch):
-    """A pasted link becomes an @url: reference the backend resolves before the turn; that fetch is
-    host-side too and must honour the same switch, with the reason visible to the model."""
-    from agent.context_references import preprocess_context_references
-    fetched = []
-
-    def fetcher(url):
-        fetched.append(url)
-        return "article body"
-    monkeypatch.setattr(mxc_host, "host_network_withheld", lambda: True)
-    result = preprocess_context_references(
-        "summarize @url:https://example.com/story", cwd=tmp_path, context_length=100_000, url_fetcher=fetcher)
-    assert fetched == []
-    assert any("not fetched" in w and "Allow network access" in w for w in result.warnings)
-    monkeypatch.setattr(mxc_host, "host_network_withheld", lambda: False)
-    result = preprocess_context_references(
-        "summarize @url:https://example.com/story", cwd=tmp_path, context_length=100_000, url_fetcher=fetcher)
-    assert fetched == ["https://example.com/story"] and "article body" in result.message
-
-
-def test_network_tools_are_refused_at_invocation_while_the_sandbox_is_offline(monkeypatch):
-    """A tool snapshot is frozen for a conversation (and restored from the session on resume), so a
-    model can still hold web_search after the switch is turned off. The policy has to hold at the
-    call, not only in the schema; other tools are unaffected."""
-    import json
-    import model_tools
-    monkeypatch.setattr(mxc_host, "host_network_withheld_toolsets", lambda terminal_cfg=None: ("web", "browser"))
-    result = json.loads(model_tools.handle_function_call("web_search", {"query": "anything"}))
-    assert "Allow network access" in result["error"]
-    _, blocked = model_tools._pre_dispatch_guards("read_file", {"path": "x"}, True, model_tools._CallIds(None, None, None, None, None), [])
-    assert blocked is None
-    monkeypatch.setattr(mxc_host, "host_network_withheld_toolsets", lambda terminal_cfg=None: ())
-    _, blocked = model_tools._pre_dispatch_guards("web_search", {"query": "q"}, True, model_tools._CallIds(None, None, None, None, None), [])
-    assert blocked is None
+# Cross-entrypoint network/admission behavior lives in test_mxc_admission.py.
 
 
 # ── host settings and status ─────────────────────────────────────────────────
 
-def test_resolve_settings_reads_config_first_then_env_bridge(monkeypatch):
-    s = mxc_host.resolve_settings({"mxc_readwrite_paths": ["C:/a"], "mxc_network": True})
-    assert s.policy.readwrite_paths == (os.path.expandvars("C:/a"),) and s.policy.network is True
+def test_resolve_settings_explicit_config_is_authoritative(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    s = mxc_host.resolve_settings({"mxc_readwrite_paths": [str(project)], "mxc_network": True})
+    assert s.policy.readwrite_paths == (str(project.resolve()),) and s.policy.network is True
     monkeypatch.setenv("TERMINAL_MXC_READONLY_PATHS", json.dumps(["C:/ro"]))
     monkeypatch.setenv("TERMINAL_MXC_NETWORK", "true")
-    env_only = mxc_host.resolve_settings({})
-    assert env_only.policy.readonly_paths == ("C:/ro",) and env_only.policy.network is True
+    explicit = mxc_host.resolve_settings({})
+    assert explicit.policy.readonly_paths == () and explicit.policy.network is False
 
 
 @pytest.mark.platforms("windows")
@@ -314,7 +248,8 @@ def test_probe_parsing_reports_tier_and_warnings(monkeypatch):
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, payload, ""))
     mxc_host.clear_probe_cache()
     probe = mxc_host.run_probe("C:/fake/wxc-exec.exe")
-    assert probe["ok"] is True and probe["tier"] == "appcontainer-dacl" and probe["warnings"] == ["run wxc-host-prep"]
+    assert probe["ok"] is False and probe["tier"] == "appcontainer-dacl" and probe["warnings"] == ["run wxc-host-prep"]
+    assert "fallback is disabled" in probe["error"]
     mxc_host.clear_probe_cache()
 
 
@@ -332,40 +267,7 @@ def test_workspace_ancestors_walks_to_the_drive_root():
     assert ancestors[-1].lower().endswith(os.sep + "b") and len(ancestors) == 3
 
 
-def test_admin_prepare_command_grants_listing_rights_only():
-    cmd = mxc_host.admin_prepare_command(["C:\\", "C:\\Users"])
-    assert cmd.count("icacls") == 2 and "(RD,RA,REA,RC,S)" in cmd and "S-1-15-2-1" in cmd
-    assert "(F)" not in cmd and "(M)" not in cmd
-
-
-_ICACLS_ROOT = "C:\\ NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n   BUILTIN\\Users:(OI)(CI)(RX)\n   NT AUTHORITY\\Authenticated Users:(M)\n"
-_ICACLS_PREPARED = "C:\\Users\\me\\Projects APPLICATION PACKAGE AUTHORITY\\ALL APPLICATION PACKAGES:(R)\n   BOX\\me:(OI)(CI)(F)\n"
-_ICACLS_OWNED = "C:\\Users\\me BOX\\me:(OI)(CI)(F)\n   NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n"
-
-
-def test_ancestor_readiness_reports_every_field_the_panel_reads(monkeypatch):
-    """The desktop dereferences ``needs_admin``/``admin_command`` whenever ``ready`` is False, so the
-    record must carry all four keys and classify admin-only folders from the current user's rights."""
-    listings = {"C:\\": _ICACLS_ROOT, "C:\\Users": _ICACLS_ROOT, "C:\\Users\\me": _ICACLS_OWNED,
-                "C:\\Users\\me\\Projects": _ICACLS_PREPARED}
-    monkeypatch.setenv("USERNAME", "me")
-    monkeypatch.setattr(mxc_host, "_icacls",
-                        lambda directory, *args, **kw: subprocess.CompletedProcess([], 0, listings[directory], ""))
-    monkeypatch.setattr(mxc_host, "workspace_ancestors", lambda path: list(listings))
-    record = mxc_host.ancestor_readiness("C:\\Users\\me\\Projects\\demo")
-    assert set(record) == {"ready", "missing", "needs_admin", "admin_command"}
-    assert record["ready"] is False
-    assert record["missing"] == ["C:\\", "C:\\Users", "C:\\Users\\me"]
-    assert record["needs_admin"] == ["C:\\", "C:\\Users"], "Full Control lets the user prepare their own folder"
-    assert 'icacls "C:\\"' in record["admin_command"] and "C:\\Users\\me" not in record["admin_command"]
-
-
-def test_ancestor_readiness_is_ready_when_every_ancestor_lists_for_appcontainers(monkeypatch):
-    monkeypatch.setattr(mxc_host, "_icacls",
-                        lambda directory, *args, **kw: subprocess.CompletedProcess([], 0, _ICACLS_PREPARED, ""))
-    monkeypatch.setattr(mxc_host, "workspace_ancestors", lambda path: ["C:\\", "C:\\Users\\me\\Projects"])
-    record = mxc_host.ancestor_readiness("C:\\Users\\me\\Projects\\demo")
-    assert record == {"ready": True, "missing": [], "needs_admin": [], "admin_command": ""}
+# Retired ACL APIs are tested as non-mutating refusals in test_mxc_runtime_policy.py.
 
 
 # ── wiring ───────────────────────────────────────────────────────────────────
@@ -382,20 +284,7 @@ def test_backend_is_registered_and_is_not_a_container_backend():
         assert TERMINAL_CONFIG_ENV_MAP[key] == f"TERMINAL_{key.upper()}"
 
 
-def test_mxc_keys_are_bridged_at_every_config_to_env_site():
-    """gateway/run.py and ``hermes config set`` must agree on the bridged terminal keys,
-    and the sandbox host module must read the same env names as its fallback."""
-    import inspect
-    import gateway.run as gateway_run
-    from hermes_cli.config import TERMINAL_CONFIG_ENV_MAP
-    gateway_source = inspect.getsource(gateway_run)
-    host_source = inspect.getsource(mxc_host)
-    for key in ("mxc_readwrite_paths", "mxc_readonly_paths",
-                "mxc_network", "mxc_debug"):
-        env_name = f"TERMINAL_{key.upper()}"
-        assert f'"{key}": "{env_name}"' in gateway_source
-        assert TERMINAL_CONFIG_ENV_MAP[key] == env_name
-        assert env_name in host_source
+# Bridge behavior is covered by test_terminal_config_env_sync.py; never inspect source.
 
 
 def test_unavailable_reason_flows_into_requirements_check(monkeypatch):
@@ -428,3 +317,44 @@ def test_environment_hints_describe_the_sandbox_for_the_mxc_backend(monkeypatch)
     hints = prompt_builder.build_environment_hints()
     assert "MXC" in hints and "Permission denied" in hints and "busybox" in hints
     assert "NOT on the machine where Hermes" not in hints, "MXC runs on the host filesystem"
+
+
+def test_the_terminal_tool_never_runs_a_sandboxed_command_in_a_refused_folder(tmp_path, monkeypatch):
+    """A cwd recorded while the sandbox was off (the user's home, the install tree) must not become the
+    working directory of a sandboxed command: the plan's default, the per-command resolution and the
+    live-env override write all fall back to the default workspace instead."""
+    import tools.terminal_tool as tt
+    from tools.terminal_tool_config import _is_refused_sandbox_cwd
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "data" / ".hermes"))
+    default = str(home / mxc_host.DEFAULT_WORKSPACE_DIRNAME)
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    assert _is_refused_sandbox_cwd("mxc", str(home))
+    assert not _is_refused_sandbox_cwd("mxc", str(project))
+    assert not _is_refused_sandbox_cwd("local", str(home))
+
+    # The plan's default cwd: TERMINAL_CWD pointing at home is re-homed for the sandbox only.
+    monkeypatch.setenv("TERMINAL_CWD", str(home))
+    assert tt._resolve_config_cwd("mxc", False)[0] == default
+    assert tt._resolve_config_cwd("local", False)[0] == str(home)
+
+    # The per-command resolution: a refused record yields the (sanitized) default; a project record
+    # and an explicit workdir pass through untouched.
+    monkeypatch.setattr(tt, "_session_cwd", {"sess": str(home)})
+    assert tt._resolve_command_cwd(workdir=None, default_cwd=default, session_key="sess", env_type="mxc") == default
+    assert tt._resolve_command_cwd(workdir=str(home), default_cwd=default, session_key="sess", env_type="mxc") == str(home)
+    monkeypatch.setattr(tt, "_session_cwd", {"sess": str(project)})
+    assert tt._resolve_command_cwd(workdir=None, default_cwd=default, session_key="sess", env_type="mxc") == str(project)
+
+    # The live-env override write: a sandbox env keeps its own cwd when the override is refused.
+    class FakeSandboxEnv:
+        env_type = "mxc"
+        cwd = default
+
+    assert tt._sanitize_cwd_for_live_env(FakeSandboxEnv(), str(home)) is None
+    assert tt._sanitize_cwd_for_live_env(FakeSandboxEnv(), str(project)) == str(project)

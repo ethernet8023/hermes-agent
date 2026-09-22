@@ -170,8 +170,12 @@ class TestReapedEnvFallbackIsFillOnly:
         import tools.file_tools as ft
         import tools.file_tools_paths as ftp
 
+        from hermes_constants import hermes_home_key
+        from types import SimpleNamespace
+
         class _StaleFileOps:
             cwd = stale_cwd
+            env = SimpleNamespace(_terminal_policy_owner=hermes_home_key())
 
         # Cached file_ops whose env was reaped: cache entry present,
         # _active_environments empty. The cache is keyed by the COLLAPSED

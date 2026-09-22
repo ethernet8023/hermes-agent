@@ -1,4 +1,5 @@
 import { hermesApi } from '@/api/client'
+import type { SandboxOwner } from '@/api/sandbox'
 import type {
   HermesConnection,
   HermesReadDirResult,
@@ -6,6 +7,7 @@ import type {
   HermesSelectPathsOptions
 } from '@/global'
 import { translateNow } from '@/i18n'
+import { confirmModelOutputAccess } from '@/store/sandbox'
 import { $connection } from '@/store/session'
 
 export interface DesktopFsRemotePicker {
@@ -80,7 +82,36 @@ export async function readDesktopDir(path: string): Promise<HermesReadDirResult>
   return remoteFsApi<HermesReadDirResult>(fsPath('list', path))
 }
 
-export async function readDesktopFileText(path: string): Promise<HermesReadFileTextResult> {
+export function isOwnerAbsoluteFilePath(path: string): boolean {
+  return /^(?:\/|[a-z]:[\\/]|\\\\|~[\\/])/i.test(path)
+}
+
+export async function readDesktopFileText(
+  path: string,
+  owner?: SandboxOwner | null
+): Promise<HermesReadFileTextResult> {
+  if (owner !== undefined) {
+    if (!owner) {
+      throw new Error('Model output owner is unknown')
+    }
+
+    const check = await confirmModelOutputAccess(owner)
+
+    if (!isOwnerAbsoluteFilePath(path)) {
+      throw new Error('Model text preview requires its session-resolved path')
+    }
+
+    const result = await hermesApi<HermesReadFileTextResult>({
+      connectionId: owner.connectionId ?? undefined,
+      profile: owner.profile ?? 'default',
+      path: fsPath('read-text', path)
+    })
+
+    check()
+
+    return result
+  }
+
   if (!isDesktopFsRemoteMode()) {
     return bridge().readFileText(path)
   }
@@ -92,7 +123,27 @@ export async function readDesktopFileText(path: string): Promise<HermesReadFileT
 // IPC; remote writes hit the dashboard's POST /api/fs/write-text (same path
 // hardening, parent-must-exist, size cap) so the editor behaves identically in
 // both modes. Stale-on-disk detection is the caller's job (re-read before save).
-export async function writeDesktopFileText(path: string, content: string): Promise<{ path: string }> {
+export async function writeDesktopFileText(
+  path: string,
+  content: string,
+  owner?: SandboxOwner
+): Promise<{ path: string }> {
+  if (owner) {
+    const check = await confirmModelOutputAccess(owner)
+
+    const result = await hermesApi<{ path?: string }>({
+      connectionId: owner.connectionId ?? undefined,
+      profile: owner.profile ?? 'default',
+      path: '/api/fs/write-text',
+      method: 'POST',
+      body: { path, content }
+    })
+
+    check()
+
+    return { path: result.path || path }
+  }
+
   const desktop = bridge()
 
   if (!isDesktopFsRemoteMode()) {
@@ -108,7 +159,30 @@ export async function writeDesktopFileText(path: string, content: string): Promi
   return { path: result.path || path }
 }
 
-export async function readDesktopFileDataUrl(path: string): Promise<string> {
+export async function readDesktopFileDataUrl(path: string, owner?: SandboxOwner | null): Promise<string> {
+  if (owner !== undefined) {
+    if (!owner) {
+      throw new Error('Model output owner is unknown')
+    }
+
+    const check = await confirmModelOutputAccess(owner)
+
+    if (!owner.sessionId && !isOwnerAbsoluteFilePath(path)) {
+      throw new Error('Relative model output requires a proven session')
+    }
+
+    const result = await hermesApi<string | { dataUrl?: string }>({
+      connectionId: owner.connectionId ?? undefined,
+      profile: owner.profile ?? 'default',
+      path:
+        fsPath('read-data-url', path) + (owner.sessionId ? `&session_id=${encodeURIComponent(owner.sessionId)}` : '')
+    })
+
+    check()
+
+    return typeof result === 'string' ? result : result.dataUrl || ''
+  }
+
   if (!isDesktopFsRemoteMode()) {
     return bridge().readFileDataUrl(path)
   }
@@ -141,7 +215,21 @@ export async function readDesktopFileDataUrlLocalFirst(path: string): Promise<st
   return readDesktopFileDataUrl(path)
 }
 
-export async function desktopGitRoot(path: string): Promise<string | null> {
+export async function desktopGitRoot(path: string, owner?: SandboxOwner): Promise<string | null> {
+  if (owner) {
+    const check = await confirmModelOutputAccess(owner)
+
+    const result = await hermesApi<{ root: string | null }>({
+      connectionId: owner.connectionId ?? undefined,
+      profile: owner.profile ?? 'default',
+      path: fsPath('git-root', path)
+    })
+
+    check()
+
+    return result.root
+  }
+
   const desktop = bridge()
 
   if (!isDesktopFsRemoteMode()) {
@@ -200,7 +288,21 @@ export async function copyTextToClipboard(text: string): Promise<void> {
 
 // Working-tree-vs-HEAD diff for one file. Empty when unchanged / not a repo.
 // Remote gateway → backend git (/api/git/file-diff); local → Electron git.
-export async function desktopFileDiff(repoRoot: string, filePath: string): Promise<string> {
+export async function desktopFileDiff(repoRoot: string, filePath: string, owner?: SandboxOwner): Promise<string> {
+  if (owner) {
+    const check = await confirmModelOutputAccess(owner)
+
+    const result = await hermesApi<{ diff: string }>({
+      connectionId: owner.connectionId ?? undefined,
+      profile: owner.profile ?? 'default',
+      path: `/api/git/file-diff?path=${encodeURIComponent(repoRoot)}&file=${encodeURIComponent(filePath)}`
+    })
+
+    check()
+
+    return result.diff || ''
+  }
+
   if (isDesktopFsRemoteMode()) {
     const result = await remoteFsApi<{ diff: string }>(
       `/api/git/file-diff?path=${encodeURIComponent(repoRoot)}&file=${encodeURIComponent(filePath)}`

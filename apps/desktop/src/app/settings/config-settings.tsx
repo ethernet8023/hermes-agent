@@ -4,6 +4,7 @@ import type { ChangeEvent, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 
+import { useSettingsSandboxOwner } from '@/app/chat/composer/use-sandbox-owner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getElevenLabsVoices, getHermesConfigSchema, saveHermesConfig } from '@/hermes'
@@ -97,6 +98,7 @@ function ConfigSettingsInner({
   importInputRef,
   scopeProfile
 }: ConfigSettingsProps & { scopeProfile: string | undefined }) {
+  const sandboxOwner = useSettingsSandboxOwner(scopeProfile)
   const { t } = useI18n()
   const c = t.settings.config
   const keepAwake = useStore($keepAwake)
@@ -458,7 +460,7 @@ function ConfigSettingsInner({
           where image-attachment behavior already lives, so this sits above the
           schema fields for that section. */}
       {showAttachments ? <AttachmentSizeSetting /> : null}
-      {activeSectionId === 'safety' ? <SandboxPanel workspace={currentCwd || undefined} /> : null}
+      {activeSectionId === 'safety' ? <SandboxPanel owner={sandboxOwner} /> : null}
       {showEmptyState ? (
         <EmptyState description={c.emptyDesc} title={c.emptyTitle} />
       ) : visibleFields.length === 0 ? null : (

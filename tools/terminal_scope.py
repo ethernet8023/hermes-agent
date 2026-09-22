@@ -11,6 +11,7 @@ profile's COMPLETE ``TERMINAL_*`` policy; while bound, ``terminal_env`` resolves
 from __future__ import annotations
 
 import logging
+import json
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # None = no scope bound (process-env behavior); dict = complete policy; Refusal = resolution failed.
 _terminal_scope_var: ContextVar = ContextVar("hermes_terminal_scope", default=None)
+_read_snapshot: ContextVar = ContextVar("hermes_terminal_read_snapshot", default=None)
 
 # Keys whose default lives in terminal_tool.py, not DEFAULT_CONFIG (which wins on overlap);
 # without them the projection is not total.
@@ -34,6 +36,15 @@ _TOOL_LEVEL_DEFAULTS: Dict[str, Any] = {
 
 class TerminalPolicyUnavailable(Exception):
     """The routed profile's ``.env``/``config.yaml`` exists but cannot be read/parsed."""
+
+
+class ProfileTerminalScope(dict):
+    """A profile binding, not a turn-lifetime snapshot of its execution authority."""
+
+    def __init__(self, home, env_overlay=None):
+        super().__init__()
+        self.home = Path(home)
+        self.env_overlay = dict(env_overlay or {})
 
 
 class TerminalPolicyRefusal(Dict[str, str]):
@@ -78,16 +89,73 @@ def terminal_env(name: str, default: str = "") -> str:
     No scope: process env, then *default*. Refusal scope: raise. Policy scope: ONLY the
     policy; a missing key yields *default*, never os.environ.
     """
-    scope = _terminal_scope_var.get()
+    scope = _read_snapshot.get()
     if scope is None:
-        return os.environ.get(name, default)
-    enforce_no_refusal()
+        scope = _live_terminal_scope()
     value = scope.get(name)
     return default if value is None else str(value)
 
 
+def _live_terminal_scope() -> dict:
+    enforce_no_refusal()
+    scope = _terminal_scope_var.get()
+    if isinstance(scope, ProfileTerminalScope):
+        from hermes_constants import get_hermes_home_override
+        override = get_hermes_home_override()
+        if override is not None and Path(override).resolve() != scope.home.resolve():
+            return build_profile_terminal_scope(override)
+        return build_profile_terminal_scope(scope.home, env_overlay=scope.env_overlay)
+    if scope is not None:
+        values = dict(scope)
+        _validate_policy_values(values)
+        return values
+    from hermes_constants import get_hermes_home, get_hermes_home_override
+    # A home-only control-plane scope must never borrow the launch environment.
+    overlay = None if get_hermes_home_override() is not None else os.environ
+    return build_profile_terminal_scope(get_hermes_home(), env_overlay=overlay, resolve_cwd=False)
+
+
+@contextmanager
+def terminal_config_snapshot():
+    """One consistent read for the terminal config parser; never turn-lifetime."""
+    if _read_snapshot.get() is not None:
+        yield
+        return
+    token = _read_snapshot.set(_live_terminal_scope())
+    try:
+        yield
+    finally:
+        _read_snapshot.reset(token)
+
+
+def get_live_terminal_config() -> dict:
+    """Strict effective terminal settings for the active profile (config-name keys).
+
+    Shares the execution reader; explicit false/empty values remain authoritative.
+    Legacy env-only launches are overlays only for their own launch profile.
+    """
+    from hermes_cli.config import TERMINAL_CONFIG_ENV_MAP
+    values = _read_snapshot.get()
+    if values is None:
+        values = _live_terminal_scope()
+    result = {key: values[var] for key, var in TERMINAL_CONFIG_ENV_MAP.items() if var in values}
+    for key in ("mxc_readwrite_paths", "mxc_readonly_paths"):
+        if key in result:
+            try:
+                result[key] = json.loads(result[key])
+            except (ValueError, TypeError):
+                # Inactive backend settings are inert, not a reason to disable
+                # unrelated tools. Active policy was validated by the reader.
+                pass
+    for key in ("mxc_network", "mxc_debug"):
+        if key in result and result[key].lower() in {"true", "false", "0", "1", "yes", "no"}:
+            result[key] = result[key].lower() in {"true", "1", "yes"}
+    return result
+
+
 def build_profile_terminal_scope(
-    hermes_home: "Any", *, env_overlay: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    hermes_home: "Any", *, env_overlay: Optional[Dict[str, str]] = None,
+    resolve_cwd: bool = True) -> Dict[str, str]:
     """Build the COMPLETE effective ``TERMINAL_*`` policy for a profile home.
 
     Projection: ``DEFAULT_CONFIG['terminal']`` <- profile ``.env`` TERMINAL_* <- *env_overlay*
@@ -102,11 +170,12 @@ def build_profile_terminal_scope(
     closes. It sits where the process env sits in the standalone bridge — explicit YAML keys
     still win (``apply_terminal_config_to_env``).
     """
-    from hermes_cli.config import TERMINAL_CONFIG_ENV_MAP, _terminal_env_value
+    from hermes_cli.config import TERMINAL_CONFIG_ENV_MAP, _terminal_env_value, _expand_env_vars, _deep_merge
     from hermes_cli.config_defaults import DEFAULT_CONFIG
+    from hermes_cli.managed_scope import get_managed_dir
 
     home = Path(hermes_home)
-    scope: Dict[str, str] = {}
+    scope: Dict[str, str] = ProfileTerminalScope(home, env_overlay)
 
     def _apply(mapping: Dict[str, Any]) -> None:
         for cfg_key, value in mapping.items():
@@ -135,27 +204,65 @@ def build_profile_terminal_scope(
                      if k.startswith("TERMINAL_"))
     if env_overlay:
         scope.update((k, str(v)) for k, v in env_overlay.items() if k.startswith("TERMINAL_"))
-    # Read config.yaml directly, not via read_raw_config() (which collapses "missing" and
-    # "unparseable" into {}): present-but-unparseable must fail closed.
-    config_path = home / "config.yaml"
-    try:
-        config_exists = config_path.exists()
-    except Exception as exc:
-        raise TerminalPolicyUnavailable(f"cannot resolve terminal config in {home}: {exc}") from exc
-    if config_exists:
-        from hermes_cli.config import fast_safe_load
-
-        try:
-            # utf-8-sig: tolerate a BOM in Windows-authored profile config.yaml (#pm).
-            with open(config_path, encoding="utf-8-sig") as f:
-                raw = fast_safe_load(f)
-        except Exception as exc:
-            raise TerminalPolicyUnavailable(f"cannot parse {config_path}: {exc}") from exc
-        raw_terminal = raw.get("terminal") if isinstance(raw, dict) else None
-        if isinstance(raw_terminal, dict):
-            _apply(raw_terminal)
-    _resolve_scope_cwd_placeholder(scope)
+    # Use the effective loader's expansion and managed-leaf precedence, but
+    # never its last-known-good/default fallback for an unreadable authority.
+    raw_terminal = _read_terminal_authority(home / "config.yaml")
+    terminal = _expand_env_vars(raw_terminal)
+    managed_dir = get_managed_dir()
+    if managed_dir is not None:
+        terminal = _deep_merge(terminal, _expand_env_vars(
+            _read_terminal_authority(managed_dir / "config.yaml")))
+    if str(terminal.get("backend", scope.get("TERMINAL_ENV", "local"))).strip().lower() == "mxc":
+        for key, expected in (("mxc_network", bool), ("mxc_debug", bool),
+                              ("mxc_readwrite_paths", list), ("mxc_readonly_paths", list)):
+            if key in terminal and not isinstance(terminal[key], expected):
+                raise TerminalPolicyUnavailable(f"terminal.{key} must be a {expected.__name__}")
+    _apply(terminal)
+    _validate_policy_values(scope)
+    if resolve_cwd:
+        _resolve_scope_cwd_placeholder(scope)
     return scope
+
+
+def _read_terminal_authority(config_path: Path) -> dict:
+    """Read explicit keys only; missing files differ from invalid authority."""
+    try:
+        from hermes_cli.config import fast_safe_load
+        with open(config_path, encoding="utf-8-sig") as f:
+            raw = fast_safe_load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        raise TerminalPolicyUnavailable(f"cannot parse {config_path}: {exc}") from exc
+    if raw is not None and not isinstance(raw, dict):
+        raise TerminalPolicyUnavailable(f"{config_path} must contain a mapping")
+    terminal = (raw or {}).get("terminal", {})
+    if not isinstance(terminal, dict):
+        raise TerminalPolicyUnavailable("terminal must be a mapping")
+    if "backend" in terminal:
+        backend = terminal["backend"]
+        if not isinstance(backend, str) or not backend.strip():
+            raise TerminalPolicyUnavailable("terminal.backend must be a nonempty name")
+    return terminal
+
+
+def _validate_policy_values(scope: dict) -> None:
+    backend = scope.get("TERMINAL_ENV", "local")
+    if not isinstance(backend, str) or not backend.strip():
+        raise TerminalPolicyUnavailable("terminal.backend must be a nonempty name")
+    scope["TERMINAL_ENV"] = backend.strip().lower()
+    if scope["TERMINAL_ENV"] != "mxc":
+        return
+    for name in ("TERMINAL_MXC_READWRITE_PATHS", "TERMINAL_MXC_READONLY_PATHS"):
+        try:
+            paths = json.loads(scope.get(name, "[]"))
+        except (ValueError, TypeError) as exc:
+            raise TerminalPolicyUnavailable(f"{name} must be a JSON path list") from exc
+        if not isinstance(paths, list) or any(not isinstance(p, str) or not p.strip() for p in paths):
+            raise TerminalPolicyUnavailable(f"{name} must be a path list")
+    for name in ("TERMINAL_MXC_NETWORK", "TERMINAL_MXC_DEBUG"):
+        if scope.get(name, "false").lower() not in {"true", "false", "0", "1", "yes", "no"}:
+            raise TerminalPolicyUnavailable(f"{name} must be a boolean")
 
 
 def _resolve_scope_cwd_placeholder(scope: Dict[str, str]) -> None:

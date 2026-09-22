@@ -418,6 +418,8 @@ export function getSession(id: string, profile?: ProfileScope): Promise<SessionI
 
   return hermesApi<SessionInfo>({
     ...sessionScoped(profile),
+    // An object scope is an owner pin, including the legacy primary route.
+    ...(profile && typeof profile === 'object' ? { connectionId: profile.connectionId ?? undefined } : {}),
     path: `/api/sessions/${encodeURIComponent(id)}${suffix}`
   })
 }

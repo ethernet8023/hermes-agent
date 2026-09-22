@@ -13,6 +13,8 @@ import {
   type TranscriptParagraphSegment
 } from '@/lib/transcript-directives'
 
+import { InertModelOutput, useModelOutputRestriction } from './model-output-policy'
+
 // B4 reworks the parser; until then the prototype's parser is an onboarding feature.
 const onboardingEnabled = isOnboardingEnabled()
 
@@ -73,6 +75,12 @@ const DirectiveEntry: FC<{
 }
 
 export const TranscriptDirectiveLeaf: FC<{ text: string; streaming?: boolean }> = ({ text, streaming }) => {
+  const restriction = useModelOutputRestriction()
+
+  return restriction ? <InertModelOutput reason={restriction} target={text} /> : <ActiveTranscriptDirectiveLeaf streaming={streaming} text={text} />
+}
+
+const ActiveTranscriptDirectiveLeaf: FC<{ text: string; streaming?: boolean }> = ({ text, streaming }) => {
   const contributions = useContributions(TRANSCRIPT_DIRECTIVE_AREA)
 
   const segments = useMemo<TranscriptParagraphSegment[] | null>(() => {

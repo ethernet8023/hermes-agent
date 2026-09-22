@@ -1,13 +1,30 @@
 import type { SandboxGrantMode, SandboxStatus } from '@/types/hermes'
 
-import { hermesApi, profileScoped } from './client'
+import { getApiRequestConnection, getApiRequestProfile, hermesApi } from './client'
 
-// Windows sandbox (MXC) policy. Reads and writes both go through the backend's
-// single resolver (config.yaml `terminal.*`), so this panel, the CLI and the
-// running agent can never disagree about what is granted. A write applies to
-// the agent's next command; nothing restarts.
+/** Capture once before async work. Null deliberately pins the legacy primary route. */
+export interface SandboxOwner {
+  connectionId: string | null
+  profile: string | null
+  /** Optional proven transcript identity for session-relative model files. */
+  sessionId?: string
+}
+
+export function currentSandboxOwner(profile = getApiRequestProfile()): SandboxOwner {
+  return { connectionId: getApiRequestConnection(), profile }
+}
+
+export function sandboxOwnerKey(owner: SandboxOwner): string {
+  return JSON.stringify([owner.connectionId, owner.profile ?? 'default'])
+}
+
+const scoped = (owner: SandboxOwner) => ({
+  connectionId: owner.connectionId ?? undefined,
+  profile: owner.profile ?? undefined
+})
 
 export function getSandboxStatus(
+  owner: SandboxOwner,
   options: { provision?: boolean; refresh?: boolean; workspace?: string } = {}
 ): Promise<SandboxStatus> {
   const params = new URLSearchParams()
@@ -26,10 +43,7 @@ export function getSandboxStatus(
 
   const query = params.toString()
 
-  return hermesApi<SandboxStatus>({
-    ...profileScoped(),
-    path: `/api/sandbox/status${query ? `?${query}` : ''}`
-  })
+  return hermesApi<SandboxStatus>({ ...scoped(owner), path: `/api/sandbox/status${query ? `?${query}` : ''}` })
 }
 
 export interface SandboxPolicyUpdate {
@@ -39,39 +53,35 @@ export interface SandboxPolicyUpdate {
   network?: boolean
 }
 
-export function updateSandboxPolicy(update: SandboxPolicyUpdate): Promise<SandboxStatus> {
-  return hermesApi<SandboxStatus>({
-    ...profileScoped(),
-    path: '/api/sandbox/policy',
-    method: 'POST',
-    body: update
+export function updateSandboxPolicy(update: SandboxPolicyUpdate, owner: SandboxOwner): Promise<SandboxStatus> {
+  return hermesApi<SandboxStatus>({ ...scoped(owner), path: '/api/sandbox/policy', method: 'POST', body: update })
+}
+
+export interface SandboxGrantTarget {
+  target: string
+  recursive: true
+}
+
+export function getSandboxGrantTarget(path: string, owner: SandboxOwner): Promise<SandboxGrantTarget> {
+  return hermesApi<SandboxGrantTarget>({
+    ...scoped(owner),
+    path: `/api/sandbox/grant-target?${new URLSearchParams({ path })}`
   })
 }
 
 export function grantSandboxPath(
   path: string,
-  mode: SandboxGrantMode
+  mode: SandboxGrantMode,
+  owner: SandboxOwner
 ): Promise<SandboxStatus & { granted: string; mode: SandboxGrantMode }> {
-  return hermesApi<SandboxStatus & { granted: string; mode: SandboxGrantMode }>({
-    ...profileScoped(),
+  return hermesApi({
+    ...scoped(owner),
     path: '/api/sandbox/grant',
     method: 'POST',
-    body: { path, mode }
+    body: { path, mode, expected_target: path }
   })
 }
 
-export interface SandboxPrepareResult extends SandboxStatus {
-  prepared: string[]
-  needs_admin: string[]
-  admin_command: string
-  errors: string[]
-}
-
-export function prepareSandboxWorkspace(path?: string): Promise<SandboxPrepareResult> {
-  return hermesApi<SandboxPrepareResult>({
-    ...profileScoped(),
-    path: '/api/sandbox/prepare',
-    method: 'POST',
-    body: path ? { path } : {}
-  })
+export function revokeSandboxPath(path: string, owner: SandboxOwner): Promise<SandboxStatus> {
+  return hermesApi({ ...scoped(owner), path: '/api/sandbox/grant', method: 'DELETE', body: { path } })
 }

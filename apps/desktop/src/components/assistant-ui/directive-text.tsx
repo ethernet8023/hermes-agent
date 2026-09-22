@@ -5,6 +5,7 @@ import type { TextMessagePartComponent, TextMessagePartProps } from '@assistant-
 import type { FC } from 'react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 
+import type { SandboxOwner } from '@/api/sandbox'
 import { ZoomableImage } from '@/components/chat/zoomable-image'
 import type { I18nContextValue } from '@/i18n'
 import { extractEmbeddedImages } from '@/lib/embedded-images'
@@ -517,8 +518,9 @@ export const SessionRefChip: FC<{
 export const SessionRefLink: FC<{
   label?: string
   value: string
-}> = ({ label, value }) => {
-  const resolved = useSessionLinkTitle(value, label)
+  owner: SandboxOwner | null
+}> = ({ label, value, owner }) => {
+  const resolved = useSessionLinkTitle(value, label, owner)
 
   return (
     <a

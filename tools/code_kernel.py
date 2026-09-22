@@ -306,7 +306,11 @@ class SessionKernel:
     """One live kernel process plus its RPC server and reader threads."""
 
     def __init__(self, key: Tuple):
+        from hermes_constants import hermes_home_key
+        self.profile_home = hermes_home_key()
         self.key, self.owner, self.lock = key, key[0], threading.Lock()
+        self.retirement_lock = threading.RLock()
+        self.retiring = False
         self.proc: Optional[subprocess.Popen] = None
         self.tmpdir = self.rpc_token = self.sentinel = ""
         self.sock_path: Optional[str] = None
@@ -337,6 +341,8 @@ class SessionKernel:
 
     def teardown(self) -> None:
         self.stop_event.set()
+        if self.cell_authority is not None:
+            self.cell_authority.retire()
         if self.death_pipe_w is not None:
             try:
                 os.close(self.death_pipe_w)
@@ -346,6 +352,8 @@ class SessionKernel:
         if self.alive():
             from tools.code_execution_tool import _kill_process_group
             _kill_process_group(self.proc, escalate=True)
+            if self.alive():
+                raise RuntimeError("Session kernel did not terminate")
         sock, self.server_sock = self.server_sock, None
         try:
             if sock is not None:
@@ -360,8 +368,10 @@ class SessionKernel:
 
 
 class KernelRegistry:
-    """Key -> kernel map plus its lock (shared with the remote registry). Kernels are popped
-    under the lock and torn down outside it — teardown may block on the child or the transport."""
+    """Retain every kernel until teardown succeeds, including failed retirements.
+
+    Teardown runs outside the map lock; retiring entries cannot be acquired.
+    """
 
     def __init__(self, teardown: Callable[[Any], None]):
         self.kernels: Dict[Tuple, Any] = {}
@@ -371,19 +381,25 @@ class KernelRegistry:
         """Tear down every kernel, every kernel one owner (key[0]) holds, or every kernel whose owner
         satisfies ``owner_matches``."""
         with self.lock:
-            doomed = [self.kernels.pop(key) for key in list(self.kernels)
+            doomed = [(key, kernel) for key, kernel in self.kernels.items()
                       if (owner is None and owner_matches is None) or key[0] == owner
                       or (owner_matches is not None and owner_matches(key[0]))]
-        for kernel in doomed:
-            self._teardown(kernel)
+        for key, kernel in doomed:
+            self.discard(key, kernel)
 
     def discard(self, key: Tuple, kernel: Any) -> None:
-        """Drop *kernel*'s registry entry (only if it is still the one registered under *key* —
-        never a replacement) and tear the kernel down."""
-        with self.lock:
-            if self.kernels.get(key) is kernel:
-                self.kernels.pop(key, None)
-        self._teardown(kernel)
+        """Retire first; remove only the exact entry whose teardown succeeded."""
+        from tools.terminal_policy_lifecycle import _profile_lock
+        # Match reconciliation's lock order. A remote teardown may execute
+        # through the policy guard; taking the kernel lock first deadlocks a
+        # concurrent profile transition waiting to retire that same kernel.
+        with _profile_lock(kernel.profile_home), kernel.retirement_lock:
+            with self.lock:
+                kernel.retiring = True
+            self._teardown(kernel)
+            with self.lock:
+                if self.kernels.get(key) is kernel:
+                    self.kernels.pop(key)
 
 
 _REGISTRY = KernelRegistry(lambda kernel: kernel.teardown())
@@ -664,32 +680,45 @@ def _pop_idle_expired(now: float, idle_timeout: float) -> List[SessionKernel]:
 
 
 def _acquire_kernel(key: Tuple, reset: bool, *, pinned: bool = False) -> Tuple[SessionKernel, bool]:
-    """Look up or register the kernel for *key*; returns (kernel, state_reset). Every entry also
-    sweeps idle-expired kernels and enforces the process-wide LRU cap (doomed kernels are popped
-    under the lock, torn down outside it), so a long-lived host stays bounded. ``pinned`` kernels
-    (live delegate_task children) are exempt from the cap: their lifetime is the child's, ended by
-    ``shutdown_kernels_for_delegated_child``, so the cap has nothing to bound for them."""
+    """Acquire only after owner-local reset/reaping has confirmed retirement."""
+    from tools.terminal_policy_lifecycle import terminal_policy_guard
+    with terminal_policy_guard() as (owner, _):
+        return _acquire_kernel_owned(key, reset, pinned=pinned, owner=owner)
+
+
+def _acquire_kernel_owned(key: Tuple, reset: bool, *, pinned: bool, owner: str):
     cap, idle_timeout = _lifecycle_limits()
     with _REGISTRY.lock:
-        expired = _pop_idle_expired(time.monotonic(), idle_timeout)
+        now = time.monotonic()
+        expired = _pop_idle_expired(now, idle_timeout)
         kernel = _KERNELS.get(key)
         state_reset = kernel is not None and (reset or kernel.dead())
+        if kernel is not None and kernel.retiring and not reset:
+            raise RuntimeError("Session kernel retirement is incomplete; retry reset to finish cleanup")
+        if state_reset and kernel.attached:
+            raise RuntimeError("Cannot reset a kernel with active cells; wait for them to finish")
+        expired = {k: v for k, v in _KERNELS.items()
+                   if v.profile_home == owner and v.attached == 0
+                   and now - v.last_used > idle_timeout}
         if state_reset:
-            dropped = _KERNELS.pop(key)
-            if dropped.attached == 0:
-                expired.append(dropped)
-            kernel = None
+            expired[key] = kernel
+        unpinned = [k for k, v in _KERNELS.items()
+                    if v.profile_home == owner and not v.pinned and k not in expired]
+        needed = max(0, len(unpinned) + int(key not in unpinned and not pinned) - cap)
+        by_age = sorted((k for k in unpinned if k != key and _KERNELS[k].attached == 0),
+                        key=lambda k: _KERNELS[k].last_used)
+        expired.update((k, _KERNELS[k]) for k in by_age[:needed])
+        for doomed in expired.values():
+            doomed.retiring = True
+    for doomed_key, doomed in expired.items():
+        _REGISTRY.discard(doomed_key, doomed)
+    with _REGISTRY.lock:
+        kernel = _KERNELS.get(key)
         if kernel is None:
             kernel = _KERNELS[key] = SessionKernel(key)
             kernel.pinned = pinned
         kernel.last_used = time.monotonic()
         kernel.attached += 1
-        unpinned = [k for k in _KERNELS if not _KERNELS[k].pinned]
-        by_age = sorted((k for k in unpinned if k != key and _KERNELS[k].attached == 0),
-                        key=lambda k: _KERNELS[k].last_used)
-        expired.extend(_KERNELS.pop(k) for k in by_age[: max(0, len(unpinned) - cap)])
-    for doomed in expired:
-        doomed.teardown()
     return kernel, state_reset
 
 
@@ -848,7 +877,8 @@ def execute_in_session_kernel(
 ) -> str:
     """Run one cell in the (owner, mode, python, cwd, tools) session kernel. The owner is the
     session key (``_resolve_owner``), not the per-turn task id, so state survives across turns."""
-    key = (_resolve_owner(task_id) or "", mode, child_python, child_cwd, tuple(sorted(sandbox_tools)))
+    from hermes_constants import hermes_home_key
+    key = (_resolve_owner(task_id) or "", mode, child_python, child_cwd, hermes_home_key(), tuple(sorted(sandbox_tools)))
     exec_start = time.monotonic()
     from agent.delegation_context import is_delegated_child_context
     kernel, state_reset = _acquire_kernel(key, reset, pinned=is_delegated_child_context())
@@ -876,16 +906,23 @@ def _run_cell(kernel: SessionKernel, key: Tuple, code: str, *, task_id: str, chi
     authority = CellAuthority(task_id)
     with kernel.lock:
         try:
-            if kernel.proc is None:
-                _spawn(kernel, task_id=task_id, child_python=child_python, child_cwd=child_cwd,
-                       sandbox_tools=sandbox_tools, max_tool_calls=max_tool_calls)
-            assert kernel.proc is not None and kernel.proc.stdin is not None
-            # Per-cell tool budget: the RPC loop enforces counter < max; reset without restarting.
-            kernel.tool_call_counter[0] = 0
-            kernel.raw.drain(), kernel.stderr.drain()  # raw output leaked between cells belongs to no cell
-            kernel.cell_authority = authority
-            kernel.proc.stdin.write((json.dumps({"id": uuid.uuid4().hex, "code": code}) + "\n").encode("utf-8"))
-            kernel.proc.stdin.flush()
+            from tools.terminal_policy_lifecycle import terminal_policy_guard
+            from tools.terminal_scope import get_live_terminal_config, TerminalPolicyUnavailable
+            with terminal_policy_guard() as (owner, _):
+                if (kernel.stop_event.is_set() or kernel.profile_home != owner
+                        or get_live_terminal_config()["backend"] == "mxc"):
+                    raise TerminalPolicyUnavailable("Host kernel retired or unavailable under the current terminal policy")
+                if kernel.proc is None:
+                    _spawn(kernel, task_id=task_id, child_python=child_python, child_cwd=child_cwd,
+                           sandbox_tools=sandbox_tools, max_tool_calls=max_tool_calls)
+                assert kernel.proc is not None and kernel.proc.stdin is not None
+                # Publish a cell while holding the retirement barrier; wait outside
+                # it so a policy write can kill a running host interpreter.
+                kernel.tool_call_counter[0] = 0
+                kernel.raw.drain(), kernel.stderr.drain()
+                kernel.cell_authority = authority
+                kernel.proc.stdin.write((json.dumps({"id": uuid.uuid4().hex, "code": code}) + "\n").encode("utf-8"))
+                kernel.proc.stdin.flush()
             status, payload = _await_cell(kernel, timeout, is_interrupted)
             result = _cell_result(
                 kernel, key, status, payload,

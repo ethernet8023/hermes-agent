@@ -1,7 +1,9 @@
 import { useCallback, useState } from 'react'
 
+import type { SandboxOwner } from '@/api/sandbox'
 import { useI18n } from '@/i18n'
 import { notify, notifyError } from '@/store/notifications'
+import { confirmModelOutputAccess } from '@/store/sandbox'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/bmp': '.bmp',
@@ -72,7 +74,7 @@ async function startBrowserDownload(src: string) {
 
 /** Save an image to disk via the desktop IPC bridge, falling back to a browser
  *  download when the handler is unavailable (older shell / web preview). */
-export function useImageDownload(src?: string) {
+export function useImageDownload(src?: string, owner?: SandboxOwner | null) {
   const { t } = useI18n()
   const copy = t.desktop
   const [saving, setSaving] = useState(false)
@@ -85,6 +87,10 @@ export function useImageDownload(src?: string) {
     setSaving(true)
 
     try {
+      if (owner !== undefined) {
+        await confirmModelOutputAccess(owner)
+      }
+
       if (window.hermesDesktop?.saveImageFromUrl) {
         if (await window.hermesDesktop.saveImageFromUrl(src)) {
           notify({ kind: 'success', title: copy.imageSaved, message: imageFilename(src) })
@@ -97,6 +103,10 @@ export function useImageDownload(src?: string) {
     } catch (error) {
       if (isMissingIpcHandler(error)) {
         try {
+          if (owner !== undefined) {
+            await confirmModelOutputAccess(owner)
+          }
+
           await startBrowserDownload(src)
           notify({ kind: 'info', title: copy.downloadStarted, message: copy.restartToUseSaveImage })
         } catch (fallbackError) {
@@ -110,7 +120,7 @@ export function useImageDownload(src?: string) {
     } finally {
       setSaving(false)
     }
-  }, [copy, saving, src])
+  }, [copy, saving, src, owner])
 
   return { download, saving }
 }

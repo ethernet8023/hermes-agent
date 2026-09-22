@@ -399,55 +399,13 @@ def _call(tool_name, args):
 # ---- Remote execution support (file-based RPC via terminal backend) ----
 
 def _get_or_create_env(task_id: str):
-    """``(env, env_type)`` — the environment the terminal/file tools share for *task_id*, created on
-    first use (same double-checked per-task lock pattern as file_tools._get_file_ops)."""
-    from tools.terminal_tool_backends import _container_config_from_config, _create_environment, _ssh_config_from_config
-    from tools.terminal_tool import (
-        _active_environments, _env_lock, _get_env_config, _last_activity,
-        _start_cleanup_thread, _creation_locks, _creation_locks_lock, _task_env_overrides,
-        _resolve_container_task_id, _resolve_task_host_cwd, _is_container_backend, _select_image,
-    )
-    effective_task_id = _resolve_container_task_id(task_id)
-    def _cached():
-        with _env_lock:
-            env = _active_environments.get(effective_task_id)
-            if env is not None:
-                _last_activity[effective_task_id] = time.time()
-        return env
-    env = _cached()
-    if env is not None:
-        return env, _get_env_config()["env_type"]
-    with _creation_locks_lock:
-        task_lock = _creation_locks.setdefault(effective_task_id, threading.Lock())
-    with task_lock:
-        env = _cached()
-        if env is not None:
-            return env, _get_env_config()["env_type"]
-        config = _get_env_config()
-        env_type = config["env_type"]
-        overrides = _task_env_overrides.get(effective_task_id, {})
-        container_config = None
-        if _is_container_backend(env_type):
-            # Shared shaper: execute_code's own key subset dropped docker_extra_args / docker_forward_env /
-            # docker_env, so a sandbox created from this path lost the operator's configured settings.
-            container_config = _container_config_from_config(config)
-        logger.info("Creating new %s environment for execute_code task %s...",
-                     env_type, effective_task_id[:8])
-        env = _create_environment(
-            env_type=env_type, image=_select_image(env_type, overrides, config),
-            cwd=overrides.get("cwd") or config["cwd"], timeout=config["timeout"],
-            ssh_config=_ssh_config_from_config(config) if env_type == "ssh" else None,
-            container_config=container_config,
-            local_config={"persistent": config.get("local_persistent", False)} if env_type == "local" else None,
-            task_id=effective_task_id, host_cwd=_resolve_task_host_cwd(config, task_id),
-        )
-        with _env_lock:
-            _active_environments[effective_task_id] = env
-            _last_activity[effective_task_id] = time.time()
-        _start_cleanup_thread()
-        logger.info("%s environment ready for execute_code task %s",
-                     env_type, effective_task_id[:8])
-        return env, env_type
+    """Return the terminal's policy-fenced environment and its actual backend."""
+    from tools.terminal_policy_lifecycle import terminal_policy_guard
+    from tools.terminal_tool import _plan_execution, _acquire_env
+    with terminal_policy_guard():
+        plan = _plan_execution("", task_id=task_id, timeout=None, background=False, _host_local=False)
+        env = _acquire_env(plan, task_id)
+        return env, plan.env_type
 
 
 def _ship_file_to_remote(env, remote_path: str, content: str) -> None:

@@ -76,64 +76,29 @@ class MxcSettings:
     raw: dict = field(default_factory=dict)
 
 
-def _clean_paths(value: Any) -> tuple[str, ...]:
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, (list, tuple)):
-        return ()
-    out: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if text:
-            out.append(os.path.expandvars(os.path.expanduser(text)))
-    return tuple(out)
-
-
 def _terminal_section() -> dict:
-    """The active profile's ``terminal`` config section (empty on any read failure)."""
-    try:
-        from hermes_cli.config import load_config_readonly
-        cfg = load_config_readonly()
-        section = cfg.get("terminal", {}) if isinstance(cfg, dict) else {}
-        return section if isinstance(section, dict) else {}
-    except Exception:
-        logger.debug("mxc: terminal config unavailable", exc_info=True)
-        return {}
+    """The same live, strict authority used by terminal execution."""
+    from tools.terminal_scope import get_live_terminal_config
+    return get_live_terminal_config()
 
 
 def resolve_settings(terminal_cfg: Optional[dict] = None) -> MxcSettings:
-    """Sandbox settings from config.yaml, read fresh so a policy change applies to the
-    next command without restarting anything. Env-bridged ``TERMINAL_MXC_*`` values are
-    the fallback for processes launched with only the env bridge."""
+    """Live profile settings, or an explicitly supplied authoritative configuration.
+
+    The kit and the shell come from the pm store, so this reads only policy.
+    """
     cfg = terminal_cfg if terminal_cfg is not None else _terminal_section()
-
-    def pick(key: str, env_name: str, default: Any) -> Any:
-        # Loaded config carries every default key, so an empty value means "not configured"
-        # and the env bridge is consulted; an explicit False/list still wins over the env.
-        value = cfg.get(key)
-        if value is not None and value != "" and value != []:
-            return value
-        raw = os.environ.get(env_name)
-        if raw is None:
-            return value if value is not None else default
-        if isinstance(default, (list, dict, bool)):
-            try:
-                return json.loads(raw)
-            except ValueError:
-                return raw if not isinstance(default, bool) else raw.strip().lower() in ("1", "true", "yes", "on")
-        return raw
-
-    network = pick("mxc_network", "TERMINAL_MXC_NETWORK", False)
-    if isinstance(network, str):
-        network = network.strip().lower() in ("1", "true", "yes", "on")
+    if not isinstance(cfg, dict):
+        raise ValueError("Terminal policy must be a mapping")
+    for key in ("mxc_network", "mxc_debug"):
+        if key in cfg and not isinstance(cfg[key], bool):
+            raise ValueError(f"terminal.{key} must be a boolean")
+    network = cfg.get("mxc_network", False)
     policy = MxcPolicy(
-        readwrite_paths=_clean_paths(pick("mxc_readwrite_paths", "TERMINAL_MXC_READWRITE_PATHS", [])),
-        readonly_paths=_clean_paths(pick("mxc_readonly_paths", "TERMINAL_MXC_READONLY_PATHS", [])),
+        readwrite_paths=tuple(validate_grant_paths(cfg.get("mxc_readwrite_paths", []), writable=True)),
+        readonly_paths=tuple(validate_grant_paths(cfg.get("mxc_readonly_paths", []), writable=False)),
         network=bool(network))
-    debug = pick("mxc_debug", "TERMINAL_MXC_DEBUG", False)
-    if isinstance(debug, str):
-        debug = debug.strip().lower() in ("1", "true", "yes", "on")
-    return MxcSettings(policy=policy, debug=bool(debug), raw=dict(cfg))
+    return MxcSettings(policy=policy, debug=cfg.get("mxc_debug", False), raw=dict(cfg))
 
 
 # ── wxc-exec discovery and probe ─────────────────────────────────────────────
@@ -212,8 +177,32 @@ def _run_probe_uncached(wxc_exec: str, *, timeout: float) -> dict:
         return {"ok": False, "tier": None, "warnings": [], "probes": {}, "error": f"unreadable probe output: {exc}"}
     tier = data.get("tier")
     probes = data.get("probes") or {}
-    ok = bool(tier) and tier != "none" and bool(probes.get("baseContainerApiPresent") or tier)
-    return {"ok": ok, "tier": tier, "warnings": list(data.get("warnings") or []), "probes": probes, "error": None}
+    result = {"ok": True, "tier": tier, "warnings": list(data.get("warnings") or []), "probes": probes, "error": None}
+    result["error"] = strict_probe_reason(result)
+    result["ok"] = result["error"] is None
+    return result
+
+
+_REQUIRED_UI_CAPABILITIES = (
+    "canBlockClipboardRead", "canBlockClipboardWrite", "canBlockInputInjection",
+    "canBlockInputMethodChanges", "canBlockExternalUiObjects", "canBlockGlobalUiNamespace",
+    "canBlockDesktopSwitching", "canBlockLogoffOrShutdown",
+    "canBlockSystemParameterChanges", "canBlockDisplaySettingsChanges",
+)
+
+
+def strict_probe_reason(probe: dict) -> Optional[str]:
+    """A fallback tier is not the strict filesystem/UI boundary Hermes advertises."""
+    if not probe.get("ok"):
+        return probe.get("error") or "MXC could not verify this host's isolation capabilities."
+    facts = probe.get("probes") or {}
+    if probe.get("tier") != "base-container" or facts.get("baseContainerApiPresent") is not True:
+        return "MXC requires the base-container tier; filesystem/DACL fallback is disabled."
+    ui = facts.get("uiCapabilities") or {}
+    missing = [name for name in _REQUIRED_UI_CAPABILITIES if ui.get(name) is not True]
+    if missing:
+        return "MXC cannot enforce the required UI isolation: " + ", ".join(missing)
+    return None
 
 
 def clear_probe_cache() -> None:
@@ -240,16 +229,8 @@ def ensure_shell(configured: Optional[str] = None, *, download: bool = True) -> 
 
 # ── workspace ancestors ──────────────────────────────────────────────────────
 #
-# A container may only traverse to its granted folders when every ancestor directory is at least
-# discoverable. Python and cmd tolerate unreadable ancestors, but Git for Windows resolves the
-# working directory component by component (a directory query on each ancestor) and fails with
-# "Permission denied" otherwise. The fix is the same one MXC's host prep applies to the drive root:
-# a non-inheriting ACE for the AppContainer SIDs on each ancestor that grants directory listing and
-# attribute reads only. File contents below those folders stay unreadable.
-
-_APPCONTAINER_SIDS = ("*S-1-15-2-1", "*S-1-15-2-2")  # ALL APPLICATION PACKAGES, ALL RESTRICTED APPLICATION PACKAGES
-_ANCESTOR_RIGHTS = "(RD,RA,REA,RC,S)"
-_ANCESTOR_RIGHTS_OK = {"RD", "R", "RX", "M", "F"}  # icacls tokens that include directory listing
+# Ancestor ACL preparation is retired. Keep a refusal for callers of the old API;
+# Hermes must not alter global AppContainer access as a command-side workaround.
 
 
 def workspace_ancestors(path: str) -> list[str]:
@@ -265,130 +246,148 @@ def workspace_ancestors(path: str) -> list[str]:
     return list(reversed(ancestors))
 
 
-def _icacls(*args: str, timeout: float = 15.0) -> subprocess.CompletedProcess:
-    return subprocess.run(["icacls", *args], capture_output=True, text=True, timeout=timeout,
-                          encoding="utf-8", errors="replace", **_hidden_window_kwargs())
-
-
-def _icacls_entries(directory: str) -> Optional[list[tuple[str, set[str]]]]:
-    """``(trustee, rights tokens)`` per ACE line of ``icacls <directory>``, or None when unreadable."""
-    try:
-        completed = _icacls(directory)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if completed.returncode != 0:
-        return None
-    entries: list[tuple[str, set[str]]] = []
-    for raw in completed.stdout.splitlines():
-        line = raw.strip()
-        if ":(" not in line:
-            continue
-        # The first line carries the path before the first ACE; later lines are indented ACEs.
-        if line.lower().startswith(os.path.normpath(directory).lower()):
-            line = line[len(os.path.normpath(directory)):].strip()
-        trustee, _, rights = line.rpartition(":")
-        tokens = {tok.strip().upper() for group in rights.split(")") for tok in group.strip("(").split(",") if tok.strip()}
-        entries.append((trustee.strip(), tokens))
-    return entries
-
-
-def _has_appcontainer_listing(entries: list[tuple[str, set[str]]]) -> bool:
-    return any(("ALL APPLICATION PACKAGES" in trustee.upper() or "S-1-15-2-1" in trustee) and tokens & _ANCESTOR_RIGHTS_OK
-               for trustee, tokens in entries)
-
-
-def _user_can_modify_acl(entries: list[tuple[str, set[str]]]) -> bool:
-    """True when the current user holds Full Control on the folder (Full includes the right to change
-    its permissions); Modify does not, so system folders such as the drive root and C:\\Users report
-    False and are left to an administrator."""
-    user = (os.environ.get("USERNAME") or "").strip().lower()
-    if not user:
-        return False
-    return any(trustee.lower().endswith("\\" + user) and "F" in tokens for trustee, tokens in entries)
-
-
 def ancestor_ready(directory: str) -> Optional[bool]:
-    """Whether *directory* already grants AppContainer processes listing rights (None if unreadable)."""
-    entries = _icacls_entries(directory)
-    if entries is None:
-        return None
-    return _has_appcontainer_listing(entries)
+    """ACL traversal readiness is no longer inferred from locale-dependent listings."""
+    return None
 
 
 def ancestor_readiness(path: str) -> dict:
-    """Readiness of *path*'s ancestors for container traversal, in the shape the desktop panel
-    consumes: ``ready``, the ``missing`` ancestors, the subset that ``needs_admin`` (the current user
-    cannot change their permissions), and the ``admin_command`` that prepares those."""
-    missing: list[str] = []
-    needs_admin: list[str] = []
-    for directory in workspace_ancestors(path):
-        entries = _icacls_entries(directory)
-        if entries is None or _has_appcontainer_listing(entries):
-            continue
-        missing.append(directory)
-        if not _user_can_modify_acl(entries):
-            needs_admin.append(directory)
-    return {"ready": not missing, "missing": missing, "needs_admin": needs_admin,
-            "admin_command": admin_prepare_command(needs_admin) if needs_admin else ""}
+    """Compatibility status: unknown, never a claim that host ACLs are prepared."""
+    return {"ready": False, "missing": [], "needs_admin": [], "admin_command": "",
+            "error": "Ancestor ACL preparation is disabled; traversal readiness is unknown."}
 
 
 def prepare_ancestors(path: str) -> dict:
-    """Add the listing/attributes ACE to every ancestor of *path* that lacks it, without elevation.
-    Returns ``{"prepared": [...], "needs_admin": [...], "errors": {dir: message}}``; directories the
-    current user may not modify (typically the drive root and ``C:\\Users``) land in ``needs_admin``
-    together with the exact command an administrator can run."""
-    prepared: list[str] = []
-    needs_admin: list[str] = []
-    errors: dict[str, str] = {}
-    for directory in ancestor_readiness(path)["missing"]:
-        grants = [f"{sid}:{_ANCESTOR_RIGHTS}" for sid in _APPCONTAINER_SIDS]
-        try:
-            completed = _icacls(directory, "/grant", *grants)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            errors[directory] = str(exc)
-            continue
-        if completed.returncode == 0 and ancestor_ready(directory):
-            prepared.append(directory)
-        else:
-            needs_admin.append(directory)
-    return {"prepared": prepared, "needs_admin": needs_admin, "errors": errors,
-            "admin_command": admin_prepare_command(needs_admin) if needs_admin else ""}
+    """Retired endpoint: never mutate host ACLs."""
+    raise RuntimeError("Ancestor ACL preparation is disabled. See the Windows sandbox documentation for traversal limitations.")
 
 
 def admin_prepare_command(directories: Iterable[str]) -> str:
-    """One elevated-prompt command line that prepares *directories*."""
-    grants = " ".join(f'"{sid}:{_ANCESTOR_RIGHTS}"' for sid in _APPCONTAINER_SIDS)
-    return " && ".join(f'icacls "{d}" /grant {grants}' for d in directories)
+    """No administrator command is generated for the retired ACL workflow."""
+    return ""
+
+
+def _canonical_path(path: str, *, strict: bool = True) -> str:
+    """Resolve filesystem aliases before comparing or publishing authority."""
+    if not isinstance(path, str) or not path.strip() or "\x00" in path:
+        raise ValueError("A grant must name an existing absolute path")
+    expanded = os.path.expandvars(os.path.expanduser(path.strip()))
+    if not os.path.isabs(expanded):
+        raise ValueError(f"A grant must be absolute: {path}")
+    try:
+        resolved = str(Path(expanded).resolve(strict=strict))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(f"Cannot resolve grant path {path}: {exc}") from exc
+    # realpath resolves junctions and 8.3 aliases; strip the Win32 extended prefix
+    # only afterwards so the identity comparison uses one spelling.
+    if resolved.startswith("\\\\?\\UNC\\"):
+        resolved = "\\\\" + resolved[8:]
+    elif resolved.startswith("\\\\?\\"):
+        resolved = resolved[4:]
+    return os.path.normpath(resolved)
+
+
+def _overlaps(left: str, right: str) -> bool:
+    left, right = os.path.normcase(left), os.path.normcase(right)
+    try:
+        return os.path.commonpath([left, right]) in (left, right)
+    except ValueError:
+        return False
+
+
+def _trusted_runtime_path(path: str) -> str:
+    """Internal exceptions cannot be redirected into another protected subtree."""
+    canonical = _canonical_path(path)
+    if (os.path.normcase(canonical) != os.path.normcase(os.path.abspath(path))
+            and _protected_path_reason(canonical)):
+        raise ValueError(f"Internal runtime path is an alias, not an authorized protected exception: {path}")
+    return canonical
+
+
+def _protected_path_reason(path: str) -> Optional[str]:
+    home = _canonical_path(os.path.expanduser("~"), strict=False)
+    if os.path.dirname(path) == path:
+        return f"The sandbox grant would be the drive root ({path})."
+    if os.path.normcase(path) == os.path.normcase(home):
+        return f"The sandbox grant would be your home folder ({path})."
+    install = _canonical_path(str(Path(__file__).resolve().parents[2]))
+    if _overlaps(path, install):
+        return f"The sandbox grant overlaps Hermes's own program files ({install}). Work in a separate clone."
+    for canonical in _protected_data_roots():
+        if _overlaps(path, canonical):
+            return f"The sandbox grant overlaps Hermes's own data directory ({canonical}), including credentials."
+    user_data = os.environ.get("HERMES_DESKTOP_USER_DATA")
+    if user_data and _overlaps(path, _canonical_path(user_data, strict=False)):
+        return "The sandbox grant overlaps protected desktop data and credentials."
+    return None
+
+
+def _protected_data_roots() -> list[str]:
+    from hermes_constants import (get_hermes_home, get_process_hermes_home, get_default_hermes_root,
+                                  _get_platform_default_hermes_home)
+    return [_canonical_path(str(root), strict=False) for root in
+            (get_hermes_home(), get_process_hermes_home(), get_default_hermes_root(),
+             _get_platform_default_hermes_home())]
+
+
+def _shell_runtime_path(shell: str) -> str:
+    # A configured shell grants the executable only, never an arbitrary protected
+    # descendant disguised as a runtime. The pinned shell in the pm store is an
+    # explicit exception to user-grant validation, checked for reparse redirection
+    # as well.
+    shell = _trusted_runtime_path(shell)
+    if os.path.normcase(shell) in _store_shell_paths():
+        return shell
+    return validate_grant_paths([shell], writable=False)[0]
+
+
+def _store_shell_paths() -> set[str]:
+    """Every pinned busybox copy the store may hold, payload and writable."""
+    try:
+        from pm.paths import lockfile_path, store_root, writable_store_root
+        from pm.registry import get_package
+        from pm.store import current_target
+        from pm.lock import Lockfile
+
+        package = get_package("busybox")
+        target = current_target()
+        version = Lockfile(lockfile_path()).version("busybox")
+        if not version or package.missing_reason(target):
+            return set()
+        return {os.path.normcase(str(root / package.store_entry(version, target) / "busybox-sh.exe"))
+                for root in dict.fromkeys((store_root(), writable_store_root()))}
+    except Exception:
+        return set()
+
+
+def validate_grant_paths(paths, *, writable: bool) -> list[str]:
+    """Validate user authority, never internal runtime/scratch exceptions.
+
+    Both read and write grants exclude protected roots and their ancestors and
+    descendants. Return canonical existing paths; malformed entries fail closed.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise ValueError("Sandbox grant paths must be a list")
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in paths:
+        path = _canonical_path(raw)
+        reason = _protected_path_reason(path)
+        if reason:
+            raise ValueError(reason)
+        key = os.path.normcase(path)
+        if key not in seen:
+            seen.add(key)
+            result.append(path)
+    return result
 
 
 def unsafe_workspace_reason(workspace: str) -> Optional[str]:
-    """Why *workspace* must not become a sandbox's read/write root, or None when it is fine.
-
-    A grant covers everything beneath the folder, so the drive root, the user profile, any
-    folder that contains Hermes's own home (config, credentials, sessions) and any folder that
-    contains Hermes's own program files would hand the sandbox the very things it exists to
-    protect: the user's data, and the code enforcing the policy."""
-    root = os.path.normpath(workspace)
-    drive, tail = os.path.splitdrive(root)
-    if tail in ("\\", "/", ""):
-        return f"The sandbox workspace would be the drive root ({root}). Point terminal.cwd at a project folder."
-    home = os.path.normpath(os.path.expanduser("~"))
-    if root.lower() == home.lower():
-        return (f"The sandbox workspace would be your home folder ({root}), which would grant the sandbox "
-                "read/write access to everything in your profile. Point terminal.cwd at a project folder.")
+    """Canonical protected overlap check shared by workspace and user grant selection."""
     try:
-        from hermes_constants import get_hermes_home
-        hermes_home = os.path.normpath(str(get_hermes_home()))
-    except Exception:
-        hermes_home = ""
-    if hermes_home and (hermes_home.lower() + os.sep).startswith(root.lower().rstrip(os.sep) + os.sep):
-        return (f"The sandbox workspace ({root}) contains Hermes's own data directory ({hermes_home}), including "
-                "credentials. Point terminal.cwd at a project folder.")
-    install = os.path.normpath(str(Path(__file__).resolve().parents[2]))
-    if (install.lower() + os.sep).startswith(root.lower().rstrip(os.sep) + os.sep):
-        return (f"The sandbox workspace ({root}) contains Hermes's own program files ({install}); a sandboxed "
-                "agent must not be able to rewrite them. Work in a separate clone, or turn the sandbox off.")
-    return None
+        return _protected_path_reason(_canonical_path(workspace, strict=False))
+    except ValueError as exc:
+        return str(exc)
 
 
 # Sessions that have no project folder would otherwise be anchored at the user's home, which the
@@ -400,8 +399,11 @@ DEFAULT_WORKSPACE_DIRNAME = "Hermes"
 def default_workspace() -> str:
     """The folder a sandboxed session without a project works in (created on first use)."""
     target = Path(os.path.expanduser("~")) / DEFAULT_WORKSPACE_DIRNAME
+    reason = unsafe_workspace_reason(str(target))
+    if reason:
+        raise ValueError(reason)
     target.mkdir(parents=True, exist_ok=True)
-    return str(target)
+    return validate_grant_paths([str(target)], writable=True)[0]
 
 
 def sandbox_workspace_for(cwd: str) -> str:
@@ -410,7 +412,7 @@ def sandbox_workspace_for(cwd: str) -> str:
     itself) applies, so they agree on where a sandboxed session works. An empty or relative *cwd*
     means the process's own directory, which is judged as the folder it resolves to."""
     resolved = os.path.abspath(os.path.expanduser(cwd)) if cwd else os.getcwd()
-    return resolved if unsafe_workspace_reason(resolved) is None else default_workspace()
+    return _canonical_path(resolved, strict=False) if unsafe_workspace_reason(resolved) is None else default_workspace()
 
 
 # The desktop stages what the user pastes or attaches in the composer under its Electron user-data
@@ -426,7 +428,8 @@ def attachment_staging_dirs() -> list[str]:
     user_data = (os.environ.get(DESKTOP_USER_DATA_ENV) or "").strip()
     if not user_data:
         return []
-    return [str(Path(user_data) / name) for name in ATTACHMENT_STAGING_SUBDIRS if (Path(user_data) / name).is_dir()]
+    return [_trusted_runtime_path(str(Path(user_data) / name))
+            for name in ATTACHMENT_STAGING_SUBDIRS if (Path(user_data) / name).is_dir()]
 
 
 # ── status ───────────────────────────────────────────────────────────────────
@@ -449,67 +452,30 @@ def _hidden_window_kwargs() -> dict:
 
 
 def backend_enabled(terminal_cfg: Optional[dict] = None) -> bool:
-    """Whether ``terminal.backend`` selects this backend (config first, env bridge as fallback)."""
+    """Whether the strict live terminal authority selects this backend."""
     cfg = terminal_cfg if terminal_cfg is not None else _terminal_section()
-    backend = cfg.get("backend") if "backend" in cfg else os.environ.get("TERMINAL_ENV")
+    backend = cfg.get("backend")
     return str(backend or "").strip().lower() == "mxc"
-
-
-# Toolsets that reach the network from the Hermes process itself rather than from inside a
-# container. With the sandbox on and its network off, the switch has to mean "the agent is
-# offline", so calls to these are refused too; an egress the sandbox cannot see would
-# otherwise make the setting a formality.
-HOST_NETWORK_TOOLSETS = ("web", "browser")
-
-
-def host_network_withheld_toolsets(terminal_cfg: Optional[dict] = None) -> tuple[str, ...]:
-    """Toolsets whose calls are refused under the current sandbox policy: the host-network
-    toolsets when the sandbox is on and its network is off, otherwise nothing."""
-    cfg = terminal_cfg if terminal_cfg is not None else _terminal_section()
-    if not backend_enabled(cfg):
-        return ()
-    return () if resolve_settings(cfg).policy.network else HOST_NETWORK_TOOLSETS
 
 
 OFFLINE_REASON = ("Network is off in the sandbox policy, so Hermes will not fetch URLs on the agent's behalf "
                   "(Hermes desktop: Settings > Safety > Sandbox > Allow network access).")
 
-_offline_cache_lock = threading.Lock()
-_offline_cache: tuple[Optional[tuple], bool] = (None, False)
-
-
-def host_network_withheld() -> bool:
-    """Whether the sandbox policy currently keeps the agent offline (sandbox on, network off).
-
-    Consulted per URL by the shared website gate, so the verdict is cached on the config file's
-    identity and re-read only when the file changes."""
-    global _offline_cache
-    if not _IS_WINDOWS:
-        return False
-    try:
-        from hermes_cli.config import get_config_path
-        stat = os.stat(get_config_path())
-        signature: Optional[tuple] = (str(get_config_path()), stat.st_mtime_ns, stat.st_size)
-    except (OSError, ImportError):
-        signature = None
-    with _offline_cache_lock:
-        cached_signature, cached_value = _offline_cache
-        if signature is not None and cached_signature == signature:
-            return cached_value
-    value = bool(host_network_withheld_toolsets())
-    with _offline_cache_lock:
-        _offline_cache = (signature, value)
-    return value
-
 
 def status(*, provision_shell: bool = False, settings: Optional[MxcSettings] = None) -> dict:
     """One record describing whether the MXC backend can run here and how it is configured.
 
-    ``available`` means every prerequisite holds. ``degraded`` means MXC works but selected the
-    AppContainer+DACL fallback tier and reported host-prep warnings. ``reason`` is the first
+    ``available`` means every strict prerequisite holds. Fallback tiers are unavailable,
+    never silently degraded. ``reason`` is the first
     blocker in plain language, or None.
     """
-    settings = settings or resolve_settings()
+    policy_error = None
+    if settings is None:
+        try:
+            settings = resolve_settings()
+        except Exception as exc:
+            policy_error = f"Sandbox policy unavailable: {exc}"
+            settings = MxcSettings(None, None, MxcPolicy())
     record: dict[str, Any] = {
         "platform_supported": _IS_WINDOWS,
         "os_build": _os_build(),
@@ -526,6 +492,9 @@ def status(*, provision_shell: bool = False, settings: Optional[MxcSettings] = N
         "warnings": [],
         "reason": None,
     }
+    if policy_error:
+        record["reason"] = policy_error
+        return record
     if not _IS_WINDOWS:
         record["reason"] = "MXC sandboxing is a Windows feature; this host is not Windows."
         return record
@@ -537,9 +506,9 @@ def status(*, provision_shell: bool = False, settings: Optional[MxcSettings] = N
     probe = run_probe(wxc)
     record["probe"] = probe
     record["tier"] = probe.get("tier")
-    if not probe["ok"]:
-        record["reason"] = ("This Windows build does not support MXC process containers"
-                            + (f": {probe['error']}" if probe.get("error") else "."))
+    reason = strict_probe_reason(probe)
+    if reason:
+        record["reason"] = reason
         return record
     shell, shell_error = ensure_shell()
     record["shell_path"] = shell
@@ -548,7 +517,7 @@ def status(*, provision_shell: bool = False, settings: Optional[MxcSettings] = N
         record["shell_missing"] = True
         return record
     record["warnings"] = list(probe.get("warnings") or [])
-    record["degraded"] = probe.get("tier") == "appcontainer-dacl" and bool(record["warnings"])
+
     record["available"] = True
     return record
 

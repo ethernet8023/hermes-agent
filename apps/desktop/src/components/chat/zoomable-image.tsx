@@ -2,6 +2,7 @@
 
 import { type ComponentProps, useState } from 'react'
 
+import type { SandboxOwner } from '@/api/sandbox'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { useImageDownload } from '@/hooks/use-image-download'
 import { useI18n } from '@/i18n'
@@ -11,6 +12,7 @@ import { cn } from '@/lib/utils'
 export interface ZoomableImageProps extends ComponentProps<'img'> {
   containerClassName?: string
   slot?: string
+  modelOwner?: SandboxOwner | null
 }
 
 export interface ImageActionCopy {
@@ -18,10 +20,18 @@ export interface ImageActionCopy {
   savingImage: string
 }
 
-export function ZoomableImage({ className, containerClassName, src, alt, slot, ...props }: ZoomableImageProps) {
+export function ZoomableImage({
+  className,
+  containerClassName,
+  src,
+  alt,
+  slot,
+  modelOwner,
+  ...props
+}: ZoomableImageProps) {
   const { t } = useI18n()
   const copy = t.desktop
-  const { download, saving } = useImageDownload(src)
+  const { download, saving } = useImageDownload(src, modelOwner)
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const canOpen = Boolean(src)
 

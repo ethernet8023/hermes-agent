@@ -104,7 +104,7 @@ import { groupReplyMentionTag, sendToGroupChat, stopGroupThread } from './group-
 import { clearGroupClarify, renameGroupClarify } from './group-turns'
 import { botsText, useBots } from './i18n'
 import { displayName, slugifyProfileName } from './labels'
-import { botRosterMeta, groupTranscriptSpeakerMeta, setBotsWorkspaceOwner } from './routing'
+import { botRosterMeta, groupTranscriptSpeakerMeta, resolveBotConnectionRoute, setBotsWorkspaceOwner } from './routing'
 import { bumpBotOpenGeneration, getPluginCtx, ID } from './shared'
 import type { Attachment, BotMeta, GroupChat, GroupMember, GroupMessage, RosterRow } from './types'
 
@@ -1118,6 +1118,8 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
             (entry.from.source ? (b.connectionLabel || b.connectionId) === entry.from.source : !b.remoteSource)
         ) || null
 
+    const outputRoute = member ? resolveBotConnectionRoute(member) : null
+
     const display = isUser
       ? b.group.you
       : displayName(
@@ -1210,7 +1212,16 @@ export function GroupChatWorkspace({ group, members, onBack, visible = true }: G
             data-slot="group-chat-message-content"
           >
             {MessageTextContent ? (
-              <MessageTextContent decorateText={mentionText} media={!member?.remoteSource} text={entry.text} />
+              <MessageTextContent
+                decorateText={mentionText}
+                media={!member?.remoteSource}
+                owner={
+                  member && !member.remoteSource && outputRoute?.status !== 'owner_removed'
+                    ? { connectionId: outputRoute?.route?.connectionId ?? null, profile: outputRoute?.route?.profile ?? member.name }
+                    : null
+                }
+                text={entry.text}
+              />
             ) : Streamdown ? (
               <Streamdown components={mentionComponents}>{entry.text}</Streamdown>
             ) : (

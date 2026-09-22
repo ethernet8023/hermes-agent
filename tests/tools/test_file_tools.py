@@ -16,6 +16,19 @@ from tools.file_tools import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_execution_caches(monkeypatch):
+    from tools import file_tools, terminal_tool
+    environments = {}
+    monkeypatch.setattr(terminal_tool, "_active_environments", environments)
+    monkeypatch.setattr(terminal_tool, "_last_activity", {})
+    monkeypatch.setattr(terminal_tool, "_session_cwd", {})
+    monkeypatch.setattr(file_tools, "_file_ops_cache", {})
+    yield
+    for env in environments.values():
+        env.cleanup()
+
+
 class TestReadFileHandler:
     @patch("tools.file_tools._get_file_ops")
     def test_returns_file_content(self, mock_get):
@@ -627,8 +640,10 @@ class TestSessionCwdSurvivesEnvRecreation:
         tt.clear_session_cwd(task_id)
 
         # Stale cache entry: env was cleaned up, cache still holds the old cwd.
+        from hermes_constants import hermes_home_key
+        from types import SimpleNamespace
         cached = MagicMock()
-        cached.env = None
+        cached.env = SimpleNamespace(_terminal_policy_owner=hermes_home_key())
         cached.cwd = "/Users/user/project"
         mock_cache[task_id] = cached
 

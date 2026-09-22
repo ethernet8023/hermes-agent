@@ -738,6 +738,9 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
         from agent.system_prompt import reconstruct_static_prefix, restore_plugin_prompt_sections
         restore_plugin_prompt_sections(agent, stored_prompt)
         reconstruct_static_prefix(agent, system_message=system_message)
+        briefing = getattr(agent, "_terminal_backend_briefing", None)
+        if briefing is not None:
+            briefing.restore_prompt_backend(stored_prompt, conversation_history)
         return
     if stored_prompt:
         stored_state = "stale_runtime"

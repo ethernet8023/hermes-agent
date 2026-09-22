@@ -32,8 +32,8 @@ vi.mock('@hermes/plugin-sdk', async () => {
     DialogHeader: () => null,
     DialogTitle: () => null,
     Input: () => null,
-    MessageTextContent: ({ media = true, text }: { media?: boolean; text: string }) => (
-      <span data-media={String(media)} data-testid="message-text-content">
+    MessageTextContent: ({ media = true, owner, text }: { media?: boolean; owner?: unknown; text: string }) => (
+      <span data-media={String(media)} data-owner={JSON.stringify(owner ?? null)} data-testid="message-text-content">
         {text}
       </span>
     ),
@@ -82,6 +82,12 @@ it('renders member replies through the shell message renderer, resolving media o
     ['Show me', 'true'],
     ['MEDIA:/tmp/local.png', 'true'],
     ['MEDIA:/tmp/remote.png', 'false']
+  ])
+
+  expect(getAllByTestId('message-text-content').map(el => JSON.parse(el.dataset.owner!))).toEqual([
+    null,
+    { connectionId: null, profile: 'builder' },
+    null
   ])
 })
 

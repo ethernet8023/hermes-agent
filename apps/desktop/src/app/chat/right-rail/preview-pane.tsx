@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { requestComposerAttachImages, requestComposerFocus, requestComposerInsert } from '@/app/chat/composer/focus'
 import { openGuestContextMenu } from '@/app/context-menu/store'
 import { PanelEmpty } from '@/app/overlays/panel'
+import { InertModelOutput, useModelOutputRestriction } from '@/components/assistant-ui/model-output-policy'
 import { isElementInHiddenPane } from '@/components/pane-shell/pane-visibility'
 import { Tip } from '@/components/ui/tooltip'
 import { type Translations, useI18n } from '@/i18n'
@@ -247,7 +248,17 @@ function PreviewLoadError({
   )
 }
 
-export function PreviewPane({ embedded = false, onRestartServer, reloadRequest = 0, tabId, target }: PreviewPaneProps) {
+export function PreviewPane(props: PreviewPaneProps) {
+  const restriction = useModelOutputRestriction(props.target.modelOwner ?? null)
+
+  return props.target.modelOwner && restriction ? (
+    <InertModelOutput reason={restriction} target={props.target.source} />
+  ) : (
+    <PreviewPaneContent {...props} />
+  )
+}
+
+function PreviewPaneContent({ embedded = false, onRestartServer, reloadRequest = 0, tabId, target }: PreviewPaneProps) {
   const { t } = useI18n()
   const copy = t.preview.web
   // The console store belongs to the TAB, not this render: the toggles live on

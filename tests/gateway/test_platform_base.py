@@ -733,6 +733,9 @@ class TestMediaDeliveryDefaultMode:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"SECRET=1\n")
 
+        # The routed terminal policy must be valid; malformed policy now refuses
+        # every host delivery independently of the credential-path denylist.
+        (profile_b / "config.yaml").write_text("terminal:\n  backend: local\n", encoding="utf-8")
         for scope in (None, profile_b):  # default profile's turn, then beta's own turn
             token = set_hermes_home_override(scope)
             try:

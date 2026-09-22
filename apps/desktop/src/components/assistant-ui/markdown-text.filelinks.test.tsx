@@ -1,7 +1,22 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { confirmNonMxcOwner } from '@/test/sandbox'
 
 import { MarkdownTextContent } from './markdown-text'
+
+const previousDesktop = window.hermesDesktop
+beforeEach(() => {
+  confirmNonMxcOwner()
+  window.hermesDesktop = {
+    ...previousDesktop,
+    api: vi.fn(async () => ({ enabled: false })),
+    getConnection: vi.fn(async () => ({ mode: 'local' }))
+  } as unknown as typeof previousDesktop
+})
+afterEach(() => {
+  window.hermesDesktop = previousDesktop
+})
 
 // Regression for #82140: a plain filesystem href in assistant markdown
 // (`[report](/home/user/report.md)`) rendered as a bare dead anchor —

@@ -1,9 +1,19 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { __resetSessionLinkTitleCache } from '@/lib/session-link-title'
 import { $sessions } from '@/store/session'
+import { confirmNonMxcOwner } from '@/test/sandbox'
 import type { SessionInfo } from '@/types/hermes'
+
+import { ModelOutputOwnerProvider } from './model-output-policy'
+
+const owner = { connectionId: 'session-ref-owner', profile: 'work' }
+const originalDesktop = window.hermesDesktop
+beforeEach(() => {
+  confirmNonMxcOwner(owner)
+  window.hermesDesktop = { ...originalDesktop, api: vi.fn(async () => ({ enabled: false })) } as typeof originalDesktop
+})
 
 import { MarkdownTextContent } from './markdown-text'
 
@@ -19,6 +29,7 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
     output_tokens: 0,
     preview: null,
     profile: 'work',
+    connection_id: owner.connectionId,
     source: 'cli',
     started_at: 1_000,
     title: 'Branch plan',
@@ -29,6 +40,7 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
 
 afterEach(() => {
   cleanup()
+  window.hermesDesktop = originalDesktop
   $sessions.set([])
   __resetSessionLinkTitleCache()
 })
@@ -40,7 +52,11 @@ describe('MarkdownTextContent session refs', () => {
   it('renders an agent-written @session ref as a link showing the session title', async () => {
     $sessions.set([makeSession()])
 
-    render(<MarkdownTextContent isRunning={false} text="Context lives in @session:work/20260101_abc123 today." />)
+    render(
+      <ModelOutputOwnerProvider value={owner}>
+        <MarkdownTextContent isRunning={false} text="Context lives in @session:work/20260101_abc123 today." />
+      </ModelOutputOwnerProvider>
+    )
 
     const link = await screen.findByTitle('work/20260101_abc123')
 
@@ -50,7 +66,11 @@ describe('MarkdownTextContent session refs', () => {
   })
 
   it('falls back to a short id when the session is unknown', async () => {
-    render(<MarkdownTextContent isRunning={false} text="See @session:work/20260101_abc123 for context." />)
+    render(
+      <ModelOutputOwnerProvider value={owner}>
+        <MarkdownTextContent isRunning={false} text="See @session:work/20260101_abc123 for context." />
+      </ModelOutputOwnerProvider>
+    )
 
     const link = await screen.findByTitle('work/20260101_abc123')
 

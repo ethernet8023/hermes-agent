@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 
+import { currentSandboxOwner } from '@/api/sandbox'
 import { getStatus } from '@/hermes'
 import { type I18nContextValue, useI18n } from '@/i18n'
 import { evaluateRuntimeReadiness, type RuntimeReadinessResult } from '@/lib/runtime-readiness'
 import { refreshFreeTierStatus, setFreeTierRoute } from '@/store/free-tier'
-import { refreshSandboxStatus } from '@/store/sandbox'
 import { $setupReadyTick } from '@/store/live-sync'
 import { dismissNotification, notify } from '@/store/notifications'
+import { invalidateSandboxStatus, refreshSandboxStatus } from '@/store/sandbox'
 import type { StatusResponse } from '@/types/hermes'
 
 // Statusbar health is ambient chrome, not live data — nothing the user acts on
@@ -31,6 +32,8 @@ export function useStatusSnapshot(
     let timer: number | undefined
     let sharedProfileWarning: boolean = false
     let sharedProfileNoticeId: string | undefined
+    const sandboxOwner = currentSandboxOwner()
+    invalidateSandboxStatus(sandboxOwner)
 
     // Status and inference readiness belong to one backend. A source switch
     // can keep gatewayState="open" throughout, so clear the previous source's
@@ -73,7 +76,7 @@ export function useStatusSnapshot(
       const [inferenceResult] = await Promise.allSettled([
         evaluateRuntimeReadiness(requestGateway),
         refreshFreeTierStatus(requestGateway),
-        refreshSandboxStatus()
+        refreshSandboxStatus(sandboxOwner)
       ])
 
       if (cancelled || inferenceResult.status !== 'fulfilled') {
@@ -159,6 +162,7 @@ export function useStatusSnapshot(
 
     return () => {
       cancelled = true
+      invalidateSandboxStatus(sandboxOwner)
       unsubscribeSetupReady()
       document.removeEventListener('visibilitychange', onReturn)
       window.removeEventListener('focus', onReturn)

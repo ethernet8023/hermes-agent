@@ -1,143 +1,138 @@
-/**
- * Resolves `@session:<profile>/<id>` reference values to the session's title.
- *
- * Same shape as the external-link title resolver (`external-link.tsx`): a
- * process-lifetime cache, in-flight dedupe, and subscribers so every chip for
- * the same session repaints off one lookup. The sidebar list answers most
- * lookups for free; only an unknown id costs a REST round-trip.
- */
+/** Owner-scoped session-reference titles; user references may select another
+ * profile, but model references cannot turn that spelling into authority. */
+import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useState } from 'react'
 
+import { currentSandboxOwner, type SandboxOwner } from '@/api/sandbox'
 import { getSession } from '@/hermes'
 import { parseSessionRefValue, sessionRefCacheKey, sessionRefFallbackLabel } from '@/lib/session-refs'
-import { $sessions, sessionMatchesStoredId } from '@/store/session'
+import { confirmModelOutputAccess } from '@/store/sandbox'
+import { $connection, $sessions, sessionMatchesStoredId } from '@/store/session'
 import type { SessionInfo } from '@/types/hermes'
 
 const titleCache = new Map<string, string>()
 const titleInflight = new Map<string, Promise<string>>()
-const titleSubs = new Map<string, Set<(value: string) => void>>()
 
-/** Deliberately not `sessionTitle()` from chat-runtime: its "Untitled session"
- *  fallback is a worse chip label than the short id, so an untitled row
- *  resolves to empty and the caller's fallback wins. */
 function sessionRowTitle(row: SessionInfo): string {
   return row.title?.trim() || row.preview?.trim() || ''
 }
 
-function profileMatches(sessionProfile: null | string | undefined, target?: string): boolean {
-  if (!target) {
-    return true
+function referenceOwner(value: string, modelOwner?: SandboxOwner | null): SandboxOwner | null {
+  const { profile } = parseSessionRefValue(value)
+
+  if (modelOwner !== undefined) {
+    if (!modelOwner || (profile && profile !== (modelOwner.profile ?? 'default'))) {
+      return null
+    }
+
+    return modelOwner
   }
 
-  return ((sessionProfile ?? '').trim() || 'default') === (target.trim() || 'default')
+  return currentSandboxOwner(profile)
 }
 
-export function lookupLocalSessionTitle(value: string): string {
-  const { profile, sessionId } = parseSessionRefValue(value)
+export function lookupLocalSessionTitle(value: string, owner = referenceOwner(value)): string {
+  const { sessionId } = parseSessionRefValue(value)
 
-  if (!sessionId) {
+  if (!sessionId || !owner) {
     return ''
   }
 
   const row = $sessions
     .get()
-    .find(session => sessionMatchesStoredId(session, sessionId) && profileMatches(session.profile, profile))
+    .find(
+      session =>
+        sessionMatchesStoredId(session, sessionId) &&
+        (session.connection_id ?? null) === owner.connectionId &&
+        (session.profile || 'default') === (owner.profile || 'default')
+    )
 
   return row ? sessionRowTitle(row) : ''
 }
 
-/** REST lookup that can't throw: the bridge is absent outside Electron, and a
- *  session id that isn't on this backend 404s. Both mean "no title". */
-function requestSessionRow(sessionId: string, profile?: string): Promise<null | SessionInfo> {
-  try {
-    return Promise.resolve(getSession(sessionId, profile ?? null)).catch(() => null)
-  } catch {
-    return Promise.resolve(null)
-  }
-}
+export async function fetchSessionLinkTitle(value: string, modelOwner?: SandboxOwner | null): Promise<string> {
+  const owner = referenceOwner(value, modelOwner)
 
-export function fetchSessionLinkTitle(value: string): Promise<string> {
-  const key = sessionRefCacheKey(value)
+  if (!owner) {
+    return ''
+  }
+
+  const key = sessionRefCacheKey(value, owner)
 
   if (!key) {
-    return Promise.resolve('')
+    return ''
   }
 
-  const cached = titleCache.get(key)
-
-  if (cached !== undefined) {
-    return Promise.resolve(cached)
-  }
-
-  const inflight = titleInflight.get(key)
-
-  if (inflight) {
-    return inflight
-  }
-
-  const local = lookupLocalSessionTitle(value)
-
-  if (local) {
-    titleCache.set(key, local)
-
-    return Promise.resolve(local)
-  }
-
-  const { profile, sessionId } = parseSessionRefValue(value)
-
-  const promise = requestSessionRow(sessionId, profile)
-    .then(row => (row ? sessionRowTitle(row) : ''))
-    .then(title => {
-      titleCache.set(key, title)
-      titleInflight.delete(key)
-      titleSubs.get(key)?.forEach(notify => notify(title))
-
-      return title
-    })
-
-  titleInflight.set(key, promise)
-
-  return promise
-}
-
-export function useSessionLinkTitle(value: string, fallbackLabel?: string): string {
-  const key = useMemo(() => sessionRefCacheKey(value), [value])
-  const fallback = fallbackLabel?.trim() || sessionRefFallbackLabel(value)
-  const [title, setTitle] = useState(() => (key ? titleCache.get(key) || lookupLocalSessionTitle(value) : ''))
-
-  useEffect(() => {
-    if (!key) {
-      return
-    }
-
-    const known = titleCache.get(key) || lookupLocalSessionTitle(value)
-
-    setTitle(known)
+  try {
+    const check = modelOwner !== undefined ? await confirmModelOutputAccess(owner) : undefined
+    const known = titleCache.get(key) || lookupLocalSessionTitle(value, owner)
 
     if (known) {
+      return known
+    }
+
+    let inflight = titleInflight.get(key)
+
+    if (!inflight) {
+      const { sessionId } = parseSessionRefValue(value)
+      check?.()
+      inflight = Promise.resolve(
+        getSession(sessionId, { connectionId: owner.connectionId ?? undefined, profile: owner.profile ?? 'default' })
+      )
+        .then(row => (row ? sessionRowTitle(row) : ''))
+        .finally(() => titleInflight.delete(key))
+      titleInflight.set(key, inflight)
+    }
+
+    const title = await inflight
+    check?.()
+    titleCache.set(key, title)
+
+    return title
+  } catch {
+    return ''
+  }
+}
+
+export function useSessionLinkTitle(value: string, fallbackLabel?: string, modelOwner?: SandboxOwner | null): string {
+  useStore($connection)
+  const resolvedOwner = referenceOwner(value, modelOwner)
+  const connectionId = resolvedOwner?.connectionId
+  const profile = resolvedOwner?.profile
+  const known = resolvedOwner !== null
+
+  const owner = useMemo(
+    () => (known ? { connectionId: connectionId ?? null, profile: profile ?? null } : null),
+    [known, connectionId, profile]
+  )
+
+  const key = owner ? sessionRefCacheKey(value, owner) : ''
+  const fallback = fallbackLabel?.trim() || sessionRefFallbackLabel(value)
+  const [resolved, setResolved] = useState({ key: '', title: '' })
+
+  useEffect(() => {
+    let active = true
+
+    if (!key || !owner) {
       return
     }
 
-    const subs = titleSubs.get(key) ?? new Set<(resolved: string) => void>()
-
-    subs.add(setTitle)
-    titleSubs.set(key, subs)
-    void fetchSessionLinkTitle(value)
+    // Never paint a preceding connection's state while this lookup is pending.
+    void fetchSessionLinkTitle(value, modelOwner === undefined ? undefined : owner).then(title => {
+      if (active) {
+        setResolved({ key, title })
+      }
+    })
 
     return () => {
-      subs.delete(setTitle)
-
-      if (!subs.size) {
-        titleSubs.delete(key)
-      }
+      active = false
     }
-  }, [key, value])
+  }, [key, value, owner, modelOwner])
 
-  return title || fallback
+  return (resolved.key === key ? resolved.title : '') || fallback
 }
 
 export function __resetSessionLinkTitleCache(): void {
   titleCache.clear()
   titleInflight.clear()
-  titleSubs.clear()
 }

@@ -6,10 +6,10 @@ writable, and network access is granted or refused as a whole. Hermes hands it o
 invocation per tool call, so the sandbox policy is re-evaluated on every command and a
 change made in settings applies to the very next one, with nothing to restart.
 
-Everything that reaches the machine (``terminal``, the file tools, ``search_files``,
-``execute_code``'s remote kernel, background processes) flows through ``execute()`` here
-because this class is deliberately *not* a ``LocalEnvironment``: the host fast paths in the
-file tools are keyed on that type and would otherwise read and search the host directly.
+Terminal commands, file tools, search and terminal background processes run here.
+Uncontained host execution (including ``execute_code``) is refused by the shared
+admission policy. This class deliberately is not a ``LocalEnvironment``: the file
+tools' host fast paths must never bypass the container.
 
 The in-sandbox shell is busybox-w32's POSIX ``sh``. Git-Bash cannot be used: its MSYS runtime
 opens the session's named-object directory at startup, which an AppContainer denies, so the
@@ -28,7 +28,8 @@ import shlex
 import shutil
 import subprocess
 import sys
-import uuid
+import tempfile
+import threading
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -52,7 +53,7 @@ _HOST_BASE_ENV = ("SYSTEMROOT", "WINDIR", "COMSPEC", "SYSTEMDRIVE", "PATHEXT", "
 # ``%LOCALAPPDATA%``/``$HOME`` land in the sandbox, never in the real profile.
 _REDIRECTED_HOME_VARS = ("LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "USERPROFILE", "HOME")
 
-# Prefix families of per-session variables that must never persist in the shared snapshot
+# Prefix families of per-session variables that must never persist in the session snapshot
 # (mirrors the bash bootstrap's exclusion set in base_session_env).
 _SNAPSHOT_EXCLUDED_PREFIXES = ("HERMES_SESSION_", "HERMES_CRON_AUTO_DELIVER_", "HERMES_BROWSER_CONTROL_")
 _SNAPSHOT_EXCLUDED_NAMES = ("AI_AGENT", "HERMES_AGENT", "HERMES_DELEGATED_CHILD_CONTEXT",
@@ -119,6 +120,7 @@ def build_container_config(*, container_id: str, command_line: str, cwd: str, en
             "timeout": 0,
         },
         "processContainer": {"leastPrivilege": False},
+        "fallback": {"allowDaclMutation": False},
         "filesystem": {"readwritePaths": readwrite, "readonlyPaths": readonly},
         "network": {"egress": {"default": "allow" if network else "deny"}},
         "ui": {"disable": False, "clipboard": "none", "injection": False},
@@ -187,7 +189,7 @@ def posix_wrap_command_script(command: str, *, quoted_cwd: str, quoted_snap: str
 _WIN_PATH = r"(?:[A-Za-z]:[\\/][^'\"\n]*?|/[^'\"\n]+?)"
 _DENIAL_PATTERNS = (
     # Git for Windows cannot resolve the working directory when an ancestor folder is not
-    # discoverable by the container; the fix is preparing the workspace, not a policy grant.
+    # discoverable by the container; a recursive file grant is not a traversal remedy.
     re.compile(r"fatal: [Uu]nable to (?:get|read) current working directory: Permission denied"),
     re.compile(r"can't (?:create|open|remove|stat|chdir to|cd to|read|write|create directory|move|copy)(?: to)? '?(?P<path>" + _WIN_PATH + r")'?: Permission denied", re.I),
     re.compile(r"PermissionError: \[Errno 13\] Permission denied: '(?P<path>[^']+)'"),
@@ -236,9 +238,9 @@ def denial_note(denied: list[str], *, workspace: str, policy: mxc_host.MxcPolicy
     lines.append("  read-only: " + (", ".join(policy.readonly_paths) if policy.readonly_paths else "(none)"))
     lines.append("  network: " + ("on" if policy.network else "off"))
     if GIT_ANCESTOR_DENIAL in denied:
-        lines.append("Git needs the workspace's parent folders to be discoverable by the sandbox. The user can fix "
-                     "this once with 'Prepare workspace' in the Sandbox settings (or by using a workspace directly "
-                     "under the drive root); it is not a file-access grant.")
+        lines.append("Git cannot resolve this workspace through its parent folders. Hermes does not change host "
+                     "ACLs to work around this limitation. See the Windows sandbox documentation; an extra "
+                     "recursive file-access grant is not a traversal remedy.")
     lines.append("The user controls this policy (Hermes desktop: Settings > Safety > Sandbox). If the task needs "
                  "that location, stop and ask the user to grant access; a grant applies to your next command. "
                  "Do not try to work around the sandbox.")
@@ -252,6 +254,8 @@ class MxcEnvironment(BaseEnvironment):
 
     # Not the host: the file tools' native fast paths must stay off (see module docstring).
     is_local = False
+    # Lets the terminal tool's cwd sanitizers recognize a live sandbox environment.
+    env_type = "mxc"
     # Shell file operations quote paths for the sandbox's POSIX shell, which takes native drive
     # paths with forward slashes (``C:/Users/x``), not the Git Bash ``/c/Users/x`` form.
     windows_path_form = "native"
@@ -267,6 +271,9 @@ class MxcEnvironment(BaseEnvironment):
         self.task_id = task_id
         self._settings_override = settings
         self._script_paths: set[str] = set()
+        self._process_lock = threading.RLock()
+        self._processes: set[subprocess.Popen] = set()
+        self._closed = False
         self._container_seq = 0
         self._git_identity: Optional[dict[str, str]] = None
         super().__init__(cwd=_resolve_local_initial_cwd(cwd), timeout=timeout, env=env)
@@ -293,23 +300,36 @@ class MxcEnvironment(BaseEnvironment):
         return self._settings_override or mxc_host.resolve_settings()
 
     def _resolve_launcher(self, settings: mxc_host.MxcSettings) -> tuple[str, str]:
-        wxc = mxc_host.find_wxc_exec()
-        if wxc is None:
-            raise RuntimeError(mxc_host.status(settings=settings)["reason"])
-        shell, error = mxc_host.ensure_shell()
-        if shell is None:
-            raise RuntimeError(error)
-        return wxc, shell
+        record = mxc_host.status(settings=settings)
+        if not record["available"]:
+            raise RuntimeError(record["reason"])
+        return record["wxc_exec_path"], record["shell_path"]
 
     # -- paths ----------------------------------------------------------------
 
     def get_temp_dir(self) -> str:
-        """Hermes's own terminal cache dir (granted read/write to every container): holds the
-        session snapshot, per-command scripts and the redirected sandbox home."""
-        from tools.environments.local import _default_terminal_temp_dir
-        cache_dir = _default_terminal_temp_dir() or Path(os.path.join(os.path.expanduser("~"), ".hermes", "cache", "terminal"))
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        return to_forward_slashes(str(cache_dir))
+        """Private per-environment scratch, allocated before BaseEnvironment names its snapshot.
+
+        Neither the shared parent nor LocalEnvironment's terminal cache is granted.
+        Keep the selected directory pinned even if the calling profile changes.
+        """
+        if not hasattr(self, "_scratch_dir"):
+            from hermes_constants import get_hermes_home
+            parent = get_hermes_home().resolve() / "cache" / "mxc"
+            parent.mkdir(parents=True, exist_ok=True)
+            if parent.resolve() != parent:
+                raise RuntimeError("MXC scratch parent has been redirected; refusing host script creation.")
+            self._scratch_dir = tempfile.mkdtemp(prefix="session-", dir=parent)
+            stat = os.stat(self._scratch_dir)
+            self._scratch_identity = (stat.st_dev, stat.st_ino)
+        try:
+            stat = os.stat(self._scratch_dir)
+            if ((stat.st_dev, stat.st_ino) != self._scratch_identity
+                    or Path(self._scratch_dir).resolve() != Path(self._scratch_dir)):
+                raise RuntimeError("MXC scratch directory has been replaced; refusing host script creation.")
+        except OSError as exc:
+            raise RuntimeError("MXC scratch directory is unavailable.") from exc
+        return to_forward_slashes(self._scratch_dir)
 
     @staticmethod
     def _quote_cwd_for_cd(cwd: str) -> str:
@@ -337,7 +357,7 @@ class MxcEnvironment(BaseEnvironment):
         """Directories the sandbox must read for Hermes-managed tools to launch: the shell, this
         install tree, the interpreter the venv trampolines into, managed node/git runtimes."""
         from hermes_constants import get_hermes_home, iter_hermes_node_dirs
-        grants: list[str] = [os.path.dirname(shell), str(Path(__file__).resolve().parents[2])]
+        grants: list[str] = [mxc_host._shell_runtime_path(shell), str(Path(__file__).resolve().parents[2])]
         venv_cfg = Path(sys.prefix) / "pyvenv.cfg"
         if venv_cfg.is_file():
             for line in venv_cfg.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -350,7 +370,7 @@ class MxcEnvironment(BaseEnvironment):
         grants += [str(d) for d in iter_hermes_node_dirs() if d.is_dir()]
         grants += [str(home / name) for name in ("git", "bin") if (home / name).is_dir()]
         grants += mxc_host.attachment_staging_dirs()
-        return grants
+        return [mxc_host._trusted_runtime_path(p) for p in grants]
 
     def _tool_path_entries(self, shell: str) -> list[str]:
         from hermes_constants import get_hermes_home, iter_hermes_node_dirs
@@ -411,8 +431,13 @@ class MxcEnvironment(BaseEnvironment):
         self._container_seq += 1
         container_id = f"hermes-{self._session_id}-{self._container_seq}"
         cwd = to_native_path(self.cwd)
-        readwrite = [self.workspace_root, to_native_path(self.get_temp_dir()), *settings.policy.readwrite_paths]
-        readonly = [*self._tool_readonly_grants(shell), *settings.policy.readonly_paths]
+        # Revalidate at publication, including settings passed as a dataclass and
+        # workspace aliases changed since construction. Only scratch/tool roots
+        # bypass user-grant protection, through these explicit internal paths.
+        readwrite = [*mxc_host.validate_grant_paths([self.workspace_root, *settings.policy.readwrite_paths], writable=True),
+                     to_native_path(self.get_temp_dir())]
+        readonly = [*self._tool_readonly_grants(shell),
+                    *mxc_host.validate_grant_paths(settings.policy.readonly_paths, writable=False)]
         config = build_container_config(
             container_id=container_id,
             command_line=subprocess.list2cmdline([shell, "sh", to_native_path(script_path)]),
@@ -423,8 +448,8 @@ class MxcEnvironment(BaseEnvironment):
     # -- process lifecycle -----------------------------------------------------
 
     def _write_script(self, cmd_string: str) -> str:
-        path = f"{self.get_temp_dir()}/hermes-mxc-{self._session_id}-{uuid.uuid4().hex[:8]}.sh"
-        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fd, path = tempfile.mkstemp(prefix="command-", suffix=".sh", dir=self.get_temp_dir())
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(cmd_string)
             if not cmd_string.endswith("\n"):
                 fh.write("\n")
@@ -432,20 +457,35 @@ class MxcEnvironment(BaseEnvironment):
         return path
 
     def _spawn_container(self, cmd_string: str, *, stdin: bool, settings: Optional[mxc_host.MxcSettings] = None) -> subprocess.Popen:
+        # Serialize publication with cleanup: a retiring environment must never
+        # launch work after its processes have been reaped and scratch removed.
+        with self._process_lock:
+            if self._closed:
+                raise RuntimeError("This MXC environment has been retired; retry with the current terminal policy.")
+            proc = self._spawn_container_locked(cmd_string, stdin=stdin, settings=settings)
+            self._processes.add(proc)
+            return proc
+
+    def _spawn_container_locked(self, cmd_string: str, *, stdin: bool,
+                               settings: Optional[mxc_host.MxcSettings]) -> subprocess.Popen:
         settings = settings or self._settings()
         script = self._write_script(cmd_string)
-        config, wxc, container_id = self.container_request(script, settings=settings)
-        import base64
-        payload = base64.b64encode(json.dumps(config).encode("utf-8")).decode("ascii")
-        argv = [wxc, "--config-base64", payload]
-        if settings.debug:
-            argv.append("--debug")
-        proc = subprocess.Popen(
-            argv, text=True, encoding="utf-8", errors="replace",
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-            cwd=to_native_path(self.cwd) if os.path.isdir(to_native_path(self.cwd)) else None,
-            creationflags=windows_hide_flags())
+        try:
+            config, wxc, container_id = self.container_request(script, settings=settings)
+            import base64
+            payload = base64.b64encode(json.dumps(config).encode("utf-8")).decode("ascii")
+            argv = [wxc, "--config-base64", payload]
+            if settings.debug:
+                argv.append("--debug")
+            proc = subprocess.Popen(
+                argv, text=True, encoding="utf-8", errors="replace",
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+                cwd=to_native_path(self.cwd) if os.path.isdir(to_native_path(self.cwd)) else None,
+                creationflags=windows_hide_flags())
+        except BaseException:
+            self._discard_script(script)
+            raise
         proc._hermes_mxc_script = script  # type: ignore[attr-defined]
         proc._hermes_mxc_container = container_id  # type: ignore[attr-defined]
         proc._hermes_mxc_policy = settings.policy  # type: ignore[attr-defined]
@@ -465,6 +505,9 @@ class MxcEnvironment(BaseEnvironment):
             result = super()._wait_for_process(proc, timeout, **kwargs)
         finally:
             self._discard_script(script)
+            with self._process_lock:
+                if proc.poll() is not None:
+                    self._processes.discard(proc)
         if script and result.get("output"):
             # The shell prefixes diagnostics with the wrapper script's path; present them as
             # ordinary shell errors instead of leaking the per-command temp file name.
@@ -537,9 +580,16 @@ class MxcEnvironment(BaseEnvironment):
     # -- cleanup ----------------------------------------------------------------
 
     def cleanup(self):
-        for path in (self._snapshot_path, self._cwd_file, *list(getattr(self, "_script_paths", ()))):
-            with contextlib.suppress(OSError):
-                os.unlink(path)
-        home = getattr(self, "_sandbox_home", None)
-        if home:
-            shutil.rmtree(home, ignore_errors=True)
+        with self._process_lock:
+            self._closed = True
+            for proc in self._processes:
+                if proc.poll() is None:
+                    proc.kill()
+                # Job-object teardown precedes removal of its executable state.
+                # Propagate failure so policy reconciliation cannot claim success.
+                proc.wait(timeout=10)
+            self._processes.clear()
+            scratch = getattr(self, "_scratch_dir", None)
+            if scratch and os.path.exists(scratch):
+                shutil.rmtree(scratch)
+            self._script_paths.clear()

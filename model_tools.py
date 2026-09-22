@@ -719,6 +719,10 @@ def _dispatch_bridge_tool(function_name: str, function_args: Dict[str, Any],
                                             quiet_mode=True, skip_tool_search_assembly=True) or []
     except Exception:
         current_defs = []
+    # Catalog search may invoke connector discovery. Do not offer a host broker
+    # that the active policy refuses; the frozen model tool prefix is unchanged.
+    from tools.environments.mxc_policy import filter_catalog
+    current_defs = filter_catalog(current_defs)
     args = function_args or {}
     if function_name == ts.TOOL_SEARCH_NAME:
         return ts.dispatch_tool_search(args, current_tool_defs=current_defs), None
@@ -781,14 +785,10 @@ def _pre_dispatch_guards(function_name: str, function_args: Dict[str, Any], skip
         if block_message is not None:
             return function_args, (tool_error(block_message), "plugin_block", block_message)
 
-    # Sandbox network policy: with the sandbox on and its network off, the host-side network
-    # toolsets are refused here, whatever the model's tool list says (a tool snapshot is frozen
-    # for the life of a conversation). The tools stay visible so the refusal, and its reason,
-    # is what the model and the user see.
-    from tools.environments.mxc_host import OFFLINE_REASON, host_network_withheld_toolsets
-    withheld = host_network_withheld_toolsets()
-    if withheld and get_toolset_for_tool(function_name) in withheld:
-        return function_args, (tool_error(OFFLINE_REASON), "sandbox_offline", OFFLINE_REASON)
+    from tools.environments.mxc_policy import tool_refusal
+    reason = tool_refusal(function_name, function_args)
+    if reason is not None:
+        return function_args, (tool_error(reason), "sandbox_policy", reason)
 
     # ACP/Zed edit approval before any file mutation. The requester is bound
     # via ContextVar only for ACP sessions, so CLI/gateway paths are unaffected.
@@ -902,6 +902,12 @@ def handle_function_call(
         _emit_post_tool_call_hook(function_name=function_name, function_args=function_args, result=result,
                                   **asdict(ids), middleware_trace=list(trace), **extra)
         return result
+
+    # Catalog and connector dispatch can perform host IO before the registry guards.
+    from tools.environments.mxc_policy import tool_refusal
+    refusal = tool_refusal(function_name, function_args)
+    if refusal is not None:
+        return _emit(tool_error(refusal), status="blocked", error_type="sandbox_policy", error_message=refusal)
 
     # Tool Search bridge: tool_search / tool_describe are catalog reads handled
     # inline; tool_call is unwrapped so every downstream hook (pre/post, edit

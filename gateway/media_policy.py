@@ -23,6 +23,14 @@ _TRUST_RECENT_SECONDS_ENV = "HERMES_MEDIA_TRUST_RECENT_SECONDS"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
+def local_media_delivery_refusal() -> Optional[str]:
+    """Model-selected host paths are not sandbox exports, even in trusted caches."""
+    from tools.environments.mxc_policy import uncontained_action_refusal
+    if reason := uncontained_action_refusal("Local media/file delivery"):
+        return f"{reason} Local attachments require a sandbox-aware exporter, which is not available."
+    return None
+
+
 def _routed_gateway_cfg() -> Optional[Dict[str, Any]]:
     """``gateway`` section of the ROUTED profile's config when a HERMES_HOME override is active
     (multiplexed turn), else None. The env bridge is one process-wide copy of the launch profile's

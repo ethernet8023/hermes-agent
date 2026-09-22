@@ -59,10 +59,15 @@ export function parseSessionRefValue(value: string): { profile?: string; session
   return sessionId ? { profile: profile || undefined, sessionId } : { sessionId: trimmed }
 }
 
-export function sessionRefCacheKey(value: string): string {
+export function sessionRefCacheKey(
+  value: string,
+  owner?: { connectionId: string | null; profile: string | null }
+): string {
   const { profile, sessionId } = parseSessionRefValue(value)
 
-  return sessionId ? `${profile ?? ''}/${sessionId}` : ''
+  return sessionId
+    ? JSON.stringify([owner?.connectionId ?? null, owner ? (owner.profile ?? 'default') : (profile ?? ''), sessionId])
+    : ''
 }
 
 /** Chip label before (or without) a resolved title — a short, still-identifying id. */

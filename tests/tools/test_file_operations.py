@@ -341,17 +341,9 @@ class TestShellFileOpsHelpers:
         # cannot block the read; it still reports a plain byte count.
         assert len(commands) == 1
         probe = commands[0]
-        assert probe.startswith(
-            "if [ -f '/c/Users/alice/notes.txt' ]; "
-            "then wc -c < '/c/Users/alice/notes.txt' 2>/dev/null; "
-        )
-        assert "head -c 1000 '/c/Users/alice/notes.txt' 2>/dev/null | base64" in probe
-        assert "sed -n '1,2000p' '/c/Users/alice/notes.txt' 2>/dev/null | cut -b1-8001" in probe
-        assert "wc -l < '/c/Users/alice/notes.txt'" in probe
-        assert (
-            "elif [ -e '/c/Users/alice/notes.txt' ]; "
-            "then echo __hermes_not_regular__; "
-        ) in probe
+        assert "'/c/Users/alice/notes.txt'" in probe
+        assert "C:/Users/alice" not in probe and "C:\\Users" not in probe
+        assert result.content == "1|hello"
 
     def test_is_likely_binary_by_extension(self, file_ops):
         assert file_ops._is_likely_binary("photo.png") is True

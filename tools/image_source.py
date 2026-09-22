@@ -121,10 +121,11 @@ def _http_block_reason(url: str) -> Optional[str]:
     ``_download_image`` re-checks per attempt and against the final redirect target (intentional)."""
     from tools.url_safety import is_safe_url
     from tools.website_policy import check_website_access
-    if not is_safe_url(url):
-        return "blocked: unsafe or private URL"
     if blocked := check_website_access(url):
         return blocked.get("message") or "blocked by website policy"
+    # SSRF validation resolves hostnames, so it must follow the offline gate.
+    if not is_safe_url(url):
+        return "blocked: unsafe or private URL"
     return None
 
 

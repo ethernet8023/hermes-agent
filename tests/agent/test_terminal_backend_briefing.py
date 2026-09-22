@@ -53,3 +53,35 @@ def test_switch_to_a_remote_backend_carries_that_backend_block(monkeypatch):
     monkeypatch.setattr("tools.terminal_tool_lifecycle.get_active_env", lambda task_id: _env("local"))
     back = briefing.check_tool_call("t") or ""
     assert "changed from `docker` to `local`" in back and "Host:" in back
+
+
+def test_restored_prompt_rebriefs_without_changing_saved_bytes(monkeypatch):
+    from agent import conversation_loop
+    stored = "Stored prompt describing a previous shell"
+    agent = SimpleNamespace(_terminal_backend_briefing=TerminalBackendBriefing(),
+        _use_prompt_caching=False, _session_db=SimpleNamespace(get_session=lambda sid: {"system_prompt": stored}),
+        session_id="restored", _cached_system_prompt=None, _bot_mode_protocol=False, platform="cli")
+    monkeypatch.setattr(conversation_loop, "_stored_prompt_matches_runtime", lambda *a: True)
+    monkeypatch.setattr(conversation_loop, "stage_surface_switch_note", lambda *a: False)
+    conversation_loop._restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "continue"}])
+    monkeypatch.setattr("tools.terminal_tool_lifecycle.get_active_env", lambda task: _env("mxc"))
+    note = agent._terminal_backend_briefing.check_tool_call("t")
+    assert note and "[Sandbox]" in note
+    assert agent._cached_system_prompt == stored
+    assert agent._terminal_backend_briefing.check_tool_call("t") is None
+    restored = TerminalBackendBriefing()
+    restored.restore_prompt_backend(stored, [{"role": "tool", "content": "result" + note}])
+    assert restored.check_tool_call("t") is None, "the durable last announcement survives another agent restore"
+
+
+def test_policy_only_change_is_rebriefed_once(monkeypatch):
+    from tools import terminal_scope
+    monkeypatch.setattr("tools.terminal_tool_lifecycle.get_active_env", lambda task: _env("mxc"))
+    policy = {"backend": "mxc", "mxc_network": True, "mxc_readwrite_paths": [], "mxc_readonly_paths": []}
+    monkeypatch.setattr(terminal_scope, "get_live_terminal_config", lambda: dict(policy))
+    briefing = TerminalBackendBriefing()
+    briefing.record_prompt_backend("mxc")
+    policy["mxc_network"] = False
+    note = briefing.check_tool_call("t")
+    assert note and "policy changed" in note and "network" in note.lower()
+    assert briefing.check_tool_call("t") is None

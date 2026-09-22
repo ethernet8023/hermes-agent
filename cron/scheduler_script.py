@@ -388,6 +388,11 @@ def _run_job_script(
         # Use the job's workdir as the subprocess cwd when configured, otherwise default to the scripts-dir
         # parent (back-compat). NEVER mutate the Python process cwd — that would leak into concurrent
         # gateway sessions (#69396).
+        # Persisted jobs bypass model-tool dispatch; read live policy at launch,
+        # not the policy that was active when the job was scheduled.
+        from tools.environments.mxc_policy import uncontained_action_refusal
+        if reason := uncontained_action_refusal("Cron script execution"):
+            return False, reason
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             cwd=workdir or str(path.parent), env=env, **popen_kwargs)

@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tools.code_kernel import RUNNER_CELL_SOURCE, KernelRegistry
+from hermes_constants import hermes_home_key
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ class RemoteKernel:
     pid: str
     rpc_token: str
     owner: str
+    profile_home: str = field(default_factory=hermes_home_key, kw_only=True)
     last_used: float = field(default_factory=time.monotonic)
     execution_count: int = 0
     cell_seq: int = 0
@@ -120,6 +122,8 @@ class RemoteKernel:
     attached: int = 0
     # Owned by a live delegate_task child: exempt from LRU eviction (the child's teardown disposes it).
     pinned: bool = False
+    retirement_lock: Any = field(default_factory=threading.RLock, repr=False)
+    retiring: bool = False
 
     def sh(self, cmd: str, timeout: int = 15) -> str:
         return _sh(self.env, cmd, timeout)
@@ -133,7 +137,7 @@ class RemoteKernel:
         except Exception:
             return False
 
-    def kill(self) -> None:
+    def kill(self, *, strict: bool = False) -> None:
         """Best-effort kill of the runner and its subprocesses, then rm -rf."""
         q_pid = shlex.quote(self.pid)
         for cmd, failure in (
@@ -145,17 +149,25 @@ class RemoteKernel:
             try:
                 self.sh(cmd)
             except Exception:
+                if strict:
+                    raise
                 logger.debug(failure, exc_info=True)
+        if strict:
+            # Unlike idle/best-effort teardown, a policy transition must prove
+            # the old runner is gone before confirming the new authority.
+            result = self.env.execute(f"kill -0 {q_pid} 2>/dev/null", cwd="/", timeout=5)
+            if result.get("returncode") != 1:
+                raise RuntimeError("Remote kernel termination could not be confirmed")
 
 
 def _kernel_key(owner: str, env_type: str, task_env_id: str, sandbox_tools: frozenset) -> Tuple:
     """The hermes_tools stub module is generated from ``sandbox_tools`` once, at spawn, so a kernel
     is only reusable by calls with the SAME tool set; a different set gets its own kernel."""
-    return (owner, "remote", env_type, task_env_id, tuple(sorted(sandbox_tools)))
+    return (owner, "remote", env_type, task_env_id, hermes_home_key(), tuple(sorted(sandbox_tools)))
 
 
 # Registry + lock shared-shape with code_kernel; teardown runs outside the lock.
-_REGISTRY = KernelRegistry(lambda kernel: kernel.kill())
+_REGISTRY = KernelRegistry(lambda kernel: kernel.kill(strict=True))
 _REMOTE_KERNELS: Dict[Tuple, RemoteKernel] = _REGISTRY.kernels
 
 
@@ -175,27 +187,31 @@ def shutdown_remote_kernels_where(owner_matches: Callable[[str], bool]) -> None:
     _REGISTRY.shutdown(owner_matches=owner_matches)
 
 
-def _reap_unlocked(idle_timeout: int) -> List["RemoteKernel"]:
-    """Pop idle-expired, unattached remote kernels; caller tears them down outside the lock. The
-    runner self-exits after the same idle window, so this clears the HOST-side entry — without it
-    the map grew one entry per never-revisited (owner, env_type, task_env_id) for the gateway's life."""
+def _reap_unlocked(idle_timeout: int) -> list:
+    """Select only this profile's idle kernels; retain them until confirmed teardown."""
     now = time.monotonic()
-    doomed = [key for key, kernel in _REMOTE_KERNELS.items()
-              if kernel.attached == 0 and now - kernel.last_used > idle_timeout]
-    return [_REMOTE_KERNELS.pop(key) for key in doomed]
+    doomed = [(key, kernel) for key, kernel in _REMOTE_KERNELS.items()
+              if kernel.profile_home == hermes_home_key()
+              and kernel.attached == 0 and now - kernel.last_used > idle_timeout]
+    for _, kernel in doomed:
+        kernel.retiring = True
+    return doomed
 
 
-def _evict_over_cap_unlocked(keep: Tuple) -> List["RemoteKernel"]:
-    """Pop least-recently-used unattached remote kernels beyond the process-wide cap (the same
-    ``max_session_kernels`` bound as local kernels, applied independently to this map)."""
+def _evict_over_cap_unlocked(keep: Tuple) -> list:
+    """Select LRU idle kernels beyond this profile's cap, never another owner's transport."""
     from tools.code_kernel import _lifecycle_limits
     cap, _ = _lifecycle_limits()
-    unpinned = [key for key in _REMOTE_KERNELS if not _REMOTE_KERNELS[key].pinned]
+    unpinned = [key for key, kernel in _REMOTE_KERNELS.items()
+                if kernel.profile_home == hermes_home_key() and not kernel.pinned]
     if len(unpinned) <= cap:
         return []
     by_age = sorted((key for key in unpinned if key != keep and _REMOTE_KERNELS[key].attached == 0),
                     key=lambda key: _REMOTE_KERNELS[key].last_used)
-    return [_REMOTE_KERNELS.pop(key) for key in by_age[: len(unpinned) - cap]]
+    doomed = [(key, _REMOTE_KERNELS[key]) for key in by_age[: len(unpinned) - cap]]
+    for _, kernel in doomed:
+        kernel.retiring = True
+    return doomed
 
 
 atexit.register(shutdown_all_remote_kernels)
@@ -251,15 +267,38 @@ def _spawn_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
 def _acquire_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
                            sandbox_tools: frozenset, *, reset: bool,
                            idle_exit: int) -> Tuple[Optional[RemoteKernel], bool, bool, bool]:
+    from tools.terminal_policy_lifecycle import (
+        terminal_policy_guard, policy_fingerprint, reconcile_terminal_policy,
+    )
+    from tools.terminal_scope import get_live_terminal_config, TerminalPolicyUnavailable
+    with terminal_policy_guard() as (_, fingerprint):
+        if get_live_terminal_config()["backend"] == "mxc":
+            raise TerminalPolicyUnavailable("execute_code is unavailable under MXC; use the sandbox terminal")
+        result = _acquire_remote_kernel_unfenced(env, env_type, owner, task_env_id, sandbox_tools,
+                                               reset=reset, idle_exit=idle_exit)
+        if policy_fingerprint() != fingerprint:
+            reconcile_terminal_policy()
+            raise TerminalPolicyUnavailable("Terminal policy changed during kernel construction")
+        return result
+
+
+def _acquire_remote_kernel_unfenced(env, env_type: str, owner: str, task_env_id: str,
+                                    sandbox_tools: frozenset, *, reset: bool,
+                                    idle_exit: int) -> Tuple[Optional[RemoteKernel], bool, bool, bool]:
     """Find/respawn the owner's kernel: (kernel|None, reused, state_reset, state_lost); reaps
     idle-expired entries on the way in."""
     key = _kernel_key(owner, env_type, task_env_id, sandbox_tools)
     state_lost = state_reset = False
     with _REGISTRY.lock:
         expired = _reap_unlocked(idle_exit)
+    for doomed_key, doomed in expired:
+        _REGISTRY.discard(doomed_key, doomed)
+    with _REGISTRY.lock:
         kernel = _REMOTE_KERNELS.get(key)
-    for doomed in expired:
-        doomed.kill()
+        if kernel is not None and kernel.retiring:
+            raise RuntimeError("Remote kernel retirement is incomplete; retry after cleanup")
+        if kernel is not None and reset and kernel.attached:
+            raise RuntimeError("Cannot reset a remote kernel with active cells")
     if kernel is not None and reset:
         _REGISTRY.discard(key, kernel)
         kernel, state_reset = None, True
@@ -317,17 +356,22 @@ def execute_in_remote_kernel(
     per-call). ``state_lost``/``state_reset``/``reused`` ride in the ``kernel`` sub-dict."""
     from tools.code_kernel import _resolve_owner
     owner = _resolve_owner(task_env_id)
-    kernel, reused, state_reset, state_lost = _acquire_remote_kernel(
-        env, env_type, owner, task_env_id, sandbox_tools, reset=reset, idle_exit=idle_exit)
-    if kernel is None:
-        return None  # fail open to per-call
-    key = _kernel_key(owner, env_type, task_env_id, sandbox_tools)
-    kernel.last_used = time.monotonic()
-    with _REGISTRY.lock:
-        kernel.attached += 1
-        evicted = _evict_over_cap_unlocked(keep=key)
-    for doomed in evicted:
-        doomed.kill()
+    from tools.terminal_policy_lifecycle import terminal_policy_guard
+    with terminal_policy_guard():
+        kernel, reused, state_reset, state_lost = _acquire_remote_kernel(
+            env, env_type, owner, task_env_id, sandbox_tools, reset=reset, idle_exit=idle_exit)
+        if kernel is None:
+            return None  # fail open to per-call
+        key = _kernel_key(owner, env_type, task_env_id, sandbox_tools)
+        kernel.last_used = time.monotonic()
+        with _REGISTRY.lock:
+            evicted = _evict_over_cap_unlocked(keep=key)
+        for doomed_key, doomed in evicted:
+            _REGISTRY.discard(doomed_key, doomed)
+        with _REGISTRY.lock:
+            if kernel.retiring:
+                raise RuntimeError("Remote kernel is retiring")
+            kernel.attached += 1
     try:
         return _run_attached_cell(kernel, key, code, env=env, task_env_id=task_env_id,
                                   sandbox_tools=sandbox_tools, timeout=timeout, max_tool_calls=max_tool_calls,

@@ -1,4 +1,5 @@
 import {
+  type ImageMessagePartProps,
   type ReasoningMessagePartComponent,
   type TextMessagePartProps,
   type ToolCallMessagePartProps,
@@ -11,7 +12,7 @@ import { type ComponentProps, type FC, type ReactNode, useEffect, useRef, useSta
 
 import { ClarifyTool } from '@/components/assistant-ui/clarify-tool'
 import { ConnectorExecution, ConnectorTool } from '@/components/assistant-ui/connector-tool'
-import { MarkdownText, MarkdownTextContent } from '@/components/assistant-ui/markdown-text'
+import { MarkdownImage, MarkdownText, MarkdownTextContent } from '@/components/assistant-ui/markdown-text'
 import { McpSetupTool } from '@/components/assistant-ui/mcp-setup-tool'
 import { AgentDeliveryNotice, deliveryTargetFromCommand } from '@/components/assistant-ui/thread/agent-delivery'
 import { TimelineTimestamp } from '@/components/assistant-ui/thread/timeline-timestamp'
@@ -409,6 +410,7 @@ const ReasoningTextPart: ReasoningMessagePartComponent = () => {
 // remount, but combined with the previous ToolFallback group-swap it was a
 // big chunk of the per-delta work.
 export const MESSAGE_PARTS_COMPONENTS = {
+  Image: ({ image }: ImageMessagePartProps) => <MarkdownImage src={image} />,
   Reasoning: ReasoningTextPart,
   ReasoningGroup: ReasoningAccordionGroup,
   Text: TimelineMarkdownText,

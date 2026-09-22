@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useStore } from '@nanostores/react'
+import { useCallback, useEffect } from 'react'
 
+import {
+  getSandboxGrantTarget,
+  grantSandboxPath,
+  revokeSandboxPath,
+  type SandboxOwner,
+  updateSandboxPolicy
+} from '@/api/sandbox'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { getSandboxStatus, updateSandboxPolicy } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { AlertTriangle, Loader2, Plus, RefreshCw, ShieldLock, Trash2 } from '@/lib/icons'
+import { confirm } from '@/store/confirm'
 import { notifyError } from '@/store/notifications'
 import { pickProjectFolder } from '@/store/projects'
-import { publishSandboxStatus } from '@/store/sandbox'
+import { mutateSandbox, refreshSandboxStatus, sandboxState } from '@/store/sandbox'
 import type { SandboxGrantMode, SandboxStatus } from '@/types/hermes'
 
 import { ListRow, Pill } from './primitives'
@@ -64,56 +72,17 @@ function FolderRow({
  * Safety section stays uncluttered; on Windows it explains exactly why the sandbox is unavailable,
  * or offers the opt-in toggle plus the live policy (workspace, extra folders, network).
  */
-export function SandboxPanel({ workspace }: { workspace?: string } = {}) {
+export function SandboxPanel({ owner }: { owner: SandboxOwner }) {
   const { t } = useI18n()
   const copy = t.settings.sandbox
-  const [status, setStatus] = useState<SandboxStatus | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState(false)
-  const activeRef = useRef(false)
+  const { status, busy, confirmed, error } = useStore(sandboxState(owner))
 
-  const apply = useCallback((next: SandboxStatus) => {
-    publishSandboxStatus(next)
+  const refresh = useCallback((options: { refresh?: boolean } = {}) => refreshSandboxStatus(owner, options), [owner])
 
-    if (activeRef.current) {
-      setStatus(next)
-    }
-  }, [])
-
-  const refresh = useCallback(
-    async (options: { refresh?: boolean } = {}) => {
-      try {
-        apply(await getSandboxStatus({ workspace, ...options }))
-      } catch (err) {
-        if (activeRef.current) {
-          notifyError(err, copy.updateFailed)
-        }
-      } finally {
-        if (activeRef.current) {
-          setLoading(false)
-        }
-      }
-    },
-    [apply, copy.updateFailed, workspace]
-  )
-
-  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
-    activeRef.current = true
     void refresh()
-
-    return () => void (activeRef.current = false)
   }, [refresh])
-
-  // The container tally is a running count of work happening in other panes, so while the
-  // sandbox is on and this panel is visible it re-reads the status on a slow tick; a hidden
-  // window pauses the tick and a returning one refreshes at once.
-  const enabled = status?.enabled ?? false
   useEffect(() => {
-    if (!enabled) {
-      return
-    }
-
     const tick = () => {
       if (document.visibilityState === 'visible') {
         void refresh()
@@ -127,69 +96,46 @@ export function SandboxPanel({ workspace }: { workspace?: string } = {}) {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', tick)
     }
-  }, [enabled, refresh])
+  }, [refresh])
 
-  const mutate = useCallback(
-    async (work: () => Promise<SandboxStatus>, failureTitle: string) => {
-      setBusy(true)
+  const mutate = async (work: () => Promise<SandboxStatus>, failureTitle = copy.updateFailed) => {
+    try {
+      await mutateSandbox(owner, work)
+    } catch (err) {
+      notifyError(err, failureTitle)
+    }
+  }
 
-      try {
-        apply(await work())
-      } catch (err) {
-        if (activeRef.current) {
-          notifyError(err, failureTitle)
-          void refresh()
-        }
-      } finally {
-        if (activeRef.current) {
-          setBusy(false)
-        }
-      }
-    },
-    [apply, refresh]
-  )
-
-  const setEnabled = (enabled: boolean) => void mutate(() => updateSandboxPolicy({ enabled }), copy.enableFailed)
-
-  const setNetwork = (network: boolean) => void mutate(() => updateSandboxPolicy({ network }), copy.updateFailed)
+  const setEnabled = (enabled: boolean) => void mutate(() => updateSandboxPolicy({ enabled }, owner), copy.enableFailed)
+  const setNetwork = (network: boolean) => void mutate(() => updateSandboxPolicy({ network }, owner))
 
   const addFolder = async (mode: SandboxGrantMode) => {
-    if (!status) {
-      return
+    try {
+      const path = await pickProjectFolder()
+
+      if (!path) {
+        return
+      }
+
+      const preview = await getSandboxGrantTarget(path, owner)
+
+      if (
+        !(await confirm({
+          title: copy.foldersTitle,
+          description: t.assistant.tool.sandboxRecursiveScope(preview.target)
+        }))
+      ) {
+        return
+      }
+
+      await mutate(() => grantSandboxPath(preview.target, mode, owner))
+    } catch (err) {
+      notifyError(err, copy.updateFailed)
     }
-
-    const dir = await pickProjectFolder()
-
-    if (!dir) {
-      return
-    }
-
-    const readwrite = status.policy.readwrite_paths.filter(p => p.toLowerCase() !== dir.toLowerCase())
-    const readonly = status.policy.readonly_paths.filter(p => p.toLowerCase() !== dir.toLowerCase())
-
-    if (mode === 'readwrite') {
-      readwrite.push(dir)
-    } else {
-      readonly.push(dir)
-    }
-
-    void mutate(() => updateSandboxPolicy({ readwrite_paths: readwrite, readonly_paths: readonly }), copy.updateFailed)
   }
 
-  const removeFolder = (path: string) => {
-    if (!status) {
-      return
-    }
-
-    void mutate(
-      () =>
-        updateSandboxPolicy({
-          readwrite_paths: status.policy.readwrite_paths.filter(p => p !== path),
-          readonly_paths: status.policy.readonly_paths.filter(p => p !== path)
-        }),
-      copy.updateFailed
-    )
-  }
+  const removeFolder = (path: string) => void mutate(() => revokeSandboxPath(path, owner))
+  const loading = !status && !error
 
   if (loading) {
     return (
@@ -199,7 +145,20 @@ export function SandboxPanel({ workspace }: { workspace?: string } = {}) {
     )
   }
 
-  if (!status || !status.platform_supported) {
+  if (!status) {
+    return (
+      <div className="grid gap-2">
+        <p className="text-xs text-muted-foreground" role="status">
+          {copy.statusUnknown}
+        </p>
+        <Button onClick={() => void refresh()} size="sm" variant="text">
+          {copy.recheck}
+        </Button>
+      </div>
+    )
+  }
+
+  if (!status.platform_supported && !status.enabled) {
     return null
   }
 
@@ -227,8 +186,13 @@ export function SandboxPanel({ workspace }: { workspace?: string } = {}) {
       </div>
 
       <p className="px-1 text-[0.72rem] text-muted-foreground">{copy.description}</p>
+      {!confirmed && (
+        <p className="text-xs text-muted-foreground" role="status">
+          {copy.statusUnknown}
+        </p>
+      )}
 
-      {!status.available && !status.shell_missing && status.reason && (
+      {!status.available && status.reason && (
         <p className="px-1 text-[0.72rem] text-muted-foreground" data-testid="sandbox-reason">
           <AlertTriangle className="mr-1 inline size-3" />
           {status.reason}
@@ -247,7 +211,7 @@ export function SandboxPanel({ workspace }: { workspace?: string } = {}) {
           <Switch
             aria-label={copy.toggleLabel}
             checked={status.enabled}
-            disabled={busy || (!status.available && !status.shell_missing)}
+            disabled={busy || (!status.enabled && (!confirmed || (!status.available && !status.shell_missing)))}
             onCheckedChange={setEnabled}
           />
         }

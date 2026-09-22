@@ -1,9 +1,12 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { isMarkdownDocumentPath, mediaMarkdownHref } from '@/lib/media'
+import { confirmNonMxcOwner } from '@/test/sandbox'
 
 import { MarkdownTextContent } from './markdown-text'
+
+beforeEach(() => { confirmNonMxcOwner() })
 
 // Regression for #84951: a `.md` delivered via MEDIA has no entry in
 // MEDIA_BY_EXT, so it classified as a generic 'file' and rendered as a

@@ -10,6 +10,7 @@ import {
 import type { code as streamdownCode } from '@streamdown/code'
 import { type ComponentProps, memo, type ReactNode, useEffect, useMemo, useState } from 'react'
 
+import type { SandboxOwner } from '@/api/sandbox'
 import { ExpandableBlock } from '@/components/chat/expandable-block'
 import { PreviewAttachment } from '@/components/chat/preview-attachment'
 import { chunkByLines, SyntaxHighlighter } from '@/components/chat/shiki-highlighter'
@@ -27,8 +28,6 @@ import {
   isFileMediaPath,
   isInlineMediaSrc,
   isMarkdownDocumentPath,
-  isRemoteGateway,
-  mediaExternalUrl,
   mediaKind,
   mediaName,
   mediaPathFromMarkdownHref,
@@ -43,8 +42,14 @@ import { cn } from '@/lib/utils'
 
 import { ArtifactCard } from './artifact-card'
 import { SessionRefLink } from './directive-text'
-import { detectEmbed, extractAlert, MarkdownAlert, RichCodeBlock, UrlEmbed } from './embeds'
+import { detectEmbed, extractAlert, MarkdownAlert, RICH_FENCE_LANGUAGES, RichCodeBlock, UrlEmbed } from './embeds'
 import { ResizableMarkdownTable, ResizableMarkdownTh } from './markdown-table'
+import {
+  InertModelOutput,
+  ModelOutputOwnerProvider,
+  useModelOutputOwner,
+  useModelOutputRestriction
+} from './model-output-policy'
 import { paragraphPlainText, TranscriptDirectiveLeaf, useResolvedParagraph } from './transcript-directive'
 
 const onboardingEnabled = isOnboardingEnabled()
@@ -110,14 +115,17 @@ function preprocessWithTailRepair(text: string): string {
 }
 
 function useOpenMediaFile(path: string) {
+  const owner = useModelOutputOwner()
   const [openFailed, setOpenFailed] = useState(false)
 
   const open = () => {
-    if (window.hermesDesktop && isRemoteGateway()) {
+    if (!isInlineMediaSrc(path)) {
       setOpenFailed(false)
-      void downloadGatewayMediaFile(path).catch(() => setOpenFailed(true))
+      void downloadGatewayMediaFile(path, undefined, owner).catch(() => setOpenFailed(true))
     } else {
-      openExternalLink(mediaExternalUrl(path))
+      void resolveMediaDisplaySrc(path, owner)
+        .then(src => openExternalLink(src))
+        .catch(() => setOpenFailed(true))
     }
   }
 
@@ -150,6 +158,18 @@ function OpenMediaButton({ kind, path }: { kind: 'audio' | 'video'; path: string
 }
 
 function MediaAttachment({ path }: { path: string }) {
+  const owner = useModelOutputOwner()
+  const restriction = useModelOutputRestriction()
+
+  return restriction ? (
+    <InertModelOutput reason={restriction} target={path} />
+  ) : (
+    <MediaAttachmentContent key={JSON.stringify([owner, path])} path={path} />
+  )
+}
+
+function MediaAttachmentContent({ path }: { path: string }) {
+  const owner = useModelOutputOwner()
   const [src, setSrc] = useState('')
   const [failed, setFailed] = useState(false)
   const { open, openFailed } = useOpenMediaFile(path)
@@ -171,7 +191,7 @@ function MediaAttachment({ path }: { path: string }) {
       }
     }
 
-    void resolveMediaPlaybackSrc(path)
+    void resolveMediaPlaybackSrc(path, owner)
       .then(value => {
         if (value.startsWith('blob:')) {
           objectUrl = value
@@ -196,7 +216,7 @@ function MediaAttachment({ path }: { path: string }) {
         URL.revokeObjectURL(objectUrl)
       }
     }
-  }, [kind, path])
+  }, [kind, path, owner])
 
   if (kind === 'image' && src) {
     return (
@@ -261,6 +281,26 @@ function childrenToText(children: unknown): string {
 }
 
 function MarkdownLink({ children, className, href, ...props }: ComponentProps<'a'>) {
+  const owner = useModelOutputOwner()
+  const restriction = useModelOutputRestriction()
+
+  if (restriction) {
+    return (
+      <>
+        {children}
+        <InertModelOutput
+          reason={restriction}
+          target={
+            mediaPathFromMarkdownHref(href) ??
+            previewTargetFromMarkdownHref(href) ??
+            sessionRefFromMarkdownHref(href) ??
+            href
+          }
+        />
+      </>
+    )
+  }
+
   const mediaPath = mediaPathFromMarkdownHref(href)
 
   if (mediaPath) {
@@ -294,7 +334,7 @@ function MarkdownLink({ children, className, href, ...props }: ComponentProps<'a
   const sessionRef = sessionRefFromMarkdownHref(href)
 
   if (sessionRef) {
-    return <SessionRefLink value={sessionRef} />
+    return <SessionRefLink owner={owner} value={sessionRef} />
   }
 
   const target = href ? normalizeExternalUrl(href) : href
@@ -363,19 +403,26 @@ function MarkdownLink({ children, className, href, ...props }: ComponentProps<'a
 // conditional return inside it would have to sit after every hook call, which
 // would still fire an image resolve for media we never render as an image.
 export function MarkdownImage(props: ComponentProps<'img'>) {
+  const owner = useModelOutputOwner()
+  const restriction = useModelOutputRestriction()
   const rawSrc = typeof props.src === 'string' ? props.src : ''
   const kind = rawSrc ? mediaKind(rawSrc) : 'file'
+
+  if (restriction) {
+    return <InertModelOutput reason={restriction} target={rawSrc || props.alt} />
+  }
 
   if (kind === 'video' || kind === 'audio') {
     return <MediaAttachment path={rawSrc} />
   }
 
-  return <MarkdownImageContent {...props} />
+  return <MarkdownImageContent key={JSON.stringify([owner, rawSrc])} {...props} />
 }
 
 function MarkdownImageContent({ className, src, alt, ...props }: ComponentProps<'img'>) {
+  const owner = useModelOutputOwner()
   const rawSrc = typeof src === 'string' ? src : ''
-  const [resolvedSrc, setResolvedSrc] = useState(() => (rawSrc && isInlineMediaSrc(rawSrc) ? rawSrc : ''))
+  const [resolvedSrc, setResolvedSrc] = useState('')
   const [failed, setFailed] = useState(false)
   const { open, openFailed } = useOpenMediaFile(rawSrc)
   const name = mediaName(rawSrc || String(alt || 'image'))
@@ -384,15 +431,15 @@ function MarkdownImageContent({ className, src, alt, ...props }: ComponentProps<
     let cancelled = false
 
     setFailed(false)
-    setResolvedSrc(rawSrc && isInlineMediaSrc(rawSrc) ? rawSrc : '')
+    setResolvedSrc('')
 
-    if (!rawSrc || isInlineMediaSrc(rawSrc)) {
+    if (!rawSrc) {
       return () => {
         cancelled = true
       }
     }
 
-    void resolveMediaDisplaySrc(rawSrc)
+    void resolveMediaDisplaySrc(rawSrc, owner)
       .then(value => {
         if (!cancelled) {
           setResolvedSrc(value)
@@ -407,7 +454,7 @@ function MarkdownImageContent({ className, src, alt, ...props }: ComponentProps<
     return () => {
       cancelled = true
     }
-  }, [rawSrc])
+  }, [rawSrc, owner])
 
   if (!rawSrc) {
     return null
@@ -441,6 +488,7 @@ function MarkdownImageContent({ className, src, alt, ...props }: ComponentProps<
         className
       )}
       containerClassName="my-2 block w-fit max-w-[min(100%,var(--image-preview-max-width))]"
+      modelOwner={owner}
       slot="aui_markdown-image"
       src={resolvedSrc}
       {...props}
@@ -590,6 +638,7 @@ function MarkdownTextSurface({
   scratchpad
 }: MarkdownTextSurfaceProps) {
   const { status, text } = useMessagePartText()
+  const restriction = useModelOutputRestriction(previewOnly ? null : undefined)
   const isStreaming = status.type === 'running'
 
   // Keep code parsing enabled while streaming so incomplete fenced blocks still
@@ -694,6 +743,17 @@ function MarkdownTextSurface({
           const artifact =
             disableArtifacts || previewOnly || scratchpad ? null : detectArtifact(props.language, props.code)
 
+          if (restriction) {
+            return (
+              <>
+                {(artifact || RICH_FENCE_LANGUAGES.has(props.language?.toLowerCase() ?? '')) && (
+                  <InertModelOutput reason={restriction} />
+                )}
+                <SyntaxHighlighter {...props} defer={isStreaming} />
+              </>
+            )
+          }
+
           if (artifact) {
             return <ArtifactCard code={props.code} detection={artifact} streaming={isStreaming} />
           }
@@ -708,7 +768,7 @@ function MarkdownTextSurface({
           )
         }
       }) as StreamdownTextComponents,
-    [decorateText, disableArtifacts, isStreaming, previewOnly, scratchpad]
+    [decorateText, disableArtifacts, isStreaming, previewOnly, scratchpad, restriction]
   )
 
   if (text.length > MAX_MARKDOWN_CHARS) {
@@ -772,19 +832,23 @@ interface MarkdownTextContentProps extends MarkdownTextSurfaceProps {
  * versions. `media={false}` leaves `MEDIA:` lines as prose: media paths resolve
  * against the ACTIVE gateway, so a message written on another machine (a
  * Connections Bot in a cross-machine room) must not have its path read here —
- * that is a broken image at best and a same-path local file at worst. */
+ * that is a broken image at best and a same-path local file at worst. Static
+ * callers must pass their own owner; missing provenance remains inert. */
 export function MessageTextContent({
   decorateText,
   media = true,
+  owner = null,
   text
-}: Pick<MarkdownTextSurfaceProps, 'decorateText'> & { media?: boolean; text: string }) {
+}: Pick<MarkdownTextSurfaceProps, 'decorateText'> & { media?: boolean; owner?: SandboxOwner | null; text: string }) {
   return (
-    <MarkdownTextContent
-      decorateText={decorateText}
-      disableArtifacts
-      isRunning={false}
-      text={media ? renderMediaTags(text) : text}
-    />
+    <ModelOutputOwnerProvider value={media ? owner : null}>
+      <MarkdownTextContent
+        decorateText={decorateText}
+        disableArtifacts
+        isRunning={false}
+        text={media ? renderMediaTags(text) : text}
+      />
+    </ModelOutputOwnerProvider>
   )
 }
 

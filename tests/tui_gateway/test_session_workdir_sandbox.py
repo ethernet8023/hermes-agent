@@ -87,3 +87,29 @@ def test_terminal_task_cwd_keeps_the_rehomed_session_folder_over_the_process_fal
     monkeypatch.setattr(server, "_workdir_terminal_cfg", lambda key: "")
     session = {"cwd": str(default), "explicit_cwd": False, "source": "desktop"}
     assert server._terminal_task_cwd_with_source(session) == (str(default), "session")
+
+
+def test_live_rehome_updates_display_and_durable_session(sandboxed, monkeypatch):
+    refused, default = sandboxed
+    saved = []
+    monkeypatch.setattr(server, "_persist_session_cwd_and_schedule_git_meta", lambda session, cwd: saved.append(cwd))
+    monkeypatch.setattr(server, "_register_session_cwd", lambda session: None)
+    session = {"cwd": str(refused), "explicit_cwd": True, "session_key": "k"}
+    assert server._display_session_cwd(session) == str(default)
+    assert session["cwd"] == str(default)
+    assert saved == [str(default)]
+
+
+def test_sandbox_settle_cannot_promote_readonly_worktree(sandboxed, tmp_path, monkeypatch):
+    from tools import terminal_tool
+    project, readonly = tmp_path / "project", tmp_path / "readonly"
+    project.mkdir()
+    readonly.mkdir()
+    monkeypatch.setattr(terminal_tool, "get_session_cwd", lambda key: str(readonly))
+    monkeypatch.setattr(server.git_probe, "repo_root", lambda path: path)
+    monkeypatch.setattr(server.git_probe, "common_repo_root", lambda path: str(project))
+    monkeypatch.setattr(server, "_persist_session_cwd_and_schedule_git_meta", lambda *a: None)
+    monkeypatch.setattr(server, "_register_session_cwd", lambda *a: None)
+    session = {"cwd": str(project), "session_key": "k", "cwd_from_settle": True}
+    assert server._reconcile_session_cwd_from_terminal(session) is False
+    assert session["cwd"] == str(project)

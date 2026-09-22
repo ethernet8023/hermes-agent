@@ -1,7 +1,9 @@
 import DOMPurify from 'dompurify'
 
+import type { SandboxOwner } from '@/api/sandbox'
 import { isDesktopFsRemoteMode, readDesktopFileDataUrl, readDesktopFileText } from '@/lib/desktop-fs'
 import type { PreviewTarget } from '@/store/preview'
+import { confirmModelOutputAccess } from '@/store/sandbox'
 
 const HTML_EXTENSIONS = new Set(['.htm', '.html'])
 const IMAGE_EXTENSIONS = new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp'])
@@ -197,7 +199,7 @@ export function localPreviewTarget(rawTarget: string, cwd?: string | null): Prev
     } catch {
       path = raw.replace(/^file:\/\//i, '')
     }
-  } else if (!raw.startsWith('/') && cwd) {
+  } else if (!/^(?:[\\/]|[a-z]:[\\/]|~(?:[\\/]|$))/i.test(raw) && cwd) {
     path = joinPath(cwd, raw)
   }
 
@@ -222,7 +224,7 @@ export function localPreviewTarget(rawTarget: string, cwd?: string | null): Prev
 
 async function enrichPreviewTarget(target: PreviewTarget | null): Promise<PreviewTarget | null> {
   if (
-    !isDesktopFsRemoteMode() ||
+    (!target?.modelOwner && !isDesktopFsRemoteMode()) ||
     !target ||
     target.kind !== 'file' ||
     target.previewKind === 'image' ||
@@ -233,7 +235,9 @@ async function enrichPreviewTarget(target: PreviewTarget | null): Promise<Previe
 
   if (target.previewKind === 'html') {
     try {
-      const dataUrl = validatedRemoteHtmlDataUrl(await readDesktopFileDataUrl(target.path || target.source))
+      const dataUrl = validatedRemoteHtmlDataUrl(
+        await readDesktopFileDataUrl(target.path || target.source, target.modelOwner)
+      )
 
       return dataUrl ? { ...target, dataUrl } : { ...target, renderMode: 'source', transient: true }
     } catch {
@@ -242,7 +246,7 @@ async function enrichPreviewTarget(target: PreviewTarget | null): Promise<Previe
   }
 
   try {
-    const result = await readDesktopFileText(target.path || target.source)
+    const result = await readDesktopFileText(target.path || target.source, target.modelOwner)
 
     return {
       ...target,
@@ -259,8 +263,18 @@ async function enrichPreviewTarget(target: PreviewTarget | null): Promise<Previe
 
 export async function normalizeOrLocalPreviewTarget(
   rawTarget: string,
-  cwd?: string | null
+  cwd?: string | null,
+  owner?: SandboxOwner | null
 ): Promise<PreviewTarget | null> {
+  if (owner !== undefined) {
+    const check = await confirmModelOutputAccess(owner)
+    const target = localPreviewTarget(rawTarget, cwd)
+    const result = target ? await enrichPreviewTarget({ ...target, modelOwner: owner! }) : null
+    check()
+
+    return result
+  }
+
   try {
     const normalized = await window.hermesDesktop?.normalizePreviewTarget?.(rawTarget, cwd || undefined)
 

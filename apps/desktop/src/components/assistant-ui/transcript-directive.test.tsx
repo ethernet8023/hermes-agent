@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { registry } from '@/contrib/registry'
 import { TRANSCRIPT_DIRECTIVE_AREA, type TranscriptDirectiveContribution } from '@/lib/transcript-directives'
+import { confirmNonMxcOwner } from '@/test/sandbox'
 
 import { paragraphPlainText, TranscriptDirectiveLeaf } from './transcript-directive'
+
+beforeEach(() => { confirmNonMxcOwner() })
 
 describe('paragraphPlainText', () => {
   it('passes through a plain string', () => {

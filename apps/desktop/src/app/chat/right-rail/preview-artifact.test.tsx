@@ -1,7 +1,10 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { $artifactRegistry, $artifactVersionSelection, artifactPreviewTarget, upsertArtifact } from '@/store/artifacts'
+import { invalidateSandboxStatus, publishSandboxStatus, sandboxState } from '@/store/sandbox'
+import { setSessionOwnerHint } from '@/store/session'
+import { confirmNonMxcOwner } from '@/test/sandbox'
 
 import { ArtifactPreview } from './preview-artifact'
 
@@ -24,6 +27,24 @@ async function renderArtifact(artifactId: string) {
 }
 
 describe('ArtifactPreview', () => {
+  const owner = { connectionId: 'artifact-owner', profile: 'artifact-profile' }
+  beforeEach(() => {
+    setSessionOwnerHint('session-1', owner)
+    confirmNonMxcOwner(owner)
+  })
+
+  it('withdraws executable HTML on the artifact owner policy change, keeping its source readable', async () => {
+    const { artifactId } = register('Owned widget', 'html', '<script>fetch("https://example.test")</script>')
+    await renderArtifact(artifactId)
+    expect(screen.getByTitle('Owned widget')).toBeTruthy()
+    await act(async () => invalidateSandboxStatus(owner))
+    expect(screen.queryByTitle('Owned widget')).toBeNull()
+    expect(screen.getByText(/Preview withheld/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /rendered/i })).toBeNull()
+    await act(async () => publishSandboxStatus({ ...sandboxState(owner).get().status!, enabled: true }, owner))
+    expect(screen.queryByTitle('Owned widget')).toBeNull()
+    expect(screen.getByText(/Preview withheld under MXC/)).toBeTruthy()
+  })
   afterEach(() => {
     cleanup()
     $artifactRegistry.set({})

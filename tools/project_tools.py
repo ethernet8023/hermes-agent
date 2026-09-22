@@ -79,6 +79,9 @@ def project_list(task_id: Optional[str] = None) -> str:
 
 
 def project_create(name: str, path: Optional[str] = None, task_id: Optional[str] = None) -> str:
+    from tools.environments.mxc_policy import uncontained_action_refusal
+    if reason := uncontained_action_refusal("Model-selected project creation/workspace change"):
+        return json.dumps({"success": False, "error": reason})
     name = (name or "").strip()
     if not name:
         return json.dumps({"success": False, "error": "name is required"})
@@ -107,6 +110,9 @@ def project_create(name: str, path: Optional[str] = None, task_id: Optional[str]
 
 
 def project_switch(project: str, task_id: Optional[str] = None) -> str:
+    from tools.environments.mxc_policy import uncontained_action_refusal
+    if reason := uncontained_action_refusal("Model-selected project/workspace switch"):
+        return json.dumps({"success": False, "error": reason})
     from hermes_cli import projects_db as pdb
     with pdb.connect_closing() as conn:
         proj = _resolve(conn, project)

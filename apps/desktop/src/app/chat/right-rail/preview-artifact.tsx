@@ -2,6 +2,8 @@ import { useStore } from '@nanostores/react'
 import DOMPurify from 'dompurify'
 import { useEffect, useMemo, useState } from 'react'
 
+import { useKnownSessionSandboxOwner } from '@/app/chat/composer/use-sandbox-owner'
+import { InertModelOutput, useModelOutputRestriction } from '@/components/assistant-ui/model-output-policy'
 import { CopyButton } from '@/components/ui/copy-button'
 import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
@@ -186,12 +188,16 @@ export function ArtifactPreview({ target }: { target: PreviewTarget }) {
   }, [artifactId])
 
   const record = useMemo(() => findArtifact(registry, artifactId), [artifactId, registry])
+  // Preview tabs outlive the foreground session. Only the artifact's recorded
+  // session can authorize its executable view, never whichever chat is active.
+  const owner = useKnownSessionSandboxOwner(record?.sessionId)
+  const restriction = useModelOutputRestriction(owner)
 
   if (!record) {
     return <PreviewEmptyState body={copy.missingBody} title={copy.missingTitle} />
   }
 
-  const renderable = record.kind === 'html' || record.kind === 'svg'
+  const renderable = !restriction && (record.kind === 'html' || record.kind === 'svg')
   const modes: PreviewViewMode[] = renderable ? ['rendered', 'source'] : ['source']
   const mode = userMode && modes.includes(userMode) ? userMode : modes[0]!
   const versionIndex = Math.min(versionSelection[artifactId] ?? record.versions.length - 1, record.versions.length - 1)
@@ -199,6 +205,7 @@ export function ArtifactPreview({ target }: { target: PreviewTarget }) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
+      {restriction && <InertModelOutput reason={restriction} target={record.title} />}
       <PreviewModeSwitcher
         active={mode}
         modes={modes}
@@ -234,7 +241,7 @@ export function ArtifactPreview({ target }: { target: PreviewTarget }) {
                 <Download className="size-3" />
               </button>
             </Tip>
-            {record.kind === 'html' && window.hermesDesktop && (
+            {!restriction && record.kind === 'html' && window.hermesDesktop && (
               <Tip label={copy.openInBrowser}>
                 <button
                   aria-label={copy.openInBrowser}

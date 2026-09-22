@@ -513,6 +513,8 @@ class ProcessSession:
     """A tracked background process with output buffering."""
     id: str                                     # "proc_xxxxxxxxxxxx"
     command: str
+    profile_home: str = field(default="", kw_only=True)  # Never inferred by a sweeping caller
+    terminal_backend: str = field(default="", kw_only=True)  # Actual execution backend
     task_id: str = ""                           # Task/sandbox isolation key (CONTAINER key,
                                                 # may be collapsed by _resolve_container_task_id)
     owner_task_id: str = ""                     # RAW spawning task id ("sa-..."); ownership
@@ -587,7 +589,7 @@ _WATCHER_ROUTE_KEYS = ("platform", "chat_id", "user_id", "user_name", "thread_id
 # ``session_id``; ``command`` is redacted and ``owner_task_id`` defaulted on write).
 _CHECKPOINT_FIELDS = (
     "command", "pid", "pid_scope", "host_start_time", "systemd_unit", "cwd",
-    "started_at", "task_id", "owner_task_id", "session_key",
+    "started_at", "task_id", "owner_task_id", "session_key", "profile_home", "terminal_backend",
     *(f"watcher_{k}" for k in _WATCHER_ROUTE_KEYS), "watcher_interval",
     "parent_session_id", "notify_on_complete", "completion_output_chars", "watch_patterns")
 _CHECKPOINT_DEFAULTS = {
@@ -1039,11 +1041,13 @@ class ProcessRegistry(ProcessCheckpointMixin):
     @staticmethod
     def _new_session(command, task_id, owner_task_id, session_key, cwd, **extra) -> ProcessSession:
         from gateway.session_context import get_session_env
+        from hermes_constants import hermes_home_key
 
         return ProcessSession(
             id=f"proc_{uuid.uuid4().hex[:12]}", command=command, task_id=task_id,
             owner_task_id=owner_task_id or task_id, session_key=session_key, cwd=cwd,
             parent_session_id=get_session_env("HERMES_SESSION_ID", ""),
+            profile_home=hermes_home_key(),
             started_at=time.time(), **extra)
 
     @staticmethod
@@ -1788,7 +1792,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
     # Minimum suffix chars for prefix resolution; "p"/"proc_1" are too collision-prone.
     _MIN_PREFIX_CHARS = 4
 
-    def get(self, session_id: str) -> Optional[ProcessSession]:
+    def get(self, session_id: str, *, refresh: bool = True) -> Optional[ProcessSession]:
         """Session by full ID or unique prefix (``proc_4dae`` / bare ``4dae``, like git
         short hashes); ambiguous or too-short prefixes resolve to None, never a guess."""
         if not isinstance(session_id, str) or not session_id:
@@ -1797,7 +1801,8 @@ class ProcessRegistry(ProcessCheckpointMixin):
             session = self._running.get(session_id) or self._finished.get(session_id)
         if session is None:
             session = load_completed_results(session_id).get(session_id)
-        return self._refresh_detached_session(session if session is not None else self._resolve_prefix(session_id))
+        session = session if session is not None else self._resolve_prefix(session_id)
+        return self._refresh_detached_session(session) if refresh else session
 
     def _resolve_prefix(self, session_id: str) -> Optional[ProcessSession]:
         """Resolve a unique session-ID prefix (a bare hex tail is normalized to
@@ -2205,7 +2210,8 @@ class ProcessRegistry(ProcessCheckpointMixin):
         """O(1) running count for status-bar polling; dict ``len()`` is atomic, no lock."""
         return len(self._running)
 
-    def list_sessions(self, task_id: str = None, session_key: str = None, *, include_retained: bool = False) -> list:
+    def list_sessions(self, task_id: str = None, session_key: str = None, *, include_retained: bool = False,
+                      profile_home: str = None, terminal_backend: str = None, session_filter=None) -> list:
         """Running and recently-finished processes for ``task_id`` and/or ``session_key``;
         cross-task entries sharing the gateway session (a forgotten preview server
         blocking session reset) are flagged ``"session_scoped": true``.
@@ -2221,8 +2227,11 @@ class ProcessRegistry(ProcessCheckpointMixin):
         with self._lock:
             sessions.update(self._finished)
             sessions.update(self._running)
-        all_sessions = [self._refresh_detached_session(s) for s in sessions.values()]
-        if task_id or session_key:
+        all_sessions = [self._refresh_detached_session(s) for s in sessions.values()
+                        if (profile_home is None or s.profile_home == profile_home)
+                        and (terminal_backend is None or s.terminal_backend == terminal_backend)
+                        and (session_filter is None or session_filter(s))]
+        if session_filter is None and (task_id or session_key):
             all_sessions = [
                 s for s in all_sessions
                 if (task_id and s.task_id == task_id) or (session_key and s.session_key == session_key)
@@ -2456,7 +2465,7 @@ def _redact_process_result(result: dict) -> dict:
     return result
 
 
-def _list_processes(task_id) -> dict:
+def _list_processes(task_id, **ownership) -> dict:
     # Also surface session-scoped background processes (e.g. a forgotten preview
     # server): they share the gateway session_key and can block session reset.
     session_key = ""
@@ -2467,7 +2476,7 @@ def _list_processes(task_id) -> dict:
     return {"processes": [
         _redact_process_result(p)
         for p in process_registry.list_sessions(
-            task_id=task_id, session_key=session_key or None, include_retained=True)]}
+            task_id=task_id, session_key=session_key or None, include_retained=True, **ownership)]}
 
 
 # action -> (handler(session_id, args) -> dict, redact output?). Output-bearing
@@ -2524,7 +2533,45 @@ def _handoff_process(session_id: str, args: dict, task_id: Optional[str]) -> dic
 _MAX_HANDOFFS_PER_CHILD = 3
 
 
+def _mxc_process_admission(task_id):
+    """Use raw ownership, never a shared container key, for model process access."""
+    from hermes_constants import hermes_home_key
+    from tools.approval_context import get_current_session_key
+    from agent.delegation_context import is_delegated_child_context
+    profile = hermes_home_key()
+    session_key = get_current_session_key(default="") or ""
+    child = is_delegated_child_context()
+
+    def admitted(session):
+        if (session is None or session.profile_home != profile
+                or session.terminal_backend != "mxc" or not session.owner_task_id):
+            return False
+        if task_id and session.owner_task_id == task_id:
+            return True
+        # Children inherit the approval session. Only an explicit ownership
+        # handoff makes their processes available to the parent (and vice versa).
+        return bool(not child and not session.owner_task_id.startswith("sa-")
+                    and session_key and session.session_key == session_key)
+    return admitted
+
+
 def _handle_process(args, **kw):
+    from tools.terminal_scope import get_live_terminal_config
+    try:
+        from tools.terminal_policy_lifecycle import reconcile_terminal_policy
+        reconcile_terminal_policy()
+        restricted = get_live_terminal_config()["backend"] == "mxc"
+    except Exception as exc:
+        return tool_error(str(exc))
+    if restricted:
+        admitted = _mxc_process_admission(kw.get("task_id"))
+        if args.get("action") == "list":
+            result = _list_processes(kw.get("task_id"), session_filter=admitted)
+            return json.dumps(result, ensure_ascii=False)
+        session = process_registry.get(str(args.get("session_id") or ""), refresh=False)
+        if not admitted(session):
+            return tool_error("Sandbox policy permits controlling only this conversation's owned MXC-backed processes")
+        args = {**args, "session_id": session.id}
     action = args.get("action", "")
     # Coerce to string — some models send session_id as an integer
     session_id = str(args.get("session_id", "")) if args.get("session_id") is not None else ""

@@ -9,9 +9,10 @@ vi.mock('@assistant-ui/react', async importOriginal => ({
     select({ message: { id: 'msg-1', status: { type: 'complete' } }, thread: { isRunning: false } })
 }))
 
-vi.mock('@/hermes', async importOriginal => ({
+vi.mock('@/api/sandbox', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  grantSandboxPath: vi.fn()
+  grantSandboxPath: vi.fn(),
+  getSandboxGrantTarget: vi.fn(async (path: string) => ({ target: path, recursive: true }))
 }))
 
 const { ToolFallback } = await import('./fallback')
@@ -24,11 +25,13 @@ const REFUSAL = [
   '  read/write: C:\\Demo'
 ].join('\n')
 
+let callId = 0
+
 function renderRow(result: unknown, toolName = 'search_files') {
   const props = {
     args: { path: 'C:\\Users\\me\\mxc', pattern: '*' },
     result,
-    toolCallId: 'call-1',
+    toolCallId: `sandbox-${++callId}`,
     toolName
   } as unknown as ComponentProps<typeof ToolFallback>
 
@@ -49,17 +52,19 @@ describe('sandbox refusal on a tool card', () => {
   // Refusals are frequent and often incidental (a probe of a parent folder), so the grant
   // callout lives with the rest of the output behind the disclosure; the collapsed card shows
   // the badge and the "blocked" subtitle only.
-  it('keeps the grant callout behind the disclosure for a refused file tool', () => {
+  it('keeps the grant callout behind the disclosure for a refused file tool', async () => {
     renderRow({ error: REFUSAL })
 
     expect(screen.queryByTestId('sandbox-denial')).toBeNull()
     expect(screen.getByTestId('sandbox-pill').textContent).toBe('MXC')
+    expect(screen.getByText('Blocked by sandbox policy')).toBeTruthy()
+    expect(screen.queryByLabelText('Recovered')).toBeNull()
 
     expandCard()
 
     const callout = screen.getByTestId('sandbox-denial')
     expect(callout.textContent).toContain('C:\\Users\\me\\mxc')
-    expect(screen.getByRole('button', { name: 'Allow reading' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Allow reading' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Allow read & write' })).toBeTruthy()
   })
 
@@ -73,7 +78,10 @@ describe('sandbox refusal on a tool card', () => {
       'terminal'
     )
 
-    // Terminal cards open by default, so the callout is already in view with the output.
+    expect(screen.queryByTestId('sandbox-denial')).toBeNull()
+    expect(screen.getByText('Blocked by sandbox policy')).toBeTruthy()
+    expect(screen.queryByLabelText('Recovered')).toBeNull()
+    expandCard()
     expect(screen.getByTestId('sandbox-denial').textContent).toContain('C:\\Users\\me\\Documents\\x')
   })
 

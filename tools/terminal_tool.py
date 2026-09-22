@@ -44,7 +44,7 @@ from tools.terminal_tool_lifecycle import (
     _evict_environment_for_task, cleanup_all_environments, ensure_task_env,
 )
 from tools.terminal_tool_config import (
-    _is_container_backend, _is_host_cwd, _is_unusable_container_cwd, _parse_env_var,
+    _is_container_backend, _is_host_cwd, _is_refused_sandbox_cwd, _is_unusable_container_cwd, _parse_env_var,
     _plugin_env_flag, _quiet, _safe_getcwd, _tenv, _tenv_bool,
 )
 from tools.terminal_tool_backends import (
@@ -289,6 +289,10 @@ def _sanitize_cwd_for_live_env(env: Any, new_cwd: str) -> Optional[str]:
     verbatim (ACP project-root switching must keep working).
     """
     env_type = getattr(env, "env_type", None)
+    if _is_refused_sandbox_cwd(env_type, new_cwd):
+        # The sandbox works on the host filesystem, so the override applies verbatim unless the
+        # policy refuses the folder as a workspace; then the env keeps its own.
+        return None
     if not env_type or not _is_container_backend(env_type):
         return new_cwd
     if not _is_unusable_container_cwd(new_cwd):
@@ -638,13 +642,25 @@ def _resolve_config_cwd(env_type: str, mount_docker_cwd: bool) -> tuple:
                     "(host/relative path won't work in sandbox). Using %r instead.",
                     cwd, env_type, default_cwd)
         cwd = default_cwd
+    elif _is_refused_sandbox_cwd(env_type, cwd):
+        from tools.environments import mxc_host
+        rehomed = mxc_host.sandbox_workspace_for(cwd)
+        logger.info("Ignoring TERMINAL_CWD=%r for the %s backend (refused as a sandbox workspace). "
+                    "Using %r instead.", cwd, env_type, rehomed)
+        cwd = rehomed
     return cwd, host_cwd
 
 
 def _get_env_config() -> Dict[str, Any]:
+    from tools.terminal_scope import terminal_config_snapshot
+    _ensure_terminal_env_bridged()
+    with terminal_config_snapshot():
+        return _parse_env_config()
+
+
+def _parse_env_config() -> Dict[str, Any]:
     """Resolve the terminal configuration dict from TERMINAL_* env vars."""
     default_image = "nikolaik/python-nodejs:python3.11-nodejs20"
-    _ensure_terminal_env_bridged()
     env_type = _tenv("TERMINAL_ENV", "local")
     mount_docker_cwd = _tenv_bool("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false")
 
@@ -828,6 +844,12 @@ def _resolve_command_cwd(
             recorded, env_type, default_cwd,
         )
         return default_cwd
+    if recorded and _is_refused_sandbox_cwd(env_type, recorded):
+        # Recorded before the sandbox was switched on, typically; the command runs in the
+        # sanitized default and its observed cwd brings the record along.
+        logger.info("Ignoring recorded session cwd %r for the %s backend (refused as a sandbox "
+                    "workspace). Using %r instead.", recorded, env_type, default_cwd)
+        return default_cwd
     return recorded or default_cwd
 
 
@@ -927,6 +949,9 @@ class _ExecPlan:
     cwd: str
     host_cwd: Optional[str]
     effective_timeout: int
+    policy_owner: str
+    policy_fingerprint: str
+    task_overrides: Dict[str, Any]
     # Set when a foreground call asked for more than FOREGROUND_MAX_TIMEOUT and was promoted to a
     # tracked background process instead of being refused (the requested seconds, for the note).
     promoted_from_foreground_timeout: Optional[int] = None
@@ -941,6 +966,16 @@ _PROMOTED_NOTE = (
 
 
 def _plan_execution(
+    command: Any, *, task_id: Optional[str], timeout: Optional[int],
+    background: bool, _host_local: bool,
+) -> _ExecPlan:
+    from tools.terminal_scope import terminal_config_snapshot
+    with terminal_config_snapshot():
+        return _plan_execution_snapshot(command, task_id=task_id, timeout=timeout,
+                                        background=background, _host_local=_host_local)
+
+
+def _plan_execution_snapshot(
     command: Any, *, task_id: Optional[str], timeout: Optional[int],
     background: bool, _host_local: bool,
 ) -> _ExecPlan:
@@ -977,7 +1012,8 @@ def _plan_execution(
     # Per-task overrides (RL/benchmark envs, ACP workspace cwd) win over
     # the global env-var config; ``resolve_task_overrides`` reads the raw
     # task id first, then the collapsed container id.
-    overrides = resolve_task_overrides(task_id)
+    from copy import deepcopy
+    overrides = deepcopy(resolve_task_overrides(task_id))
     image = _select_image(env_type, overrides, config)
 
     cwd = overrides.get("cwd") or get_session_cwd(task_id) or config["cwd"]
@@ -996,6 +1032,14 @@ def _plan_execution(
                 cwd, env_type, remapped,
             )
         cwd = remapped
+    if env_type == "mxc":
+        from tools.environments import mxc_host
+        # A shell's cd is execution state, never workspace authority. In
+        # particular, visiting an additional readonly grant must not promote
+        # it to RW when this environment is evicted and recreated.
+        cwd = mxc_host.sandbox_workspace_for(overrides.get("cwd") or config["cwd"])
+        if _is_refused_sandbox_cwd(env_type, get_session_cwd(task_id)):
+            record_session_cwd(task_id, cwd)
     # Reject non-positive timeouts before deadline math: ``timeout or
     # default`` would silently turn 0 into the default, and a negative
     # value is truthy and would fire an immediate "-Ns" timeout.
@@ -1016,9 +1060,13 @@ def _plan_execution(
         if timeout and timeout > FOREGROUND_MAX_TIMEOUT:
             promoted = timeout
 
+    from hermes_constants import hermes_home_key
+    from tools.terminal_policy_lifecycle import policy_fingerprint
     return _ExecPlan(
         config=config, env_type=env_type, effective_task_id=effective_task_id,
         image=image, cwd=cwd, host_cwd=host_cwd, effective_timeout=timeout or config["timeout"],
+        policy_owner=hermes_home_key(), policy_fingerprint=policy_fingerprint(include_cwd=True),
+        task_overrides=overrides,
         promoted_from_foreground_timeout=promoted,
     )
 
@@ -1046,6 +1094,50 @@ def _with_promoted_note(result_json: str, requested_timeout: int) -> str:
 
 
 def _acquire_env(plan: _ExecPlan, task_id: Optional[str]) -> Any:
+    from tools.terminal_policy_lifecycle import (
+        terminal_policy_guard, bind_environment, check_environment, policy_fingerprint,
+    )
+    from tools.terminal_scope import TerminalPolicyUnavailable
+    with terminal_policy_guard() as (owner, fingerprint):
+        if (plan.policy_owner != owner
+                or plan.policy_fingerprint != policy_fingerprint(include_cwd=True)
+                or plan.task_overrides != resolve_task_overrides(task_id)):
+            raise TerminalPolicyUnavailable("Terminal policy changed while planning; retry the command")
+        if plan.env_type == "mxc":
+            with _env_lock:
+                existing = _lookup_active_env(plan.effective_task_id, task_id)
+            if (existing is not None and getattr(existing, "_terminal_policy_owner", None) == owner
+                    and getattr(existing, "_terminal_workspace_root", plan.cwd) != plan.cwd):
+                from tools.terminal_policy_lifecycle import retire_workspace_environment
+                retire_workspace_environment(existing)
+        env = _acquire_env_unfenced(plan, task_id, owner, fingerprint)
+        if (policy_fingerprint() != fingerprint
+                or plan.policy_fingerprint != policy_fingerprint(include_cwd=True)
+                or plan.task_overrides != resolve_task_overrides(task_id)):
+            from tools.terminal_policy_lifecycle import retire_workspace_environment
+            retire_workspace_environment(env)
+            raise TerminalPolicyUnavailable("Terminal policy changed during construction; retry the command")
+        if plan.env_type == "mxc" and (
+                getattr(env, "env_type", None) != "mxc"
+                or getattr(env, "_terminal_policy_owner", None) != owner):
+            raise TerminalPolicyUnavailable("Unowned or incompatible cached environment; refusing sandbox execution")
+        shared = plan.config.get("docker_shared_container_key") if plan.env_type == "docker" else None
+        if (shared and shared == getattr(env, "_terminal_shared_key", None)
+                and not getattr(env, "_terminal_policy_retired", False)
+                and owner not in env._terminal_policy_authorities):
+            # The same explicit key opts trusted profiles into one Docker
+            # environment. Ordinary profile/session cache hits never do this.
+            bind_environment(env, owner, fingerprint)
+        check_environment(env, owner, fingerprint)
+        bind_environment(env, owner, fingerprint)
+        if plan.env_type == "mxc":
+            plan.cwd = getattr(env, "workspace_root", env.cwd)
+            if _is_refused_sandbox_cwd("mxc", get_session_cwd(task_id)):
+                record_session_cwd(task_id, plan.cwd)
+        return env
+
+
+def _acquire_env_unfenced(plan: _ExecPlan, task_id: Optional[str], owner: str, fingerprint: str) -> Any:
     """Cached env for the task, else create it under the per-task creation lock.
 
     Concurrent calls for the same task_id wait for the first sandbox instead
@@ -1088,6 +1180,10 @@ def _acquire_env(plan: _ExecPlan, task_id: Optional[str]) -> Any:
                 status="disabled",
             ))
 
+        from tools.terminal_policy_lifecycle import bind_environment
+        bind_environment(new_env, owner, fingerprint)
+        new_env._terminal_shared_key = plan.config.get("docker_shared_container_key") if env_type == "docker" else None
+        new_env._terminal_workspace_root = plan.cwd
         with _env_lock:
             _active_environments[eff] = new_env
             _last_activity[eff] = time.time()

@@ -2,12 +2,17 @@
 
 import { type FC, useEffect, useState } from 'react'
 
+import {
+  InertModelOutput,
+  useModelOutputOwner,
+  useModelOutputRestriction
+} from '@/components/assistant-ui/model-output-policy'
 import { DiffusionCanvas } from '@/components/chat/image-generation-placeholder'
 import { ImageActionButton, ImageLightbox } from '@/components/chat/zoomable-image'
 import { useImageDownload } from '@/hooks/use-image-download'
 import { useI18n } from '@/i18n'
 import { generatedImageFromResult } from '@/lib/generated-images'
-import { filePathFromMediaPath, gatewayMediaDataUrl, isRemoteGateway, mediaExternalUrl, mediaName } from '@/lib/media'
+import { downloadGatewayMediaFile, isInlineMediaSrc, mediaName, resolveMediaDisplaySrc } from '@/lib/media'
 import { cn } from '@/lib/utils'
 
 // Aspect hint from the tool args sizes the frame *before* the image loads, so
@@ -28,39 +33,34 @@ function hintedRatio(aspectRatio?: string): number {
   )
 }
 
-function isInlineSrc(path: string): boolean {
-  return /^(?:https?|data):/i.test(path)
-}
-
-async function resolveImageSrc(path: string): Promise<string> {
-  if (isInlineSrc(path)) {
-    return path
-  }
-
-  if (window.hermesDesktop && isRemoteGateway()) {
-    return gatewayMediaDataUrl(path)
-  }
-
-  if (!window.hermesDesktop?.readFileDataUrl) {
-    return mediaExternalUrl(path)
-  }
-
-  return window.hermesDesktop.readFileDataUrl(filePathFromMediaPath(path))
-}
-
 export const GeneratedImage: FC<{ aspectRatio?: string; result?: unknown }> = ({ aspectRatio, result }) => {
+  const owner = useModelOutputOwner()
+  const restriction = useModelOutputRestriction()
+  const image = generatedImageFromResult(result)
+
+  return restriction ? (
+    image ? (
+      <InertModelOutput reason={restriction} target={image} />
+    ) : null
+  ) : (
+    <GeneratedImageContent aspectRatio={aspectRatio} key={JSON.stringify(owner)} result={result} />
+  )
+}
+
+const GeneratedImageContent: FC<{ aspectRatio?: string; result?: unknown }> = ({ aspectRatio, result }) => {
+  const owner = useModelOutputOwner()
   const { t } = useI18n()
   const copy = t.desktop
   const image = result === undefined ? null : generatedImageFromResult(result)
   const pending = result === undefined
 
   const [ratio, setRatio] = useState(() => hintedRatio(aspectRatio))
-  const [src, setSrc] = useState(() => (image && isInlineSrc(image) ? image : ''))
+  const [src, setSrc] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [canvasGone, setCanvasGone] = useState(false)
   const [failed, setFailed] = useState(false)
   const [lightboxOpen, setLightboxOpen] = useState(false)
-  const { download, saving } = useImageDownload(src)
+  const { download, saving } = useImageDownload(src, owner)
 
   useEffect(() => setRatio(hintedRatio(aspectRatio)), [aspectRatio])
 
@@ -72,20 +72,20 @@ export const GeneratedImage: FC<{ aspectRatio?: string; result?: unknown }> = ({
     setFailed(false)
     setLoaded(false)
     setCanvasGone(false)
-    setSrc(image && isInlineSrc(image) ? image : '')
+    setSrc('')
 
-    if (!image || isInlineSrc(image)) {
+    if (!image) {
       return
     }
 
-    void resolveImageSrc(image)
+    void resolveMediaDisplaySrc(image, owner)
       .then(resolved => !cancelled && setSrc(resolved))
       .catch(() => !cancelled && setFailed(true))
 
     return () => {
       cancelled = true
     }
-  }, [image])
+  }, [image, owner])
 
   // Completed but no usable image (generation failed): the agent's prose carries
   // the explanation, so render nothing here.
@@ -100,7 +100,12 @@ export const GeneratedImage: FC<{ aspectRatio?: string; result?: unknown }> = ({
         href="#"
         onClick={event => {
           event.preventDefault()
-          void window.hermesDesktop?.openExternal(mediaExternalUrl(image))
+
+          const open = isInlineMediaSrc(image)
+            ? resolveMediaDisplaySrc(image, owner).then(src => window.hermesDesktop?.openExternal(src))
+            : downloadGatewayMediaFile(image, undefined, owner)
+
+          void open.catch(() => setFailed(true))
         }}
       >
         {copy.openImage}: {mediaName(image)}

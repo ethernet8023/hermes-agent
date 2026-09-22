@@ -1,5 +1,7 @@
 import { atom, computed } from 'nanostores'
 
+import type { SandboxOwner } from '@/api/sandbox'
+import { persistentAtom } from '@/lib/persisted'
 import { readJson, readKey, writeKey } from '@/lib/storage'
 import { normalize } from '@/lib/text'
 
@@ -21,6 +23,8 @@ import { canOpenBrowserWindow, openBrowserInNewWindow } from './windows'
  */
 
 export interface PreviewTarget {
+  /** Model-selected targets retain their authority after the transcript unmounts. */
+  modelOwner?: SandboxOwner
   binary?: boolean
   byteSize?: number
   /** Inline image bytes (a `data:` URL) when the renderer already holds them —

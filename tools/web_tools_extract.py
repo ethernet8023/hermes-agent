@@ -1,7 +1,7 @@
 """web_extract helpers: URL validation, provider resolution, cache-aware dispatch.
 
 Order of controls (each is a gate, never skipped by a cache hit): secret-URL
-refusal -> SSRF filter (in web_tools.web_extract_tool) -> provider resolution
+refusal -> network admission -> SSRF filter (in web_tools.web_extract_tool) -> provider resolution
 (strict selection) -> per-URL website policy -> disk cache -> vendor call with
 one-shot keyless rescue. Logs under the origin (tools.web_tools) logger.
 """
@@ -86,12 +86,16 @@ def _merge_in_order(
 
 
 def _validate_extract_urls(urls: List[Any]):
-    """Normalize model-supplied items and block URLs carrying secrets (percent-encoded forms are unquoted
-    and checked too). Returns ``(normalized_urls, normalized_indices, invalid_urls, blocked_json)``;
+    """Normalize items, block secret URLs and refuse offline before the SSRF DNS check.
+    Percent-encoded forms are unquoted and checked too. Returns
+    ``(normalized_urls, normalized_indices, invalid_urls, blocked_json)``;
+    ``invalid_urls`` includes per-URL policy refusals;
     ``blocked_json`` is a whole-call refusal (exfiltration prevention) or None."""
     from agent.redact import _PREFIX_RE
+    from tools.environments.mxc_policy import network_refusal
     from urllib.parse import unquote
 
+    network_block = network_refusal()
     normalized_urls, normalized_indices, invalid_urls = [], [], {}
     for index, item in enumerate(urls):
         _url = _web_extract_url(item)
@@ -104,6 +108,9 @@ def _validate_extract_urls(urls: List[Any]):
                 "Blocked: URL contains what appears to be an API key or token. "
                 "Secrets must not be sent in URLs."
             )
+        if network_block is not None:
+            invalid_urls[index] = _result_entry(normalized_url, network_block)
+            continue
         normalized_urls.append(normalized_url)
         normalized_indices.append(index)
     return normalized_urls, normalized_indices, invalid_urls, None
@@ -201,7 +208,7 @@ async def _extract_safe_urls(provider, safe_urls: List[str], format: Optional[st
 
     The disk cache (tools/web_result_cache.py) sits AFTER the secret-URL gate, SSRF gate, and provider
     resolution, and is gated per-URL on the website policy — a hit skips only the vendor call, never a
-    control; policy-blocked URLs are cache misses. Keys include provider and format, so switching either
+    control; policy-blocked URLs are final refusals. Keys include provider and format, so switching either
     within the TTL never serves the other's content."""
     from tools.web_result_cache import extract_cache_get
     from tools.website_policy import check_website_access as _check_site
@@ -209,9 +216,16 @@ async def _extract_safe_urls(provider, safe_urls: List[str], format: Optional[st
     for position, url in enumerate(safe_urls):
         try:
             _policy_block = _check_site(url)
-        except Exception:  # noqa: BLE001 — policy errors fail open like dispatch
-            _policy_block = None
-        hit = extract_cache_get(url, format=format, provider=provider.name) if _policy_block is None else None
+        except Exception:
+            logger.debug("Web extract policy check failed", exc_info=True)
+            _policy_block = {"message": "Website access policy is unavailable. No content was fetched."}
+        if _policy_block is not None:
+            cached_results[position] = {
+                **_result_entry(url, _policy_block.get("message") or "Blocked by website policy"),
+                "blocked_by_policy": True,
+            }
+            continue
+        hit = extract_cache_get(url, format=format, provider=provider.name)
         if hit is not None:
             cached_results[position] = hit
         else:

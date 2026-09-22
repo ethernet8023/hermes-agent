@@ -1,7 +1,7 @@
 import type { ToolResultMetadata } from '@/lib/tool-result-metadata'
 
 export type ToolTone = 'agent' | 'browser' | 'default' | 'file' | 'image' | 'terminal' | 'web'
-export type ToolStatus = 'error' | 'notice' | 'running' | 'success' | 'warning'
+export type ToolStatus = 'blocked' | 'error' | 'notice' | 'running' | 'success' | 'warning'
 
 export interface ToolPart {
   toolResultMetadata?: ToolResultMetadata

@@ -86,7 +86,20 @@ def _stamp_gateway_routing(proc_session, get_session_env) -> None:
         setattr(proc_session, attr, get_session_env(var, ""))
 
 
-def _spawn(process_registry, *, env, env_type, command, cwd, effective_task_id, task_id,
+def _spawn(process_registry, **kwargs):
+    from tools.terminal_policy_lifecycle import terminal_policy_guard, check_environment
+    with terminal_policy_guard() as (owner, fingerprint):
+        check_environment(kwargs["env"], owner, fingerprint)
+        result = _spawn_unfenced(process_registry, **kwargs)
+        result.profile_home = owner
+        result.terminal_backend = kwargs["env_type"]
+        checkpoint = getattr(process_registry, "_write_checkpoint", None)
+        if checkpoint is not None:
+            checkpoint()
+        return result
+
+
+def _spawn_unfenced(process_registry, *, env, env_type, command, cwd, effective_task_id, task_id,
            session_key, effective_pty):
     common = dict(command=command, cwd=cwd, task_id=effective_task_id,
                   owner_task_id=task_id or effective_task_id, session_key=session_key)

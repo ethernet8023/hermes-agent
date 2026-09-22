@@ -2405,12 +2405,16 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
         )
 
         def _execute(next_args: dict) -> Any:
-            result = inline_executor(agent, next_args, inline_ctx)
+            from tools.environments.mxc_policy import tool_refusal
+            refusal = tool_refusal(function_name, next_args)
+            result = json.dumps({"error": refusal}) if refusal else inline_executor(agent, next_args, inline_ctx)
             emit_terminal_post_tool_call(
                 agent, function_name=function_name,
                 function_args=next_args if isinstance(next_args, dict) else function_args,
                 result=result, effective_task_id=effective_task_id, tool_call_id=tool_call_id,
                 duration_ms=int((time.monotonic() - tool_start_time) * 1000),
+                status="blocked" if refusal else None,
+                error_type="sandbox_policy" if refusal else None, error_message=refusal,
                 middleware_trace=_tool_middleware_trace,
             )
             return result

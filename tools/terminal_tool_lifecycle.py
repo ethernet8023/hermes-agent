@@ -89,6 +89,11 @@ def _cleanup_env(env: Any, *, force_remove: Optional[bool] = None) -> None:
     Shared by ``cleanup_vm``, the idle reaper and the prompt-time backend probe so
     the signature check lives in one place.
     """
+    from hermes_constants import hermes_home_key
+    owner = getattr(env, "_terminal_policy_owner", None)
+    context = getattr(env, "_terminal_cleanup_context", None)
+    if isinstance(owner, str) and owner and context is not None and owner != hermes_home_key():
+        return context.copy().run(_cleanup_env, env, force_remove=force_remove)
     if hasattr(env, 'cleanup'):
         if force_remove is not None and "force_remove" in inspect.signature(env.cleanup).parameters:
             env.cleanup(force_remove=force_remove)
@@ -195,56 +200,20 @@ def ensure_task_env(task_id: Optional[str] = None):
     #62825). vision reads such paths inside the sandbox (see ``tools.image_source``), so it calls this to
     bring the env up on demand, reusing the same creation machinery as the terminal tool.
     """
-    from tools.terminal_tool import (
-        _active_environments, _creation_locks, _creation_locks_lock, _env_lock,
-        _get_env_config, _last_activity, _resolve_container_task_id,
-        _resolve_task_host_cwd, _select_image, _start_cleanup_thread, resolve_task_overrides,
-    )
-    config = _get_env_config()
-    env_type = config["env_type"]
-    if env_type == "local":
+    from tools.terminal_tool import _plan_execution, _acquire_env
+    from tools.terminal_scope import TerminalPolicyUnavailable
+    from tools.terminal_policy_lifecycle import reconcile_terminal_policy
+    reconcile_terminal_policy()
+    plan = _plan_execution("", task_id=task_id, timeout=None, background=False, _host_local=False)
+    if plan.env_type == "local":
         return None
-
-    effective_task_id = _resolve_container_task_id(task_id)
-
-    existing = get_active_env(effective_task_id)
-    if existing is not None:
-        with _env_lock:
-            _last_activity[effective_task_id] = time.time()
-        return existing
-
-    image = _select_image(env_type, resolve_task_overrides(task_id), config)
-
-    _start_cleanup_thread()
-
-    with _creation_locks_lock:
-        task_lock = _creation_locks.setdefault(effective_task_id, threading.Lock())
-
-    with task_lock:
-        existing = get_active_env(effective_task_id)
-        if existing is not None:
-            return existing
-        try:
-            new_env = _create_configured_env(
-                config, env_type, image=image, cwd=config["cwd"],
-                timeout=config["timeout"], task_id=effective_task_id,
-                host_cwd=_resolve_task_host_cwd(config, task_id),
-            )
-        except Exception as exc:  # noqa: BLE001 — best-effort bring-up
-            logger.warning(
-                "Lazy %s environment init failed for task %s: %s",
-                env_type, effective_task_id[:8], exc,
-            )
-            return None
-
-        with _env_lock:
-            _active_environments[effective_task_id] = new_env
-            _last_activity[effective_task_id] = time.time()
-        logger.info(
-            "%s environment lazily initialized for task %s",
-            env_type, effective_task_id[:8],
-        )
-        return new_env
+    try:
+        return _acquire_env(plan, task_id)
+    except TerminalPolicyUnavailable:
+        raise
+    except Exception as exc:
+        logger.warning("Lazy %s environment init failed for task %s: %s", plan.env_type, task_id, exc)
+        return None
 
 
 def is_persistent_env(task_id: str) -> bool:

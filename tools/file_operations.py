@@ -441,7 +441,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             'rt="$(readlink -f "$t" 2>/dev/null || realpath "$t" 2>/dev/null || true)"; '
             '[ -n "$rt" ] && { t="$rt"; d="$(dirname "$t")"; }; '
             "fi; "
-            'mkdir -p "$d"; '
+            '[ -d "$d" ] || mkdir -p "$d"; '
             'tmp="$(mktemp -p "$d" ' + tmpl + ' 2>/dev/null '
             '|| mktemp "$d/.hermes-tmp.$$.XXXXXX" 2>/dev/null '
             '|| { tmp="$d/.hermes-tmp.$$"; : > "$tmp" && echo "$tmp"; })"; '
@@ -686,7 +686,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         if sentinel not in output:
             # Single-line replies: the path is missing or not a regular file.
             marker = _strip_terminal_fence_leaks(output).strip()
-            if marker == MISSING_SENTINEL:
+            if MISSING_SENTINEL in marker:
+                refused = _access_refusal(marker, marker=MISSING_SENTINEL)
+                if refused:
+                    return ReadResult(error=f"Access to {path} was refused:\n{refused}")
                 return self._read_file_missing(path, offset, limit)
             if marker == NOT_REGULAR_SENTINEL:
                 return self._not_regular_error(path)
@@ -707,7 +710,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
 
         status = _strip_terminal_fence_leaks(status_seg).split()
         try:
-            sample_rc, read_rc = int(status[0]), int(status[1])
+            sample_rc, read_rc, wc_rc, tail_rc = (int(status[i]) for i in range(4))
         except (IndexError, ValueError):
             logger.debug(
                 "read_file: compound probe for %s has unparseable status %r; "
@@ -717,7 +720,14 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         try:
             file_size = int(_strip_terminal_fence_leaks(size_seg).strip())
         except ValueError:
-            file_size = 0
+            refused = _access_refusal(size_seg)
+            if refused:
+                return ReadResult(error=f"Access to {path} was refused:\n{refused}")
+            return self._read_file_sequential(path, offset, limit)
+
+        for code, segment in ((read_rc, page_seg), (wc_rc, wc_seg), (tail_rc, tail_seg)):
+            if code != 0:
+                return self._read_failure(path, segment)
 
         # Byte-layer binary detection when base64 was available, else the legacy
         # text heuristic over a plain sample (one extra round-trip, shells without base64).
@@ -728,13 +738,14 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             logger.debug(
                 "read_file: no usable base64 sample for %s (base64 exit %s); "
                 "paying one extra round-trip for the text heuristic", path, sample_rc)
-            sample_output = _strip_terminal_fence_leaks(self._head(path, 1000).stdout)
+            sample_result = self._head(path, 1000)
+            if sample_result.exit_code != 0:
+                return self._read_failure(path, sample_result.stdout)
+            sample_output = _strip_terminal_fence_leaks(sample_result.stdout)
             is_binary = self._is_likely_binary(path, sample_output)
         if is_binary:
             return self._read_binary_file(path, offset, limit, file_size, sample_bytes)
 
-        if read_rc != 0:
-            return ReadResult(error=f"Failed to read file: {_strip_terminal_fence_leaks(page_seg)}")
         read_output = _strip_terminal_fence_leaks(page_seg)
         try:
             total_lines = int(_strip_terminal_fence_leaks(wc_seg).strip())
@@ -858,22 +869,23 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         newline, then the base64 and page pipeline statuses. Probes run only inside
         ``[ -f ]`` (stat-not-open, like ``_probe_regular_file``) so a FIFO/device never
         reaches ``head``/``sed``. A missing path echoes ``MISSING_SENTINEL`` (a compound
-        command only reports its last status). Every stage silences stderr: the local
-        backend merges stderr into stdout and a stray diagnostic would land inside a
-        segment. The byte clamp is ``4 * max_line_length + 1``; see ``_read_file_sequential``."""
+        command only reports its last status). Keep reader diagnostics in their
+        segment and use pipefail so a successful encoder/clamp cannot hide a failed
+        reader. The subshell contains shell options. Unsupported shells fall back
+        to the sequential probe rather than reporting a denied file as empty."""
         arg = self._escape_shell_arg(path)
         mark = f"echo {sentinel}"
         return (
-            f"if [ -f {arg} ]; then "
-            f"wc -c < {arg} 2>/dev/null; {mark}; "
-            f"head -c 1000 {arg} 2>/dev/null | base64 2>/dev/null; __hs=$?; {mark}; "
-            f"sed -n '{offset},{end_line}p' {arg} 2>/dev/null"
-            f" | cut -b1-{line_clamp_bytes} 2>/dev/null; __hr=$?; {mark}; "
-            f"wc -l < {arg} 2>/dev/null; {mark}; "
-            f"tail -c 1 {arg} 2>/dev/null | wc -l; {mark}; "
-            f'echo "$__hs $__hr"; '
+            f"(set -o pipefail; if [ -f {arg} ]; then "
+            f"{{ wc -c < {arg}; }} 2>&1; {mark}; "
+            f"head -c 1000 {arg} 2>&1 | base64; __hs=$?; {mark}; "
+            f"sed -n '{offset},{end_line}p' {arg} 2>&1"
+            f" | cut -b1-{line_clamp_bytes}; __hr=$?; {mark}; "
+            f"{{ wc -l < {arg}; }} 2>&1; __hw=$?; {mark}; "
+            f"{{ tail -c 1 {arg} | wc -l; }} 2>&1; __ht=$?; {mark}; "
+            f'echo "$__hs $__hr $__hw $__ht"; '
             f"elif [ -e {arg} ]; then echo {NOT_REGULAR_SENTINEL}; "
-            f"else echo {MISSING_SENTINEL}; fi")
+            f"else ls -d {arg} 2>&1 >/dev/null | head -1; echo {MISSING_SENTINEL}; fi)")
 
     def _read_file_missing(self, path: str, offset: int, limit: int) -> ReadResult:
         """Not-found recovery shared by every read path. Unicode-equivalent spellings
@@ -909,6 +921,12 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             is_binary=True, file_size=file_size,
             error=describe_binary_file(sample_bytes, file_size))
 
+    @staticmethod
+    def _read_failure(path: str, output: str) -> ReadResult:
+        refused = _access_refusal(output)
+        return ReadResult(error=(f"Access to {path} was refused:\n{refused}" if refused
+                                 else f"Failed to read file: {_strip_terminal_fence_leaks(output)}"))
+
     def _read_file_sequential(self, path: str, offset: int, limit: int) -> ReadResult:
         """One-probe-per-call read: the pre-compound form, kept as fallback for
         image / known-binary extensions and unparseable compound replies. ``path`` is
@@ -936,13 +954,15 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         line_clamp_bytes = 4 * get_max_line_length() + 1
         end_line = offset + limit - 1
         read_result = self._exec(
-            f"sed -n '{offset},{end_line}p' {self._escape_shell_arg(path)}"
-            f" | cut -b1-{line_clamp_bytes}")
+            f"(set -o pipefail; sed -n '{offset},{end_line}p' {self._escape_shell_arg(path)} 2>&1"
+            f" | cut -b1-{line_clamp_bytes})")
         if read_result.exit_code != 0:
-            return ReadResult(error=f"Failed to read file: {read_result.stdout}")
+            return self._read_failure(path, read_result.stdout)
         read_output = _strip_terminal_fence_leaks(read_result.stdout)
 
         wc_result = self._exec(f"wc -l < {self._escape_shell_arg(path)}")
+        if wc_result.exit_code != 0:
+            return self._read_failure(path, wc_result.stdout)
         try:
             total_lines = int(_strip_terminal_fence_leaks(wc_result.stdout).strip())
         except ValueError:
@@ -952,9 +972,10 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         # artifact (see _assemble_read_result); probe the last byte just for that case.
         file_ends_with_newline: Optional[bool] = None
         if not total_lines > end_line and read_output.endswith('\n'):
-            tail_result = self._exec(f"tail -c 1 {self._escape_shell_arg(path)} | wc -l")
-            if tail_result.exit_code == 0:
-                file_ends_with_newline = _strip_terminal_fence_leaks(tail_result.stdout).strip() != "0"
+            tail_result = self._exec(f"(set -o pipefail; tail -c 1 {self._escape_shell_arg(path)} | wc -l)")
+            if tail_result.exit_code != 0:
+                return self._read_failure(path, tail_result.stdout)
+            file_ends_with_newline = _strip_terminal_fence_leaks(tail_result.stdout).strip() != "0"
         return self._assemble_read_result(
             read_output, offset=offset, end_line=end_line, total_lines=total_lines,
             file_size=file_size, file_ends_with_newline=file_ends_with_newline)

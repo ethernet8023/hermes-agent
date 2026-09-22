@@ -46,7 +46,7 @@ def compound_read_output(
         f"{content}{sentinel}\n"
         f"{total_lines}\n{sentinel}\n"
         f"{1 if trailing_newline else 0}\n{sentinel}\n"
-        f"{sample_rc} {read_rc}\n"
+        f"{sample_rc} {read_rc} 0 0\n"
     )
 
 

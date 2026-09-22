@@ -4,8 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { artifactsForSession, clearArtifactRegistry } from '@/store/artifacts'
 import { $previewTabs } from '@/store/preview'
 import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
+import { confirmNonMxcOwner } from '@/test/sandbox'
 
 import { MarkdownTextContent } from './markdown-text'
+
+beforeEach(() => { confirmNonMxcOwner() })
 
 const HTML_DOC = `<!doctype html>
 <html>

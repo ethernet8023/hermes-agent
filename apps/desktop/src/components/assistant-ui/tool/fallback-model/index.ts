@@ -1493,8 +1493,8 @@ export function buildToolView(part: ToolPart, inlineDiff: string): ToolView {
   const sandbox = sandboxInfo(part, resultRecord)
   const rawStatus = toolStatus(part, resultRecord)
   // A sandbox refusal is policy doing its job, not a broken tool: amber, never red, and the
-  // renderer offers the grant. A hard error elsewhere in the same result still wins.
-  const status: ToolStatus = sandbox?.denied.length && rawStatus !== 'error' ? 'warning' : rawStatus
+  // renderer preserves its policy reason instead of announcing a recovery or ordinary failure.
+  const status: ToolStatus = sandbox?.denied.length ? 'blocked' : rawStatus
   // Skip residual error-heuristic text once status is success (stale isError
   // envelope over a landed memory write would otherwise foul the subtitle).
   const error = status === 'success' ? '' : toolErrorText(part, resultRecord)
@@ -1522,6 +1522,7 @@ export function buildToolView(part: ToolPart, inlineDiff: string): ToolView {
     : titleParts.title
 
   const titleEnriched = title !== baseTitle
+
   const baseSubtitle = sandbox?.denied.length
     ? translateNow('assistant.tool.sandboxBlocked')
     : error || toolSubtitle(part, argsRecord, resultRecord)

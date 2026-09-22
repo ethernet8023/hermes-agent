@@ -693,6 +693,11 @@ def _dispatch_authorized_once(
         block_message, ref.args = resolve() if authorization_gate is None else authorization_gate.run(resolve)
         state.args = ref.args
 
+    if block_message is None:
+        from tools.environments.mxc_policy import tool_refusal
+        block_message = tool_refusal(ref.name, ref.args)
+        block_error_type = "sandbox_policy"
+
     guardrail_decision = None
     if block_message is None:
         guardrail_decision = agent._tool_guardrails.before_call(ref.name, ref.args)
@@ -741,6 +746,18 @@ def _run_agent_tool_execution_middleware(
 
     trace = middleware_trace if middleware_trace is not None else []
     state = _ManagedToolResult(result=None, args=function_args, middleware_trace=trace, blocked=False, dispatched=False)
+    # Relay can satisfy a call without invoking the local dispatch callback. Admit
+    # the requested action before that boundary, then recheck rewritten arguments.
+    from tools.environments.mxc_policy import tool_refusal
+    refusal = tool_refusal(function_name, function_args)
+    if refusal is not None:
+        if begin_execution is not None:
+            begin_execution(None)
+        state.blocked = True
+        state.result = _blocked_tool_result(
+            agent, _ToolCallRef(function_name, function_args, effective_task_id, tool_call_id, trace),
+            block_message=refusal, block_error_type="sandbox_policy", guardrail_decision=None)
+        return state
     dispatch_lock = threading.Lock()
 
     def _authorized_dispatch(final_args: dict[str, Any]) -> Any:

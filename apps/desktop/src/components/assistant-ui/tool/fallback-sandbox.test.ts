@@ -45,12 +45,13 @@ describe('sandbox-aware tool views', () => {
       ''
     )
 
-    expect(view.status).toBe('warning')
+    expect(view.status).toBe('blocked')
     expect(view.subtitle).toBe('Blocked by sandbox policy')
     expect(view.sandbox?.denied).toEqual(['C:\\Users\\me\\Documents\\taxes.pdf'])
   })
 
   it('recovers the refused paths from the plain-text note when a file tool carries no structured field', () => {
+    expect(buildToolView(part({ toolName: 'read_file', result: { error: NOTE } }), '').status).toBe('blocked')
     const info = sandboxInfo(part({ toolName: 'read_file', result: `Error: ${NOTE}` }), { error: `Error: ${NOTE}` })
 
     expect(info).toEqual({ backend: 'mxc', denied: ['C:\\Users\\me\\Documents\\taxes.pdf'] })

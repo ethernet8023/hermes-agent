@@ -23,6 +23,7 @@ _RESULT_FIELDS = (
     "parent_session_id", "started_at", "exit_code", "completion_reason",
     "termination_source", "notify_on_complete",
 )
+_AUTHORITY_FIELDS = ("profile_home", "terminal_backend")
 
 
 def _result_paths():
@@ -50,7 +51,7 @@ def save_completed_result(session) -> None:
     from tools.process_registry import MAX_OUTPUT_CHARS
 
     with session._lock:
-        record = {key: getattr(session, key) for key in _RESULT_FIELDS}
+        record = {key: getattr(session, key) for key in (*_RESULT_FIELDS, *_AUTHORITY_FIELDS)}
         record["output"] = session.output_buffer[-MAX_OUTPUT_CHARS:]
     # Live-output opt-out must not persist raw credentials in durable receipts.
     record["output"] = redact_terminal_output(record["output"], record["command"], force=True)
@@ -109,6 +110,8 @@ def load_completed_results(prefix: str = "") -> dict:
                 continue
             session = ProcessSession(
                 **{key: record[key] for key in _RESULT_FIELDS},
+                # Legacy receipts remain readable but acquire no sandbox authority.
+                **{key: record.get(key, "") for key in _AUTHORITY_FIELDS},
                 exited=True, output_buffer=record["output"],
             )
             session._completion_event.set()

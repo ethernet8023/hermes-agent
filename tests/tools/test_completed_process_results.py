@@ -163,6 +163,30 @@ def test_headless_terminal_result_survives_cli_exit(tmp_path):
     assert read_result(tmp_path / "other-profile")["result"]["status"] == "not_found"
 
 
+def test_retained_sandbox_results_preserve_authority_without_adopting_legacy_records(monkeypatch):
+    from hermes_constants import get_hermes_home, hermes_home_key
+    from gateway.session_context import scoped_current_session_id
+    from tools.process_registry import ProcessSession
+    from tools.process_registry_results import save_completed_result, load_completed_results
+
+    session = ProcessSession(
+        id="proc_sandbox_receipt", command="echo done", parent_session_id="reader",
+        profile_home=hermes_home_key(), terminal_backend="mxc", exited=True, exit_code=0,
+    )
+    save_completed_result(session)
+    with scoped_current_session_id("reader"):
+        restored = load_completed_results()[session.id]
+        assert restored.profile_home == session.profile_home
+        assert restored.terminal_backend == "mxc"
+        path = get_hermes_home() / "logs" / "process-results" / f"{session.id}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.pop("profile_home")
+        record.pop("terminal_backend")
+        path.write_text(json.dumps(record), encoding="utf-8")
+        legacy = load_completed_results()[session.id]
+        assert legacy.profile_home == legacy.terminal_backend == ""
+
+
 def test_receipts_are_bounded_redacted_and_session_scoped(tmp_path, monkeypatch):
     import time
     from tools import process_registry_results as receipts

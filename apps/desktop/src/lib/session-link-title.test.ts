@@ -73,7 +73,7 @@ describe('fetchSessionLinkTitle', () => {
     expect(first).toBe('From API')
     expect(second).toBe('From API')
     expect(getSession).toHaveBeenCalledTimes(1)
-    expect(getSession).toHaveBeenCalledWith('20260101_abc123', 'default')
+    expect(getSession).toHaveBeenCalledWith('20260101_abc123', { connectionId: undefined, profile: 'default' })
   })
 
   it('uses the local sidebar row before calling the API', async () => {

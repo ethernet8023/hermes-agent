@@ -1,6 +1,7 @@
 """Tests for docker container_config key propagation in file_tools."""
 
-from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
+from unittest.mock import patch
 import tools.file_tools as file_tools
 
 
@@ -28,12 +29,14 @@ def _make_env_config(**overrides):
 
 class TestFileToolsContainerConfig:
     def _run(self, env_config, task_id, task_env_overrides=None):
+        import json
+        from hermes_cli.config import get_config_path
+        get_config_path().write_text(json.dumps({"terminal": {"backend": env_config["env_type"]}}), encoding="utf-8")
         captured = {}
-        mock_env = MagicMock()
 
         def fake_create_env(**kwargs):
             captured.update(kwargs)
-            return mock_env
+            return SimpleNamespace(cwd=kwargs["cwd"], env_type=kwargs["env_type"])
 
         with patch("tools.terminal_tool._get_env_config", return_value=env_config), \
              patch("tools.terminal_tool._task_env_overrides", task_env_overrides or {}), \

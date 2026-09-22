@@ -29,6 +29,10 @@ export interface FocusDetail {
 }
 
 interface InsertDetail {
+  sessionKey?: string | null
+  sessionId?: string | null
+  focus?: boolean
+  accept?: () => void
   mode: ComposerInsertMode
   target: ComposerTarget
   text: string
@@ -270,7 +274,19 @@ export const requestComposerFocus = (
 
 export const requestComposerInsert = (
   text: string,
-  { mode = 'block', target = 'active' }: { mode?: ComposerInsertMode; target?: ComposerTarget | 'active' } = {}
+  {
+    mode = 'block',
+    target = 'active',
+    sessionId,
+    sessionKey,
+    focus = true
+  }: {
+    mode?: ComposerInsertMode
+    target?: ComposerTarget | 'active'
+    sessionId?: string | null
+    sessionKey?: string | null
+    focus?: boolean
+  } = {}
 ) => {
   const trimmed = text.trim()
 
@@ -278,7 +294,25 @@ export const requestComposerInsert = (
     return
   }
 
-  dispatch<InsertDetail>(INSERT_EVENT, { mode, target: resolve(target), text: trimmed })
+  const recipient = resolve(target)
+
+  return new Promise<boolean>(resolveHandled => {
+    window.setTimeout(() => {
+      let handled = false
+      dispatchNow<InsertDetail>(INSERT_EVENT, {
+        mode,
+        target: recipient,
+        text: trimmed,
+        sessionId,
+        sessionKey,
+        focus,
+        accept: () => {
+          handled = true
+        }
+      })
+      resolveHandled(handled)
+    }, 0)
+  })
 }
 
 export const onComposerFocusRequest = (handler: (detail: FocusDetail) => void) =>

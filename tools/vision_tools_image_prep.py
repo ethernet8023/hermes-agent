@@ -187,6 +187,11 @@ def _normalize_to_supported_image(
     unchanged when supported; ``(new_png_path, "image/png", None)`` after conversion — a temp file
     the CALLER must clean up; ``(None, None, message)`` when impossible. SVG is rasterized; other
     Pillow-readable rasters (BMP, TIFF) re-encode to PNG."""
+    if detected_mime == "image/svg+xml":
+        from tools.environments.mxc_policy import uncontained_action_refusal
+        # Optional renderers may load nested URLs/files or launch host processes.
+        if refusal := uncontained_action_refusal("SVG rasterization"):
+            return None, None, refusal
     if detected_mime in _supported_media_types():
         return image_path, detected_mime, None
     out_dir = get_hermes_dir("cache/vision", "temp_vision_images")

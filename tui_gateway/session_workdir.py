@@ -126,8 +126,7 @@ def _heal_dead_cwd(cwd: str) -> str:
 
 
 def _is_local_terminal_backend() -> bool:
-    backend = (os.environ.get("TERMINAL_ENV") or "").strip().lower()
-    return not backend or backend in _HOST_FILESYSTEM_BACKENDS
+    return _effective_terminal_backend() in _HOST_FILESYSTEM_BACKENDS
 
 
 # Backends whose commands see the host's own filesystem, so a session's tracked directory is a real
@@ -136,17 +135,21 @@ _HOST_FILESYSTEM_BACKENDS = frozenset({"local", "mxc"})
 
 
 def _effective_terminal_backend() -> str:
-    """Active terminal backend name (``local``, ``docker``, ``ssh``, ...): ``TERMINAL_ENV`` when set (launchers bridge
-    ``terminal.backend`` into env), else the ``terminal.backend`` config key (in-process gateways skip that bridge)."""
-    backend = (os.environ.get("TERMINAL_ENV") or "").strip().lower()
-    if not backend or backend == "local":
-        backend = _workdir_terminal_cfg("backend").lower()
-    return backend or "local"
+    """Use the same strict, live profile authority as terminal execution."""
+    from tools.terminal_scope import get_live_terminal_config
+    return get_live_terminal_config()["backend"].strip().lower()
 
 
 def _display_session_cwd(session: dict | None) -> str:
     """Session cwd for display/probe surfaces, healed past deleted worktrees (healed value persisted back; local only)."""
     cwd = _session_cwd(session)
+    if _effective_terminal_backend() == "mxc":
+        accepted = _sandbox_workspace(cwd)
+        if session is not None and accepted != cwd:
+            session["cwd"] = accepted
+            _register_session_cwd(session)
+            _persist_session_cwd_and_schedule_git_meta(session, accepted)
+        return accepted
     if not _is_local_terminal_backend():
         return cwd
     healed = _heal_dead_cwd(cwd)
@@ -166,6 +169,11 @@ def _reconcile_session_cwd_from_terminal(session: dict | None) -> bool:
     # successive settles keep following.
     if not session or not _is_local_terminal_backend():
         return False
+    if _effective_terminal_backend() == "mxc":
+        # cd (including a same-repository worktree) cannot widen the workspace
+        # grant. Only reconcile an implicit policy re-home, never shell state.
+        before = _session_cwd(session)
+        return _display_session_cwd(session) != before
     if session.get("explicit_cwd") and not session.get("cwd_from_settle"):
         return False
     try:

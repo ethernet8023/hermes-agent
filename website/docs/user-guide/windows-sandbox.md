@@ -1,18 +1,25 @@
 ---
 sidebar_position: 8
 title: "Windows Sandbox (MXC)"
-description: "Run every agent command inside a kernel-enforced Windows process container, with a folder policy you control"
+description: "Run supported agent actions inside Windows process containers, with explicit host-service boundaries"
 ---
 
 # Windows Sandbox (MXC)
 
-On Windows, Hermes can run every command and file operation the agent performs inside a fresh
-Microsoft MXC process container. The container is enforced by the Windows kernel: the process
-inside it can reach the session's workspace folder and the folders you have granted, and nothing
-else. A write to your Documents folder, a read of Hermes's own credentials, or a network request
-is refused by the operating system before it happens, no matter what the agent tries. Everything
-else about Hermes stays the same. The agent, its model (including local inference on your GPU),
-and the desktop app all run normally on the host; only the agent's actions are boxed.
+On supported Windows builds, Hermes runs terminal commands and file tools inside Microsoft MXC
+process containers. Windows enforces their filesystem and network policy. Each environment has
+its own workspace authority and private scratch directory; a command cannot acquire another
+conversation's workspace merely by changing its working directory.
+
+Strict mode admits only reviewed action paths. Browser control, desktop automation, MCP,
+connectors and other uncontained tool services are refused rather than executed on the host.
+The tool list may still show them in an existing conversation; the check happens when a call
+is attempted, so no new conversation is needed.
+
+Hermes itself, the desktop, inference (including local inference), and fixed-purpose memory,
+skills and session-history services remain trusted host software. This is not a virtual machine
+around the whole application. Installed extensions and provider integrations are part of that
+trusted host software; the sandbox does not defend against a malicious Hermes installation.
 
 This is a different shape from the Docker backend. Docker gives the agent a separate Linux
 filesystem; MXC keeps the agent on your real Windows filesystem with your real tools, and draws
@@ -21,8 +28,9 @@ of a second, so Hermes starts a new one for every single command.
 
 ## Requirements
 
-- Windows 11 with the MXC process-container support (Insider builds from 26300 onward at the time
-  of writing). Hermes checks this for you and tells you plainly when a machine cannot run it.
+- Windows with MXC's `base-container` tier and the required UI restrictions. Hermes probes
+  capabilities rather than relying on a version label. Weaker AppContainer/DACL fallback is
+  not accepted as equivalent, and requests explicitly disallow host-DACL mutation.
 - The MXC kit and the sandbox shell ship with Hermes. Both are pinned pm tools, so a sealed
   install carries them and a source install downloads them the first time you turn the sandbox
   on. There is no path to set and no separate kit install.
@@ -67,11 +75,27 @@ The policy is small on purpose, and the panel shows all of it:
   of you.
 - **Additional folders**, each read-only or read & write. These are `terminal.mxc_readonly_paths`
   and `terminal.mxc_readwrite_paths` in `config.yaml`.
-- **Network**, off by default (`terminal.mxc_network`). Off means the agent is offline: sandboxed
-  commands cannot reach the internet or services on your own machine, and Hermes's own web search,
-  page-fetch and browser tools are refused with that reason until you turn it on (they run in the
-  Hermes process, outside the container, so the switch has to cover them too or it would mean
-  little). Local inference is unaffected because the model runs outside the sandbox.
+- **Network**, off by default (`terminal.mxc_network`). It controls outbound access from
+  sandboxed commands and the reviewed web-search/page-fetch services. Pasted URL expansion
+  follows the same policy. It does not disconnect Hermes's model provider or the desktop.
+  Local inference remains on the host.
+
+Enabling network access does not authorize host execution. Browser Use, raw CDP, desktop
+control, MCP, connectors, media-generation tools and unreviewed plugin tools remain refused.
+`execute_code` is also refused until a compatible sandboxed implementation is available;
+Python programs can instead be run through the sandboxed terminal. Skill text remains readable,
+but new inline shell snippets and scheduled host-script launches are refused. Automatic
+messaging delivery of model-selected local file paths is refused rather than reading those
+files on the host; generated files remain in their authorized workspace. Model-selected remote
+images follow the network policy. In the desktop, assistant-origin media, HTML and widgets stay
+inert while MXC is enabled or their owning profile's policy has not been confirmed. User-uploaded
+attachments remain usable. SVG rasterization is refused under MXC; use a raster screenshot
+instead of invoking an uncontained converter.
+
+The model cannot widen its workspace by calling the project tool. Choose a project yourself or
+authorize an additional folder through the sandbox controls. An explicitly empty grant list
+means no additional grants; it never restores old environment-variable grants. Invalid policy
+is an error, not permission to fall back to the local backend.
 
 A few read-only grants are added automatically so the agent's tools work: the Hermes install and
 its Python, the bundled Node and Git, the sandbox shell, and the desktop's composer staging
@@ -100,11 +124,15 @@ that location, stop and ask the user to grant access; a grant applies to your ne
 Do not try to work around the sandbox.
 ```
 
-The agent is instructed to stop and ask rather than route around the sandbox. In the desktop the
-tool card is marked **Blocked by sandbox policy** and offers **Allow reading** and
-**Allow read & write** for the folder in question. Granting writes the folder into the policy and
-drafts a short "please try again" message into the composer, so one Enter resumes the task with
-the new permission in force.
+The agent is instructed to stop and ask rather than route around the sandbox. The collapsed
+tool card keeps the policy reason; the full grant callout stays behind its disclosure. Before
+**Allow reading** or **Allow read & write** is enabled, the callout resolves and displays the
+actual folder being authorized. A folder grant covers its descendants, not just the file that
+triggered the suggestion. Protected code and credential roots cannot be added as user grants.
+
+A command's error text supplies a suggested path, not authenticated evidence from the kernel.
+Review the resolved folder before consenting. A successful grant prepares a retry in the
+originating conversation's composer, preserving the existing draft.
 
 ## Git inside the sandbox
 
@@ -167,10 +195,9 @@ on the machine.
 **Why there is no button for this.** An earlier build showed a "Prepare workspace for git" card
 in the Sandbox panel with the command to copy. It was removed: the in-place half hung on the
 profile folder, the elevated half is a machine setup step rather than a per-workspace one, and a
-command nobody recognizes is not a control. The status route still reports the ancestors
-(`workspace_ancestors` with `missing`, `needs_admin` and `admin_command`) and
-`tools/environments/mxc_host.py` still has `ancestor_readiness` and `prepare_ancestors`, so a
-future control can be built without re-deriving any of this.
+command nobody recognizes is not a control. Hermes does not apply ancestor ACL changes through
+that retired control or its former preparation endpoint. The manual recipes here preserve the
+mechanism and known limitations for a future, separately verified setup flow.
 
 **The permanent fix belongs in the kit.** `wxc-exec` knows every granted path when it creates a
 container and could ensure attribute rights on the ancestors itself; alternatively `wxc-host-prep`
@@ -186,11 +213,21 @@ workspace is created, using the .NET path rather than `icacls`.
 - Each command runs in its own container, so a foreground command cannot leave a server running
   after it exits. Use `terminal(background=true)` for long-lived processes; Hermes keeps that
   container alive for the life of the process.
-- The `execute_code` kernel does not persist between calls under this backend; commands and the
-  file tools are the supported path.
-- Browser automation and desktop control run on the host, outside the sandbox. The network
-  switch refuses the web and browser tools when it is off; turn the `computer_use` toolset
-  off yourself when the point is containment.
+- `execute_code` and uncontained browser/desktop/provider tools are unavailable in strict mode,
+  even when network access is enabled. Terminal programs and file tools are the supported path.
+- Assistant-generated media, interactive widgets and executable previews are withheld while the
+  sandbox is enabled or their owning profile cannot be verified. Your own uploaded attachments
+  remain usable. New model-selected file, media and title requests check current policy before IO.
+- This window's settings changes invalidate preview permissions immediately. Changes made in
+  another window or through the CLI withdraw existing previews on a four-second refresh cycle,
+  plus connection latency; that withdrawal is not instantaneous.
+- Policy changes retire or drain tracked terminal commands, code kernels and terminal background
+  jobs for the edited profile. Wait for a successful transition before retrying work. This does
+  not retroactively sandbox a host application or scheduler script that was already running;
+  stop existing host automation before relying on containment. New host-script launches are refused.
+- This is not a separate desktop or a screen-privacy boundary. Win32k remains enabled so ordinary
+  console runtimes can start; clipboard, input injection and the supported UI restrictions are
+  applied, but do not assume that every GUI or screen-capture operation is unavailable.
 - The switch is binary on current Windows builds. Per-domain allow or deny lists for sandboxed
   commands need a host-side egress proxy the container can reach, and the container cannot reach
   the host on these builds; that arrives with the next MXC contract.

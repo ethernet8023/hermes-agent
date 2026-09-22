@@ -46,6 +46,9 @@ def run_inline_shell(command: str, cwd: Path | None, timeout: int) -> str:
     """Run one inline-shell snippet and return its stdout (trimmed; stderr when
     stdout is empty). Failures return an ``[inline-shell ...]`` marker instead
     of raising, so one bad snippet can't wreck the whole skill message."""
+    from tools.environments.mxc_policy import uncontained_action_refusal
+    if reason := uncontained_action_refusal("Skill inline shell execution"):
+        return f"[inline-shell refused: {reason}]"
     _popen_kwargs = {"creationflags": windows_hide_flags()} if IS_WINDOWS else {}
     from agent.delegation_context import delegated_child_subprocess_env
     try:

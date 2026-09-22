@@ -36,12 +36,19 @@ class ScriptedEnv:
     def __init__(self, handlers):
         self.handlers = handlers
         self.commands = []
+        self.stopped = False
 
     def get_temp_dir(self):
         return "/tmp"
 
     def execute(self, command, cwd=None, timeout=None):
         self.commands.append(command)
+        if command.startswith("pkill "):
+            self.stopped = True
+        if "nohup" in command:
+            self.stopped = False
+        if command.startswith("kill -0") and self.stopped:
+            return {"output": "", "returncode": 1}
         for needle, handler in self.handlers:
             if needle in command:
                 return handler(command)

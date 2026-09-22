@@ -155,6 +155,7 @@ function ToolPayloadDisclosure({ args, result }: { args: unknown; result: unknow
 }
 
 interface ToolStatusCopy {
+  sandboxBlocked: string
   statusDone: string
   statusError: string
   statusRecovered: string
@@ -209,6 +210,10 @@ function statusGlyph(status: ToolStatus, copy: ToolStatusCopy): ReactNode {
 
   if (status === 'error') {
     return <AlertCircle aria-label={copy.statusError} className="size-3.5 shrink-0 text-destructive" />
+  }
+
+  if (status === 'blocked') {
+    return <AlertCircle aria-label={copy.sandboxBlocked} className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
   }
 
   if (status === 'warning') {
@@ -319,7 +324,7 @@ function ToolTitle({
         SCAFFOLD_LABEL_CLASS,
         isPending && 'text-(--conversation-scaffold-meta)',
         status === 'error' && 'text-destructive',
-        status === 'warning' && 'text-amber-700 dark:text-amber-300',
+        (status === 'warning' || status === 'blocked') && 'text-amber-700 dark:text-amber-300',
         legendary && !isPending && 'tool-memory-legendary-title text-transparent'
       )}
     >
@@ -614,6 +619,9 @@ function ToolEntry({ part }: ToolEntryProps) {
               title={view.title}
               titleAction={view.titleAction}
             />
+            {!isPending && view.status === 'blocked' && (
+              <span className={SCAFFOLD_META_CLASS}>{view.subtitle}</span>
+            )}
             {!isPending && view.countLabel && (
               <span className={cn(SCAFFOLD_META_CLASS, memoryMetaClass)}>{view.countLabel}</span>
             )}

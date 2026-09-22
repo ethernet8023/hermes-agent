@@ -3,6 +3,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { en } from '@/i18n/en'
+import { $confirmRequest, settleConfirm } from '@/store/confirm'
+import { publishSandboxStatus, sandboxState } from '@/store/sandbox'
+const owner = { connectionId: 'remote-b', profile: 'beta' }
 import type { SandboxStatus } from '@/types/hermes'
 
 import { SandboxPanel } from './sandbox-panel'
@@ -12,11 +15,16 @@ const mocks = vi.hoisted(() => ({
   notifyError: vi.fn(),
   pickFolder: vi.fn(),
   prepare: vi.fn(),
+  preview: vi.fn(),
+  grant: vi.fn(),
   update: vi.fn()
 }))
 
-vi.mock('@/hermes', () => ({
+vi.mock('@/api/sandbox', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   getSandboxStatus: (...args: unknown[]) => mocks.getStatus(...args),
+  getSandboxGrantTarget: (...args: unknown[]) => mocks.preview(...args),
+  grantSandboxPath: (...args: unknown[]) => mocks.grant(...args),
   prepareSandboxWorkspace: (...args: unknown[]) => mocks.prepare(...args),
   updateSandboxPolicy: (...args: unknown[]) => mocks.update(...args)
 }))
@@ -61,7 +69,10 @@ function status(overrides: Partial<SandboxStatus> = {}): SandboxStatus {
 
 describe('SandboxPanel', () => {
   beforeEach(() => {
+    sandboxState(owner).set({ status: null, confirmed: false, busy: false, error: null })
     mocks.getStatus.mockResolvedValue(status())
+    mocks.preview.mockImplementation(async path => ({ target: path, recursive: true }))
+    mocks.grant.mockImplementation(async path => ({ ...status({ enabled: true }), granted: path, mode: 'readwrite' }))
     mocks.update.mockImplementation(async (update: Record<string, unknown>) =>
       status({
         enabled: true,
@@ -79,9 +90,40 @@ describe('SandboxPanel', () => {
     vi.clearAllMocks()
   })
 
+  it('targets the explicit Settings owner and subscribes to shared changes', async () => {
+    render(<SandboxPanel owner={owner} />)
+    const toggle = await screen.findByRole('switch', { name: en.settings.sandbox.toggleLabel })
+    expect(mocks.getStatus).toHaveBeenCalledWith(owner, expect.anything())
+    await act(async () => {
+      publishSandboxStatus(status({ enabled: true }), owner)
+    })
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('shows an unknown status with a recovery read after the first request fails', async () => {
+    mocks.getStatus.mockRejectedValueOnce(new Error('connection lost'))
+    render(<SandboxPanel owner={owner} />)
+    expect(await screen.findByText(en.settings.sandbox.statusUnknown)).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: en.settings.sandbox.recheck }))
+    })
+    expect(await screen.findByRole('switch', { name: en.settings.sandbox.toggleLabel })).toBeTruthy()
+  })
+
+  it('allows disabling an enabled unavailable backend', async () => {
+    mocks.getStatus.mockResolvedValue(status({ enabled: true, available: false, reason: 'missing kit' }))
+    render(<SandboxPanel owner={owner} />)
+    const toggle = await screen.findByRole('switch', { name: en.settings.sandbox.toggleLabel })
+    expect(toggle).toHaveProperty('disabled', false)
+    await act(async () => {
+      fireEvent.click(toggle)
+    })
+    expect(mocks.update).toHaveBeenCalledWith({ enabled: false }, owner)
+  })
+
   it('renders nothing where the platform can never run MXC', async () => {
     mocks.getStatus.mockResolvedValue(status({ platform_supported: false, available: false, reason: 'not Windows' }))
-    const { container } = render(<SandboxPanel />)
+    const { container } = render(<SandboxPanel owner={owner} />)
 
     await waitFor(() => expect(screen.queryByTestId('sandbox-panel-loading')).toBeNull())
     expect(container.innerHTML).toBe('')
@@ -89,7 +131,7 @@ describe('SandboxPanel', () => {
 
   it('explains in plain language why the sandbox is unavailable and keeps the toggle off', async () => {
     mocks.getStatus.mockResolvedValue(status({ available: false, reason: 'wxc-exec.exe (the MXC kit) was not found.' }))
-    render(<SandboxPanel />)
+    render(<SandboxPanel owner={owner} />)
 
     const reason = await screen.findByTestId('sandbox-reason')
     expect(reason.textContent).toContain('wxc-exec.exe (the MXC kit) was not found.')
@@ -97,41 +139,47 @@ describe('SandboxPanel', () => {
   })
 
   it('lets the user opt in when only the shell still needs provisioning', async () => {
-    mocks.getStatus.mockResolvedValue(status({ available: false, shell_missing: true, reason: 'shell not installed yet' }))
-    render(<SandboxPanel />)
+    mocks.getStatus.mockResolvedValue(
+      status({ available: false, shell_missing: true, reason: 'shell not installed yet' })
+    )
+    render(<SandboxPanel owner={owner} />)
 
     const toggle = await screen.findByRole('switch', { name: en.settings.sandbox.toggleLabel })
     expect(toggle).toHaveProperty('disabled', false)
-    expect(screen.queryByTestId('sandbox-reason')).toBeNull()
+    expect(screen.getByTestId('sandbox-reason').textContent).toContain('shell not installed yet')
     expect(screen.getByText(en.settings.sandbox.shellNote)).toBeTruthy()
 
     await act(async () => {
       fireEvent.click(toggle)
     })
 
-    expect(mocks.update).toHaveBeenCalledWith({ enabled: true })
+    expect(mocks.update).toHaveBeenCalledWith({ enabled: true }, owner)
   })
 
   it('shows the live policy once enabled and writes folder and network changes through the policy route', async () => {
     mocks.getStatus.mockResolvedValue(
       status({ enabled: true, policy: { readwrite_paths: [], readonly_paths: [DOCUMENTS], network: false } })
     )
-    render(<SandboxPanel workspace={DEMO} />)
+    render(<SandboxPanel owner={owner} />)
 
     expect(await screen.findByText(DOCUMENTS)).toBeTruthy()
     expect(screen.getByText(en.settings.sandbox.modeRead)).toBeTruthy()
-    expect(mocks.getStatus).toHaveBeenCalledWith({ workspace: DEMO })
+    expect(mocks.getStatus).toHaveBeenCalledWith(owner, {})
 
     mocks.pickFolder.mockResolvedValue(PROJECTS)
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: en.settings.sandbox.addReadWrite }))
     })
-    expect(mocks.update).toHaveBeenCalledWith({ readwrite_paths: [PROJECTS], readonly_paths: [DOCUMENTS] })
+    expect($confirmRequest.get()?.description).toBe(en.assistant.tool.sandboxRecursiveScope(PROJECTS))
+    expect(mocks.grant).not.toHaveBeenCalled()
+    await act(async () => settleConfirm(true))
+    expect(mocks.grant).toHaveBeenCalledWith(PROJECTS, 'readwrite', owner)
+    expect(mocks.update).not.toHaveBeenCalled()
 
     await act(async () => {
       fireEvent.click(screen.getByRole('switch', { name: en.settings.sandbox.networkLabel }))
     })
-    expect(mocks.update).toHaveBeenCalledWith({ network: true })
+    expect(mocks.update).toHaveBeenCalledWith({ network: true }, owner)
   })
 
   it('never renders a per-workspace git preparation step, whatever the ancestors report', async () => {
@@ -148,16 +196,16 @@ describe('SandboxPanel', () => {
         }
       })
     )
-    render(<SandboxPanel />)
+    render(<SandboxPanel owner={owner} />)
 
     await screen.findByTestId('sandbox-workspace-rule')
     expect(screen.queryByText(/icacls/)).toBeNull()
     expect(mocks.prepare).not.toHaveBeenCalled()
   })
 
-  it('states the per-conversation rule instead of showing one tab\'s folder as policy', async () => {
+  it("states the per-conversation rule instead of showing one tab's folder as policy", async () => {
     mocks.getStatus.mockResolvedValue(status({ enabled: true, workspace: `${PROJECTS}\\demo` }))
-    render(<SandboxPanel />)
+    render(<SandboxPanel owner={owner} />)
 
     expect(await screen.findByTestId('sandbox-workspace-rule')).toBeTruthy()
     expect(screen.queryByText(`${PROJECTS}\\demo`)).toBeNull()

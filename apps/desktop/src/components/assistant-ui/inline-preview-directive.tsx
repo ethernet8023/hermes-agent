@@ -8,6 +8,8 @@ import { PreviewAttachment } from '@/components/chat/preview-attachment'
 import { readDesktopFileText } from '@/lib/desktop-fs'
 import { localPreviewTarget } from '@/lib/local-preview'
 
+import { InertModelOutput, useModelOutputOwner, useModelOutputRestriction } from './model-output-policy'
+
 /**
  * `::preview{file="…"}` — a workspace HTML file rendered LIVE inside the
  * assistant message. A sandboxed iframe with an opaque origin
@@ -252,6 +254,12 @@ export function InlinePreviewDirective({
   streaming: boolean
 }) {
   const file = attrs.file ?? ''
+  const owner = useModelOutputOwner()
+  const restriction = useModelOutputRestriction()
+
+  if (restriction) {
+    return <InertModelOutput reason={restriction} target={file} />
+  }
 
   // Not renderable inline: hand the leaf to the classic card. Non-HTML has
   // nothing to frame. (Remote gateways used to bail here too — that predates
@@ -262,7 +270,14 @@ export function InlinePreviewDirective({
     return file ? <PreviewAttachment source="explicit-link" target={file} /> : null
   }
 
-  return <InlineHtmlFrame file={file} initialHeight={directiveFrameHeight(attrs.height)} streaming={streaming} />
+  return (
+    <InlineHtmlFrame
+      file={file}
+      initialHeight={directiveFrameHeight(attrs.height)}
+      key={JSON.stringify([owner, file])}
+      streaming={streaming}
+    />
+  )
 }
 
 function InlineHtmlFrame({
@@ -275,7 +290,12 @@ function InlineHtmlFrame({
   initialHeight: number | null
   streaming: boolean
 }) {
-  const cwd = useStore(useSessionView().$cwd)
+  const owner = useModelOutputOwner()
+  const view = useSessionView()
+  const stored = useStore(view.$storedId)
+  const runtime = useStore(view.$runtimeId)
+  const viewCwd = useStore(view.$cwd)
+  const cwd = owner?.sessionId && [stored, runtime].includes(owner.sessionId) ? viewCwd : null
   const isDark = useIsDark()
   const [doc, setDoc] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
@@ -300,7 +320,7 @@ function InlineHtmlFrame({
 
     let alive = true
 
-    void Promise.resolve(readDesktopFileText(path))
+    void Promise.resolve(readDesktopFileText(path, owner))
       .then(result => {
         if (!alive) {
           return
@@ -317,7 +337,7 @@ function InlineHtmlFrame({
     return () => {
       alive = false
     }
-  }, [path, streaming])
+  }, [path, streaming, owner])
 
   useEffect(() => {
     // Human-speed gate on widget intents. A closure local, not state: it's

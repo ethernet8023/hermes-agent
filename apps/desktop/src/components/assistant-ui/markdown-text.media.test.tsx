@@ -2,14 +2,34 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $connection } from '@/store/session'
+import { confirmNonMxcOwner } from '@/test/sandbox'
 
 import { MarkdownImage, MarkdownTextContent, MessageTextContent } from './markdown-text'
+
+const previousDesktop = window.hermesDesktop
+beforeEach(() => {
+  confirmNonMxcOwner()
+  window.hermesDesktop = {
+    ...previousDesktop,
+    api: vi.fn(async ({ path }: { path: string }) =>
+      path === '/api/sandbox/status' ? { enabled: false } : { dataUrl: REMOTE_IMAGE_DATA_URL }
+    ),
+    getConnection: vi.fn(async () => ({ mode: 'local' }))
+  } as unknown as typeof previousDesktop
+})
+afterEach(() => {
+  window.hermesDesktop = previousDesktop
+})
 
 const REMOTE_IMAGE_PATH = '/home/user/project/images/remote-preview.png'
 const REMOTE_IMAGE_DATA_URL = 'data:image/png;base64,cmVtb3RlLWltYWdl'
 
 describe('MarkdownTextContent remote images', () => {
   const api = vi.fn(async ({ path }: { path: string }) => {
+    if (path === '/api/sandbox/status') {
+      return { enabled: false }
+    }
+
     if (path.startsWith('/api/fs/read-data-url?')) {
       return { dataUrl: REMOTE_IMAGE_DATA_URL }
     }
@@ -46,7 +66,8 @@ describe('MarkdownTextContent remote images', () => {
     expect(image.getAttribute('src')).toBe(REMOTE_IMAGE_DATA_URL)
     expect(api).toHaveBeenCalledWith({
       path: '/api/fs/read-data-url?path=%2Fhome%2Fuser%2Fproject%2Fimages%2Fremote-preview.png',
-      profile: 'remote-work'
+      connectionId: undefined,
+      profile: 'default'
     })
   })
 })
@@ -72,8 +93,9 @@ describe('MarkdownImage media routing', () => {
     expect(container.querySelector('img')).toBeNull()
   })
 
-  it('still renders an <img> for an image source', () => {
+  it('still renders an <img> for an image source', async () => {
     const { container } = render(<MarkdownImage alt="pic" src="file:///tmp/pic.png" />)
+    expect(await screen.findByRole('img', { name: 'pic' })).toBeTruthy()
 
     expect(container.querySelector('video')).toBeNull()
     expect(container.querySelector('audio')).toBeNull()
@@ -84,7 +106,7 @@ describe('MessageTextContent MEDIA directives', () => {
   afterEach(cleanup)
 
   it('renders a raw audio MEDIA directive through the canonical player instead of exposing the directive', async () => {
-    const { container } = render(<MessageTextContent text="MEDIA:/tmp/group-voice.mp3" />)
+    const { container } = render(<MessageTextContent owner={confirmNonMxcOwner()} text="MEDIA:/tmp/group-voice.mp3" />)
 
     await waitFor(() => expect(container.querySelector('audio[controls]')).not.toBeNull())
     expect(container.textContent).not.toContain('MEDIA:')

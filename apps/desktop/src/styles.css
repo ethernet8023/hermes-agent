@@ -1243,8 +1243,7 @@
 
 /* Composer sandbox pill, ON state — a closed ring rather than a travelling arc,
    so it reads as a state (the sandbox is on) and not as activity, and stays
-   fully coloured when animations are off or paused. The gradient layer is an
-   oversized square rotated on the compositor; the host's mask keeps the band. */
+   fully coloured without motion. The host's mask keeps the complete band. */
 .sandbox-ring {
   --sandbox-ring-width: 0.09375rem;
   --sandbox-ring-standoff: 0.125rem;
@@ -1266,24 +1265,6 @@
   position: absolute;
   inset: -50%;
   background: conic-gradient(#4f8cff, #ff8c42, #4f8cff);
-  will-change: transform;
-  animation: sandbox-ring-spin 6s linear infinite;
-}
-
-@keyframes sandbox-ring-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-:root[data-renderer-animations-paused] .sandbox-ring::before {
-  animation-play-state: paused !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sandbox-ring::before {
-    animation: none;
-  }
 }
 
 /* Keyframes live here, not in per-instance <style> tags: inserting or removing an

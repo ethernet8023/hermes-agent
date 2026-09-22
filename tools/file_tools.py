@@ -259,111 +259,31 @@ _file_ops_lock = threading.Lock()
 _file_ops_cache: dict = {}
 
 
-def _create_terminal_env_for_file_ops(raw_task_id: str, task_id: str):
-    """Build the terminal environment for *task_id* via the shared ``_create_configured_env``,
-    so a file tool that runs before any terminal command still gets the configured backend."""
-    from tools.terminal_tool_config import _is_container_backend
-    from tools.terminal_tool import (
-        _create_configured_env, _get_env_config, _is_unusable_container_cwd,
-        _resolve_task_host_cwd, _select_image, get_session_cwd, resolve_task_overrides)
-
-    config = _get_env_config()
-    env_type = config["env_type"]
-    overrides = resolve_task_overrides(raw_task_id)
-    try:
-        recorded_cwd = get_session_cwd(raw_task_id)
-    except Exception:
-        recorded_cwd = None
-    cwd = overrides.get("cwd") or recorded_cwd or config["cwd"]
-    # Re-apply the container cwd guard: a gateway/TUI/ACP override is a raw HOST
-    # path and ``docker run -w <host-path>`` makes search_files & co silently
-    # return nothing. Valid in-container overrides (/workspace, /root) pass.
-    # Re-apply the container cwd guard that _get_env_config() already ran on config["cwd"] (see #50636). A
-    # per-task cwd override registered by the gateway/TUI/ACP for workspace tracking is a raw host path
-    # (e.g. a Desktop session's /Users/<me>/workspace or C:\\Users\\<me>). On a container backend that
-    # reaches ``docker run -w <host-path>`` and the container starts in a directory that doesn't exist
-    # inside the sandbox, so search_files and friends silently return empty results (#54447). Sanitize it
-    # back to the already-validated config["cwd"] so the override can't bypass the guard.
-    if _is_container_backend(env_type) and _is_unusable_container_cwd(cwd):
-        if cwd != config["cwd"]:
-            logger.info(
-                "Ignoring host/relative cwd override %r for %s backend "
-                "(won't exist in sandbox). Using %r instead.",
-                cwd, env_type, config["cwd"])
-        cwd = config["cwd"]
-    logger.info("Creating new %s environment for task %s...", env_type, task_id[:8])
-    terminal_env = _create_configured_env(
-        config, env_type, image=_select_image(env_type, overrides, config), cwd=cwd,
-        timeout=config["timeout"], task_id=task_id,
-        host_cwd=_resolve_task_host_cwd(config, raw_task_id),
-        local_config={"persistent": config.get("local_persistent", False)} if env_type == "local" else None,
-    )
-    return env_type, terminal_env
-
-
 def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
-    """Get or create ShellFileOperations for the task's terminal environment.
-
-    Uses terminal_tool's per-task creation locks (no duplicate sandboxes).
-    Subagent task_ids collapse to "default" (``_resolve_container_task_id``) so
-    delegate_task children share the parent's container; RL/benchmark task_ids
-    with a registered env override keep their isolation.
-    """
-    from tools.terminal_tool import (
-        _active_environments, _env_lock, _last_activity, _start_cleanup_thread,
-        _creation_locks, _creation_locks_lock, _resolve_container_task_id,
-        get_session_cwd, record_session_cwd)
+    """Reuse the terminal's policy-fenced environment, never a separate creation path."""
+    from tools.terminal_policy_lifecycle import terminal_policy_guard
+    from tools.terminal_tool import _plan_execution, _acquire_env, get_session_cwd, record_session_cwd
 
     raw_task_id = task_id or "default"
-    task_id = _resolve_container_task_id(raw_task_id)
-
-    # Fast path: cached AND the environment is still alive (cleanup thread may have killed it).
-    with _file_ops_lock:
-        cached = _file_ops_cache.get(task_id)
-    if cached is not None:
-        with _env_lock:
-            if task_id in _active_environments:
-                _last_activity[task_id] = time.time()
+    with terminal_policy_guard() as (owner, _):
+        plan = _plan_execution("", task_id=raw_task_id, timeout=None, background=False, _host_local=False)
+        with _file_ops_lock:
+            cached = _file_ops_cache.get(plan.effective_task_id)
+        # Preserve the non-MXC reaped-environment fallback without letting a stale
+        # shell cwd become a sandbox workspace or cross profile ownership.
+        if (plan.env_type != "mxc" and cached is not None
+                and getattr(getattr(cached, "env", None), "_terminal_policy_owner", None) == owner
+                and get_session_cwd(raw_task_id) is None and getattr(cached, "cwd", None)):
+            record_session_cwd(raw_task_id, cached.cwd)
+            plan = _plan_execution("", task_id=raw_task_id, timeout=None, background=False, _host_local=False)
+        terminal_env = _acquire_env(plan, raw_task_id)
+        with _file_ops_lock:
+            cached = _file_ops_cache.get(plan.effective_task_id)
+            if cached is not None and getattr(cached, "env", None) is terminal_env:
                 return cached
-            # Env was cleaned up: rescue its cwd into the session record FILL-ONLY
-            # (``cached.cwd`` is the SHARED env's cwd, not this session's own).
-            # Environment was cleaned up -- preserve the old cwd in the session record before invalidating
-            # the stale cache entry (fixes #26211: silent file-creation failures in long-running
-            # conversations). Usually a no-op: every completed command already recorded its cwd. Fill-only:
-            # ``cached.cwd`` is a snapshot of the SHARED env's cwd at cache-build time, so it is not
-            # attributable to this session (same class as the interrupted-command bug, #85658). Rescue a
-            # session that has no record, but never overwrite a record the session wrote for itself.
-            old_cwd = getattr(cached, "cwd", None)
-            if old_cwd:
-                try:
-                    if get_session_cwd(raw_task_id) is None:
-                        record_session_cwd(raw_task_id, old_cwd)
-                except Exception:
-                    pass
-            with _file_ops_lock:
-                _file_ops_cache.pop(task_id, None)
-
-    with _creation_locks_lock:
-        task_lock = _creation_locks.setdefault(task_id, threading.Lock())
-
-    with task_lock:
-        # Double-check: another thread may have created it while we waited.
-        with _env_lock:
-            terminal_env = _active_environments.get(task_id)
-            if terminal_env is not None:
-                _last_activity[task_id] = time.time()
-        if terminal_env is None:
-            env_type, terminal_env = _create_terminal_env_for_file_ops(raw_task_id, task_id)
-            with _env_lock:
-                _active_environments[task_id] = terminal_env
-                _last_activity[task_id] = time.time()
-            _start_cleanup_thread()
-            logger.info("%s environment ready for task %s", env_type, task_id[:8])
-
-    file_ops = ShellFileOperations(terminal_env)
-    with _file_ops_lock:
-        _file_ops_cache[task_id] = file_ops
-    return file_ops
+            file_ops = ShellFileOperations(terminal_env)
+            _file_ops_cache[plan.effective_task_id] = file_ops
+            return file_ops
 
 
 def clear_file_ops_cache(task_id: str = None):

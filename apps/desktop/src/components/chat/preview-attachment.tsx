@@ -2,6 +2,11 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
+import {
+  InertModelOutput,
+  useModelOutputOwner,
+  useModelOutputRestriction
+} from '@/components/assistant-ui/model-output-policy'
 import { useI18n } from '@/i18n'
 import { Download, MonitorPlay } from '@/lib/icons'
 import { normalizeOrLocalPreviewTarget } from '@/lib/local-preview'
@@ -11,10 +16,27 @@ import { notifyError } from '@/store/notifications'
 import { $previewTabSources, closePreviewForSource, openPreview, type PreviewRecordSource } from '@/store/preview'
 
 export function PreviewAttachment({ source = 'manual', target }: { source?: PreviewRecordSource; target: string }) {
+  const restriction = useModelOutputRestriction()
+
+  return source !== 'manual' && restriction ? (
+    <InertModelOutput reason={restriction} target={target} />
+  ) : (
+    <PreviewAttachmentContent source={source} target={target} />
+  )
+}
+
+function PreviewAttachmentContent({ source, target }: { source: PreviewRecordSource; target: string }) {
+  const modelOwner = useModelOutputOwner()
+  const owner = source === 'manual' ? undefined : modelOwner
+  const view = useSessionView()
+  const stored = useStore(view.$storedId)
+  const runtime = useStore(view.$runtimeId)
+  const sessionId = owner === undefined ? stored || runtime : owner?.sessionId
   const { t } = useI18n()
   // This link lives in one session's transcript; resolve it against THAT
   // session's cwd, not the primary chat's.
-  const cwd = useStore(useSessionView().$cwd)
+  const viewCwd = useStore(view.$cwd)
+  const cwd = owner === undefined || (owner?.sessionId && [stored, runtime].includes(owner.sessionId)) ? viewCwd : null
   const openSources = useStore($previewTabSources)
   const [opening, setOpening] = useState(false)
   const [downloading, setDownloading] = useState(false)
@@ -43,7 +65,7 @@ export function PreviewAttachment({ source = 'manual', target }: { source?: Prev
   useEffect(() => {
     requestTokenRef.current += 1
     setOpening(false)
-  }, [cwd, target])
+  }, [cwd, target, owner])
 
   async function togglePreview() {
     if (opening) {
@@ -63,7 +85,7 @@ export function PreviewAttachment({ source = 'manual', target }: { source?: Prev
     setOpening(true)
 
     try {
-      const preview = await normalizeOrLocalPreviewTarget(requestTarget, requestCwd || undefined)
+      const preview = await normalizeOrLocalPreviewTarget(requestTarget, requestCwd || undefined, owner)
 
       if (
         !mountedRef.current ||
@@ -108,7 +130,11 @@ export function PreviewAttachment({ source = 'manual', target }: { source?: Prev
       // Works in both modes: the Electron main process fetches the bytes
       // through the session's backend connection (local gateway or remote)
       // and prompts for a save location.
-      const result = await downloadGatewayMediaFile(target)
+      const result = await downloadGatewayMediaFile(
+        target,
+        sessionId ? { sessionId, profile: owner?.profile } : undefined,
+        owner
+      )
 
       if (mountedRef.current && result.saved) {
         setDownloaded(true)

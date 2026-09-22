@@ -355,6 +355,22 @@ export const zhHant = defineLocale({
       billingOverview: '概覽',
       billingPlans: '方案'
     },
+    sandbox: {
+      heading: 'Windows 沙箱',
+      description: '支援的終端機和檔案工具在 Windows 處理程序容器（MXC）中執行。未隔離的工具會被拒絕；主機推論和 Hermes 固定的內部管理功能仍是容器外的可信服務。',
+      statusAvailable: '可用', statusDegraded: '可用（受限）', statusUnavailable: '無法使用',
+      statusUnknown: '尚未確認保護狀態。請重新檢查後端，或關閉沙箱以恢復操作。',
+      modelOutputBlocked: 'MXC 已阻止預覽：助理內容不能在此讀取主機檔案、載入遠端內容或執行指令碼。',
+      modelOutputUnconfirmed: '確認此內容的所屬來源與沙箱政策之前，預覽保持停用。',
+      toggleLabel: '隔離終端機和檔案工具', toggleDescription: '適用於此設定檔的所有對話。原有的主機執行會在變更完成前停止；下一個支援的命令使用新原則。',
+      shellNote: '首次開啟時會下載受管理的 shell，除非你已設定自訂 shell。',
+      workspaceRule: '每個對話在使用者選擇的專案資料夾或預設 Hermes 工作區中寫入。額外資料夾的授權包含所有子目錄。執行工具、私有暫存空間和支援的貼上附件具有範圍有限的內部存取權限。',
+      foldersTitle: '其他資料夾', foldersEmpty: '沒有額外的使用者資料夾授權。',
+      isolationRule: '支援的命令無法使用主機剪貼簿、登錄或其他處理程序。僅傳入選定的執行環境變數，不傳入主機認證。',
+      addReadOnly: '新增唯讀資料夾', addReadWrite: '新增讀寫資料夾', remove: '移除', modeRead: '唯讀', modeReadWrite: '讀寫', networkLabel: '允許網路存取',
+      networkDescription: '控制沙箱對外網路和網頁搜尋／擷取。即使開啟網路，瀏覽器自動化、桌面控制、MCP、連接器、生成工具和 execute_code 仍被拒絕。主機推論與可信內部管理不受此開關控制。',
+      containers: count => `自 Hermes 啟動以來已啟動 ${count} 個容器`, recheck: '重新檢查', enableFailed: '無法開啟沙箱', updateFailed: '無法更新沙箱原則'
+    },
     plugins: {
       installModal: {
         installFromGit: '從 Git 安裝',
@@ -2441,6 +2457,14 @@ export const zhHant = defineLocale({
   },
 
   composer: {
+    sandbox: {
+      heading: '沙箱（MXC）', titleOn: '關閉此設定檔所有對話的沙箱', titleOff: '開啟此設定檔所有對話的沙箱', on: '開', off: '關', unknown: '尚未確認', unavailable: '無法使用',
+      descriptionOn: folder => `此設定檔使用 MXC 執行支援的終端機和檔案工具。此對話在 ${folder} 中工作，也可存取設定中額外授權的資料夾及其子目錄。`,
+      descriptionOff: '開啟沙箱，隔離此設定檔所有對話中支援的終端機和檔案工具。',
+      networkOn: '已允許網路存取。', networkOff: '網路存取已關閉。',
+      isolated: '開啟網路也不會放行未隔離的工具。主機推論和 Hermes 固定的內部管理仍是可信服務。',
+      openSettings: '開啟沙箱設定', turnOnFailed: '無法開啟沙箱', turnOffFailed: '無法關閉沙箱'
+    },
     message: '訊息',
     wakingProfile: profile => `正在喚醒 ${profile}…`,
     placeholderStarting: '正在啟動 Hermes...',
@@ -3431,6 +3455,13 @@ export const zhHant = defineLocale({
       lateAnswerHint: '此問題已不再等待回答。選擇一個選項會將其起草為後續訊息。'
     },
     tool: {
+      sandboxBlocked: '已被沙箱原則封鎖',
+      sandboxRecursiveScope: path => `包含 ${path} 中的所有檔案和子資料夾。此授權適用於此設定檔的所有對話。`,
+      sandboxBlockedDetail: path => `Windows 拒絕存取 ${path}。它不在授予的資料夾範圍內。`,
+      sandboxAllowRead: '允許讀取', sandboxAllowReadWrite: '允許讀寫', sandboxGrantedTitle: '已授予存取權',
+      sandboxGranted: path => `已授予 ${path} 的存取權。請要求 Hermes 重試。`,
+      sandboxRetryDraft: (path, mode) => `我已授予你對 ${path} 的${mode}權限，請再試一次。`,
+      sandboxGrantFailed: '無法授予存取權', sandboxPill: 'MXC',
       copyCode: '複製程式碼',
       renderingImage: '正在渲染圖片',
       copyOutput: '複製輸出',

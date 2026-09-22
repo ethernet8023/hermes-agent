@@ -15,6 +15,8 @@ from starlette.testclient import TestClient  # noqa: E402
 from hermes_cli.config import load_config  # noqa: E402
 from tools.environments import mxc_host  # noqa: E402
 
+_REAL_STATUS = mxc_host.status
+
 
 def _available(**overrides):
     record = {
@@ -31,11 +33,7 @@ def _available(**overrides):
 @pytest.fixture
 def client(_isolate_hermes_home, monkeypatch, tmp_path):
     monkeypatch.setattr(mxc_host, "status", lambda **_: _available())
-    # Real ancestor_readiness over a stubbed icacls, so the route returns the genuine record shape
-    # the desktop dereferences (a hand-shaped stub here once hid a missing field).
-    listing = "X APPLICATION PACKAGE AUTHORITY\\ALL APPLICATION PACKAGES:(R)\n"
-    monkeypatch.setattr(mxc_host, "_icacls",
-                        lambda directory, *args, **kw: __import__("subprocess").CompletedProcess([], 0, listing, ""))
+
     # The default workspace lives in the REAL user profile; tests must never create it there.
     default = tmp_path / "default-workspace"
     default.mkdir()
@@ -55,8 +53,7 @@ def test_status_reports_availability_policy_and_the_requested_workspace(client, 
     body = resp.json()
     assert body["available"] is True and body["enabled"] is False
     assert body["workspace"] == os.path.normpath(str(project))
-    assert set(body["workspace_ancestors"]) == {"ready", "missing", "needs_admin", "admin_command"}
-    assert body["workspace_ancestors"]["ready"] is True
+    assert "workspace_ancestors" not in body
 
 
 def test_status_shows_the_default_workspace_for_a_session_anchored_at_home(client, tmp_path):
@@ -78,56 +75,37 @@ def test_fs_default_cwd_lands_a_fresh_draft_in_the_default_workspace_under_mxc(c
     assert os.path.normcase(files._fs_default_cwd()) == os.path.normcase(os.path.realpath(os.path.expanduser("~")))
 
 
-def test_enabling_switches_the_terminal_backend_and_disabling_restores_local(client, monkeypatch):
-    import tools.terminal_tool as terminal_tool
-    from hermes_cli.web_routers import sandbox as sandbox_routes
-
-    class _Env:
-        cleaned = 0
-
-        def cleanup(self):
-            _Env.cleaned += 1
-
-    bridged = []
-    monkeypatch.setattr(sandbox_routes, "_apply_backend_switch_to_this_process",
-                        lambda: bridged.append(True) or terminal_tool._active_environments.clear())
-    terminal_tool._active_environments["task-a"] = _Env()
-
-    resp = client.post("/api/sandbox/policy", json={"enabled": True})
-    assert resp.status_code == 200
-    assert load_config()["terminal"]["backend"] == "mxc"
-    assert bridged == [True], "a backend change must be applied to the running process"
-    assert "task-a" not in terminal_tool._active_environments
-
-    resp = client.post("/api/sandbox/policy", json={"network": True})
-    assert resp.status_code == 200
-    assert bridged == [True], "a policy-only edit is live already and must not evict environments"
-
-    resp = client.post("/api/sandbox/policy", json={"enabled": False})
-    assert resp.status_code == 200
-    assert load_config()["terminal"]["backend"] == "local"
-    assert bridged == [True, True]
+def test_every_policy_write_reconciles_including_network_changes(client, monkeypatch):
+    from hermes_cli.web_routers import sandbox
+    reconciled = []
+    monkeypatch.setattr(sandbox, "reconcile_terminal_policy", lambda: reconciled.append(load_config()["terminal"]["backend"]))
+    for update, expected in (({"enabled": True}, "mxc"), ({"network": True}, "mxc"), ({"enabled": False}, "local")):
+        response = client.post("/api/sandbox/policy", json=update)
+        assert response.status_code == 200, response.text
+        assert load_config()["terminal"]["backend"] == expected
+    assert reconciled == ["mxc", "mxc", "local"]
 
 
-def test_live_backend_switch_rebridges_env_and_evicts_cached_environments(monkeypatch, _isolate_hermes_home):
-    import tools.terminal_tool as terminal_tool
-    from hermes_cli.web_routers import sandbox as sandbox_routes
-
-    class _Env:
-        cleaned = 0
-
-        def cleanup(self):
-            _Env.cleaned += 1
-
-    calls = []
-    monkeypatch.setattr("hermes_cli.config.apply_terminal_config_to_env", lambda env=None: calls.append(env))
-    monkeypatch.setattr("agent.secret_scope.is_multiplex_active", lambda: False)
-    terminal_tool._active_environments["task-b"] = _Env()
-    try:
-        sandbox_routes._apply_backend_switch_to_this_process()
-    finally:
-        terminal_tool._active_environments.pop("task-b", None)
-    assert calls == [None] and _Env.cleaned == 1
+def test_real_status_and_live_config_follow_profile_writes_a_b_a(client, monkeypatch, tmp_path):
+    from hermes_cli import web_server_profiles
+    monkeypatch.setattr(mxc_host, "status", _REAL_STATUS)
+    monkeypatch.setattr(mxc_host, "_IS_WINDOWS", False)
+    homes = {name: tmp_path / name for name in ("alpha", "beta")}
+    for name, home in homes.items():
+        home.mkdir()
+        backend = "mxc" if name == "alpha" else "local"
+        (home / "config.yaml").write_text(f"terminal:\n  backend: {backend}\n  mxc_network: false\n", encoding="utf-8")
+    monkeypatch.setattr(web_server_profiles, "_resolve_profile_dir", lambda name: homes[name])
+    for name, network in (("alpha", True), ("beta", False), ("alpha", False)):
+        response = client.post("/api/sandbox/policy", params={"profile": name}, json={"network": network})
+        assert response.status_code == 200, response.text
+        assert response.json()["enabled"] == (name == "alpha")
+        assert response.json()["policy"]["network"] == network
+        read = client.get("/api/sandbox/status", params={"profile": name})
+        assert read.status_code == 200, read.text
+        assert read.json()["policy"] == response.json()["policy"]
+    with web_server_profiles._hermes_home_scope(homes["beta"]):
+        assert load_config()["terminal"]["backend"] == "local"
 
 
 def test_enabling_is_refused_with_the_host_reason_when_mxc_cannot_run(client, monkeypatch):
@@ -145,7 +123,7 @@ def test_policy_edits_persist_normalized_paths_and_network(client, tmp_path):
     ro.mkdir()
     rw.mkdir()
     resp = client.post("/api/sandbox/policy", json={
-        "readwrite_paths": [str(rw), str(rw).upper(), ""],
+        "readwrite_paths": [str(rw), str(rw) + os.sep],
         "readonly_paths": [str(ro) + os.sep],
         "network": True,
     })
@@ -180,11 +158,101 @@ def test_grant_rejects_relative_and_missing_paths(client, tmp_path):
     assert client.post("/api/sandbox/grant", json={"path": str(tmp_path), "mode": "sideways"}).status_code == 400
 
 
-def test_prepare_reports_what_it_did_and_what_needs_an_administrator(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(mxc_host, "prepare_ancestors", lambda path: {
-        "prepared": [str(tmp_path)], "needs_admin": ["C:\\"], "admin_command": 'icacls "C:\\" ...', "errors": []})
-    resp = client.post("/api/sandbox/prepare", json={"path": str(tmp_path / "proj")})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["prepared"] == [str(tmp_path)] and body["needs_admin"] == ["C:\\"]
-    assert body["workspace"] == os.path.normpath(str(tmp_path / "proj"))
+@pytest.mark.parametrize("endpoint,payload", [
+    ("policy", {"network": True}),
+    ("grant", {"mode": "read"}),
+])
+def test_writes_return_the_edited_profile_and_reconcile_inside_scope(client, tmp_path, monkeypatch, endpoint, payload):
+    from hermes_cli.web_routers import sandbox
+    from hermes_constants import get_hermes_home
+    from hermes_cli import web_server_profiles
+
+    homes = {name: tmp_path / name for name in ("alpha", "beta")}
+    for home in homes.values():
+        home.mkdir()
+        (home / "config.yaml").write_text("terminal:\n  backend: local\n", encoding="utf-8")
+    monkeypatch.setattr(web_server_profiles, "_resolve_profile_dir", lambda name: homes[name])
+    seen = []
+    monkeypatch.setattr(sandbox, "reconcile_terminal_policy", lambda: seen.append(get_hermes_home().name), raising=False)
+    monkeypatch.setattr(mxc_host, "status", lambda **_: _available(owner=get_hermes_home().name))
+    folder = tmp_path / "grant-folder"
+    folder.mkdir()
+    for name in ("alpha", "beta", "alpha"):
+        body = {**payload, "profile": name}
+        if endpoint == "grant":
+            body["path"] = str(folder)
+        response = client.post(f"/api/sandbox/{endpoint}", json=body)
+        assert response.status_code == 200, response.text
+        assert response.json()["owner"] == name
+    assert seen == ["alpha", "beta", "alpha"]
+
+
+def test_transition_failure_is_not_reported_as_protected(client, monkeypatch):
+    from hermes_cli.web_routers import sandbox
+    def fail():
+        raise RuntimeError("old host kernel would not stop")
+    monkeypatch.setattr(sandbox, "reconcile_terminal_policy", fail, raising=False)
+    response = client.post("/api/sandbox/policy", json={"enabled": True})
+    assert response.status_code == 500
+    assert "old host kernel would not stop" in response.json()["detail"]
+    assert client.get("/api/sandbox/status").status_code == 500
+
+
+def test_grant_refuses_a_target_that_changed_since_consent(client, tmp_path):
+    folder = tmp_path / "scope"
+    folder.mkdir()
+    response = client.post("/api/sandbox/grant", json={"path": str(folder), "expected_target": str(tmp_path / "different")})
+    assert response.status_code == 409
+    assert load_config()["terminal"].get("mxc_readonly_paths", []) == []
+
+
+def test_prepare_is_retired_without_mutating_host_acls(client, tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("must not mutate ACLs")
+    monkeypatch.setattr(mxc_host, "prepare_ancestors", forbidden, raising=False)
+    assert client.post("/api/sandbox/prepare", json={"path": str(tmp_path)}).status_code == 410
+
+
+def test_preview_and_grant_share_exact_recursive_scope(client, tmp_path, monkeypatch):
+    from hermes_cli.web_routers import sandbox
+    monkeypatch.setattr(sandbox, "reconcile_terminal_policy", lambda: None, raising=False)
+    folder = tmp_path / "Documents"
+    folder.mkdir()
+    file = folder / "taxes.pdf"
+    file.write_text("private", encoding="utf-8")
+    preview = client.get("/api/sandbox/grant-target", params={"path": str(file)})
+    assert preview.status_code == 200
+    assert preview.json() == {"target": str(folder), "recursive": True}
+    granted = client.post("/api/sandbox/grant", json={"path": str(file), "mode": "read"})
+    assert granted.status_code == 200
+    assert granted.json()["granted"] == preview.json()["target"]
+
+
+@pytest.mark.parametrize("field", ["readonly_paths", "readwrite_paths"])
+def test_policy_rejects_invalid_and_protected_paths_before_save(client, tmp_path, field):
+    from hermes_constants import get_hermes_home
+    for path in ("relative", "", str(tmp_path / "missing"), str(get_hermes_home()), str(tmp_path)):
+        response = client.post("/api/sandbox/policy", json={field: [path]})
+        assert response.status_code == 400, (path, response.text)
+        assert load_config()["terminal"].get("mxc_" + field, []) == []
+
+
+def test_preview_and_grant_reject_protected_parent(client, tmp_path):
+    from hermes_constants import get_hermes_home
+    protected = get_hermes_home() / "secret.txt"
+    protected.write_text("fixture", encoding="utf-8")
+    assert client.get("/api/sandbox/grant-target", params={"path": str(protected)}).status_code == 400
+    assert client.post("/api/sandbox/grant", json={"path": str(protected)}).status_code == 400
+
+
+def test_atomic_revoke_preserves_other_grants(client, tmp_path, monkeypatch):
+    from hermes_cli.web_routers import sandbox
+    monkeypatch.setattr(sandbox, "reconcile_terminal_policy", lambda: None, raising=False)
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    for folder in (a, b):
+        assert client.post("/api/sandbox/grant", json={"path": str(folder)}).status_code == 200
+    response = client.request("DELETE", "/api/sandbox/grant", json={"path": str(a)})
+    assert response.status_code == 200
+    assert load_config()["terminal"]["mxc_readonly_paths"] == [str(b)]

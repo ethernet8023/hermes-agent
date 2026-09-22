@@ -2049,6 +2049,18 @@ def atomic_config_write(config_path: Path, data: Any, **kwargs: Any) -> None:
     """Fail-closed atomic write for ``config.yaml`` (``require_readable_config_before_write`` first)."""
     require_readable_config_before_write(config_path)
     atomic_yaml_write(config_path, data, **kwargs)
+    _reconcile_written_terminal_policy(config_path)
+
+
+def _reconcile_written_terminal_policy(config_path: Path) -> None:
+    """A config writer may target only its bound profile's live resources.
+
+    CLI processes without execution resources need no initialization; another
+    running process independently checks the live policy at its next admission.
+    """
+    lifecycle = sys.modules.get("tools.terminal_policy_lifecycle")
+    if lifecycle is not None and Path(config_path).resolve() == get_config_path().resolve():
+        lifecycle.reconcile_terminal_policy()
 
 
 def load_config() -> Dict[str, Any]:
@@ -2429,6 +2441,7 @@ def save_config(
         _secure_file(config_path)
         _RAW_CONFIG_CACHE.pop(str(config_path), None)
         _LAST_EXPANDED_CONFIG_BY_PATH[str(config_path)] = copy.deepcopy(current_normalized)
+    _reconcile_written_terminal_policy(config_path)
 
 
 def load_env() -> Dict[str, str]:

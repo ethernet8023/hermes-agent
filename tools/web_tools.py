@@ -368,7 +368,12 @@ async def web_extract_tool(urls: List[Any], format: str = None, char_limit: Opti
         logger.info("Extracting content from %d URL(s)", len(normalized_urls))
         # SSRF protection — filter private/internal URLs before any backend.
         safe_urls, safe_indices, ssrf_blocked = [], [], {}
+        from tools.environments.mxc_policy import network_refusal
         for index, url in zip(normalized_indices, normalized_urls):
+            refusal = network_refusal()
+            if refusal is not None:
+                ssrf_blocked[index] = _result_entry(url, refusal)
+                continue
             if await async_is_safe_url(url):
                 safe_urls.append(url)
                 safe_indices.append(index)

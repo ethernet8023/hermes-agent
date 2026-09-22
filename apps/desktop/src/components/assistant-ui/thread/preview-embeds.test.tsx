@@ -11,9 +11,14 @@
 // with nothing to catch it.
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from '@assistant-ui/react'
 import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { publishSandboxStatus, sandboxState } from '@/store/sandbox'
+import { confirmNonMxcOwner } from '@/test/sandbox'
 
 import { Thread } from '.'
+
+beforeEach(() => { confirmNonMxcOwner() })
 
 const createdAt = new Date('2026-05-01T00:00:00.000Z')
 
@@ -82,6 +87,14 @@ const TARGET = 'https://example.com/docs'
 const WITH_PREVIEW = `Serving now: [Preview: example](#preview/${TARGET})`
 
 describe('settled-turn link previews', () => {
+  it('does not load a structured assistant image part under MXC', async () => {
+    const owner = confirmNonMxcOwner()
+    publishSandboxStatus({ ...sandboxState(owner).get().status!, enabled: true }, owner)
+    const response = { ...assistant('structured-image', '', false), content: [{ type: 'image', image: 'https://example.test/structured.png' }] } as ThreadMessage
+    const { container } = render(<Harness messages={[user('user-image', 'show it'), response]} />)
+    expect(container.querySelector('img[src="https://example.test/structured.png"]')).toBeNull()
+    expect(container.textContent).toContain('https://example.test/structured.png')
+  })
   it('renders the embed once the turn has settled', async () => {
     const { container } = render(<Harness messages={[user('u1', 'start it'), assistant('a1', WITH_PREVIEW, false)]} />)
 

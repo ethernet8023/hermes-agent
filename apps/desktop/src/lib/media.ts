@@ -1,5 +1,7 @@
-import { readDesktopFileDataUrl } from '@/lib/desktop-fs'
+import type { SandboxOwner } from '@/api/sandbox'
+import { isOwnerAbsoluteFilePath, readDesktopFileDataUrl } from '@/lib/desktop-fs'
 import { capitalize } from '@/lib/text'
+import { confirmModelOutputAccess } from '@/store/sandbox'
 import { $connection } from '@/store/session'
 
 export type MediaKind = 'audio' | 'image' | 'video' | 'file'
@@ -84,7 +86,15 @@ export function isFileMediaPath(path: string): boolean {
   return /^(?:file:|\/|~\/|[a-z]:[\\/]|\\\\)/i.test(path)
 }
 
-export async function resolveMediaDisplaySrc(path: string): Promise<string> {
+export async function resolveMediaDisplaySrc(path: string, owner?: SandboxOwner | null): Promise<string> {
+  if (owner !== undefined && !isInlineMediaSrc(path)) {
+    return readDesktopFileDataUrl(filePathFromMediaPath(path), owner)
+  }
+
+  if (owner !== undefined) {
+    await confirmModelOutputAccess(owner)
+  }
+
   if (isInlineMediaSrc(path) || !isFileMediaPath(path)) {
     return path
   }
@@ -104,7 +114,44 @@ export async function resolveMediaDisplaySrc(path: string): Promise<string> {
 // remote URLs untouched and route filesystem paths through the Electron media
 // protocol. Its main-process handler reads local files directly or proxies a
 // remote gateway with the connection's bearer/cookie/token authentication.
-export async function resolveMediaPlaybackSrc(path: string): Promise<string> {
+export async function resolveMediaPlaybackSrc(path: string, owner?: SandboxOwner | null): Promise<string> {
+  const check = owner !== undefined ? await confirmModelOutputAccess(owner) : undefined
+
+  if (owner !== undefined && !isInlineMediaSrc(path) && ['audio', 'video'].includes(mediaKind(path))) {
+    if (!owner) {
+      throw new Error('Model output owner is unknown')
+    }
+
+    if (!isOwnerAbsoluteFilePath(filePathFromMediaPath(path))) {
+      throw new Error('Model playback requires its session-resolved path')
+    }
+
+    const desktop = window.hermesDesktop
+
+    const connection = desktop?.getConnectionFor
+      ? await desktop.getConnectionFor({
+          connectionId: owner.connectionId,
+          profile: owner.profile,
+          priority: 'background'
+        })
+      : !owner.connectionId
+        ? await desktop?.getConnection?.(owner.profile, { priority: 'background' })
+        : null
+
+    check?.()
+
+    if (connection?.mode === 'local') {return mediaStreamUrl(path)}
+
+    if (connection?.mode !== 'remote') {throw new Error('Model output owner cannot be routed')}
+    const scope = new URLSearchParams({ profile: owner.profile ?? 'default' })
+
+    if (owner.connectionId) {
+      scope.set('connectionId', owner.connectionId)
+    }
+
+    return `hermes-media://remote/${encodeURIComponent(filePathFromMediaPath(path))}?${scope}`
+  }
+
   if (isInlineMediaSrc(path)) {
     return path
   }
@@ -113,7 +160,7 @@ export async function resolveMediaPlaybackSrc(path: string): Promise<string> {
     return isRemoteGateway() ? mediaGatewayStreamUrl(path) : mediaStreamUrl(path)
   }
 
-  return resolveMediaDisplaySrc(path)
+  return resolveMediaDisplaySrc(path, owner)
 }
 
 // Resolve a media path to a URL the shell can open. Remote mode rewrites
@@ -212,21 +259,32 @@ export async function gatewayMediaDataUrl(path: string): Promise<string> {
 // used by preview endpoints.
 export async function downloadGatewayMediaFile(
   path: string,
-  origin?: { sessionId: string; profile?: string }
+  origin?: { sessionId: string; profile?: string | null },
+  owner?: SandboxOwner | null
 ): Promise<{ canceled?: boolean; path?: string; saved: boolean }> {
   // URI conversion belongs to the gateway OS, not the renderer's URL parser.
   const file = path
-  const conn = $connection.get()
+  const check = owner !== undefined ? await confirmModelOutputAccess(owner) : undefined
+
+  if (owner === null) {
+    throw new Error('Model output owner is unknown')
+  }
+
+  if (owner && !owner.sessionId && !origin?.sessionId && !isOwnerAbsoluteFilePath(filePathFromMediaPath(path))) {
+    throw new Error('Relative model output requires a proven session')
+  }
+
+  const conn = owner ?? $connection.get()
 
   if (!window.hermesDesktop?.saveGatewayFile) {
     throw new Error('Desktop file download bridge is unavailable')
   }
 
-  return window.hermesDesktop.saveGatewayFile({
+  const result = await window.hermesDesktop.saveGatewayFile({
     connectionId: conn?.connectionId,
     path: file,
-    profile: origin?.profile ?? conn?.profile,
-    ...(origin ? { sessionId: origin.sessionId } : {}),
+    profile: owner ? (owner.profile ?? 'default') : (origin?.profile ?? conn?.profile),
+    ...(owner?.sessionId || origin?.sessionId ? { sessionId: owner?.sessionId ?? origin?.sessionId } : {}),
     suggestedName: mediaName(file).replace(/(?:%[0-9a-f]{2})+/gi, encoded => {
       try {
         return decodeURIComponent(encoded)
@@ -235,6 +293,10 @@ export async function downloadGatewayMediaFile(
       }
     })
   })
+
+  check?.()
+
+  return result
 }
 
 export function mediaDisplayLabel(path: string): string {

@@ -1,6 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { currentSandboxOwner, type SandboxOwner, sandboxOwnerKey } from '@/api/sandbox'
 import { useSessionView } from '@/app/chat/session-view'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -9,10 +10,13 @@ import { displayPath } from '@/lib/display-path'
 import { ShieldLock } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notifyError } from '@/store/notifications'
+import { ensureGatewayAgent } from '@/store/profile'
 import { requestRoute } from '@/store/recovery-requests'
-import { $sandboxStatus, refreshSandboxStatus, toggleSandbox } from '@/store/sandbox'
+import { refreshSandboxStatus, sandboxState, toggleSandbox } from '@/store/sandbox'
+import { setSettingsScope } from '@/store/settings-scope'
 
 import { ACTIVE_ICON_BTN, GHOST_ICON_BTN } from './control-classes'
+import { useSessionSandboxOwner } from './use-sandbox-owner'
 
 const SANDBOX_SETTINGS_ROUTE = '/settings?tab=config:safety'
 const OPEN_DELAY_MS = 150
@@ -22,16 +26,22 @@ const CLOSE_DELAY_MS = 250
  * Composer sandbox indicator: whether commands from THIS conversation run inside a Windows
  * (MXC) container, with a hover card that says what that means for the folder in front of the
  * user and offers the way into the policy. Rendered only where the backend reports the sandbox as
- * available (a Windows host with the MXC kit and shell); the verdict comes from `$sandboxStatus`,
+ * available or configured on; the verdict comes from the owner-scoped sandbox cache,
  * the cache of the backend's status route, so the pill and the Settings panel can never disagree.
  */
 export function SandboxPill({ disabled }: { disabled: boolean }) {
+  const owner = useSessionSandboxOwner()
+
+  return owner ? <ScopedSandboxPill disabled={disabled} owner={owner} /> : null
+}
+
+function ScopedSandboxPill({ disabled, owner }: { disabled: boolean; owner: SandboxOwner }) {
   const copy = useI18n().t.composer.sandbox
-  const status = useStore($sandboxStatus)
+  const { status, busy, confirmed } = useStore(sandboxState(owner))
   const view = useSessionView()
   const cwd = useStore(view.$cwd)
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+
   const timer = useRef<number | null>(null)
 
   const schedule = useCallback((next: boolean, delay: number) => {
@@ -53,17 +63,24 @@ export function SandboxPill({ disabled }: { disabled: boolean }) {
 
   useEffect(() => {
     if (open) {
-      void refreshSandboxStatus()
+      void refreshSandboxStatus(owner)
     }
-  }, [open])
+  }, [open, owner])
+
+  useEffect(() => {
+    if (!sandboxState(owner).get().status) {
+      void refreshSandboxStatus(owner)
+    }
+  }, [owner])
 
   // Present only where the Settings panel would read "Available": a Windows host with the MXC kit
   // and the sandbox shell in place. Elsewhere there is nothing to turn on, so nothing to show.
-  if (!status?.platform_supported || !status.available) {
+  if (!status || (!status.enabled && (!status.platform_supported || (!status.available && !status.shell_missing)))) {
     return null
   }
 
   const enabled = status.enabled
+  const protectedNow = enabled && status.available && confirmed
   const title = enabled ? copy.titleOn : copy.titleOff
 
   const hoverProps = {
@@ -71,20 +88,34 @@ export function SandboxPill({ disabled }: { disabled: boolean }) {
     onMouseLeave: () => schedule(false, CLOSE_DELAY_MS)
   }
 
-  // Click flips the sandbox; the card is hover-only, so it explains without getting in the way.
+  // Click flips policy; hover or keyboard focus reveals the explanation without taking focus.
   const toggle = async () => {
     if (busy) {
       return
     }
 
-    setBusy(true)
-
     try {
-      await toggleSandbox()
+      await toggleSandbox(owner)
     } catch (err) {
       notifyError(err, enabled ? copy.turnOffFailed : copy.turnOnFailed)
-    } finally {
-      setBusy(false)
+    }
+  }
+
+  const openSettings = async () => {
+    try {
+      if (sandboxOwnerKey(currentSandboxOwner()) !== sandboxOwnerKey(owner)) {
+        await ensureGatewayAgent(owner.connectionId, owner.profile ?? 'default')
+      }
+
+      if (sandboxOwnerKey(currentSandboxOwner()) !== sandboxOwnerKey(owner)) {
+        return
+      }
+
+      setSettingsScope(owner.profile ?? 'default')
+      setOpen(false)
+      requestRoute(SANDBOX_SETTINGS_ROUTE)
+    } catch (err) {
+      notifyError(err, copy.openSettings)
     }
   }
 
@@ -92,13 +123,24 @@ export function SandboxPill({ disabled }: { disabled: boolean }) {
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverAnchor asChild>
         <Button
+          aria-expanded={open}
+          aria-haspopup="dialog"
           aria-label={title}
           aria-pressed={enabled}
           className={cn('relative', GHOST_ICON_BTN, enabled && ACTIVE_ICON_BTN)}
-          data-state-sandbox={enabled ? 'on' : 'off'}
+          data-state-sandbox={
+            !confirmed ? 'unknown' : enabled && !status.available ? 'unavailable' : enabled ? 'on' : 'off'
+          }
           data-testid="sandbox-pill"
-          disabled={disabled || busy}
+          disabled={disabled || busy || (!enabled && !confirmed)}
           onClick={() => void toggle()}
+          onFocus={() => schedule(true, 0)}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              setOpen(false)
+            }
+          }}
           size="icon"
           type="button"
           variant="ghost"
@@ -107,7 +149,7 @@ export function SandboxPill({ disabled }: { disabled: boolean }) {
           {/* A closed blue-to-orange ring in the Nous colours: the sandbox being on is the one
               state in the composer worth more than a tint, and a ring stays whole when motion
               is off, where the travelling arc would freeze part-way. */}
-          {enabled && <span aria-hidden className="sandbox-ring" data-testid="sandbox-pill-arc" />}
+          {protectedNow && <span aria-hidden className="sandbox-ring" data-testid="sandbox-pill-arc" />}
           <ShieldLock className="size-3.5" />
         </Button>
       </PopoverAnchor>
@@ -130,12 +172,19 @@ export function SandboxPill({ disabled }: { disabled: boolean }) {
               )}
               data-testid="sandbox-pill-state"
             >
-              {enabled ? copy.on : copy.off}
+              {!confirmed
+                ? copy.unknown
+                : enabled && !status.available
+                  ? copy.unavailable
+                  : enabled
+                    ? copy.on
+                    : copy.off}
             </span>
           </div>
           <p className="text-xs text-muted-foreground">
             {enabled ? copy.descriptionOn(displayPath(cwd) || cwd) : copy.descriptionOff}
           </p>
+          {status.reason && !status.available && <p className="text-xs text-muted-foreground">{status.reason}</p>}
           {enabled && (
             <p className="text-xs text-muted-foreground">
               {status.policy?.network ? copy.networkOn : copy.networkOff} {copy.isolated}
@@ -143,10 +192,7 @@ export function SandboxPill({ disabled }: { disabled: boolean }) {
           )}
           <Button
             className="justify-self-start"
-            onClick={() => {
-              setOpen(false)
-              requestRoute(SANDBOX_SETTINGS_ROUTE)
-            }}
+            onClick={() => void openSettings()}
             size="sm"
             type="button"
             variant="outline"

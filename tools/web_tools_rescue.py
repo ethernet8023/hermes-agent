@@ -106,6 +106,11 @@ def _rescue_extract(provider_name: str, urls: list, results: list) -> list:
     broke url/result order parity, every entry is treated as rescueable and the ring's list replaces the
     batch wholesale.
     """
+    from tools.environments.mxc_policy import network_refusal
+    refusal = network_refusal()
+    if refusal is not None:
+        return [{"url": url, "title": "", "content": "", "error": refusal,
+                 "blocked_by_policy": True} for url in urls]
     from plugins.web.keyless_mcp import extract_with_failover
 
     parity = len(results) == len(urls)

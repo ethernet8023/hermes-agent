@@ -1078,6 +1078,9 @@ def validate_media_delivery_path(path: str, session_key: str = "") -> Optional[s
     (``HERMES_MEDIA_DELIVERY_STRICT=1``, public bots where prompt injection must not exfiltrate
     host secrets): MUST be under a Hermes cache, an operator root (``HERMES_MEDIA_ALLOW_DIRS``),
     or freshly produced within the recency window. Symlinks are resolved before any check."""
+    from gateway.media_policy import local_media_delivery_refusal
+    if local_media_delivery_refusal():
+        return None
     candidate = _normalize_media_tag_path(path)
     if not candidate:
         return None
@@ -1127,6 +1130,12 @@ def _validated_delivery_path(raw_path, session_key: str, label: str,
     host cannot see is retried against the active remote sandbox (ssh/modal/...; #466). When
     ``dropped`` is a list, a rejected path is appended as ``{"path", "reason"}`` so the caller can
     report the drop instead of booking a delivery that never happened (#115908)."""
+    from gateway.media_policy import local_media_delivery_refusal
+    if reason := local_media_delivery_refusal():
+        logger.warning("Skipping %s: %s", label, reason)
+        if dropped is not None:
+            dropped.append({"path": str(raw_path), "reason": reason})
+        return None
     raw = str(raw_path)
     safe_path = validate_media_delivery_path(raw, session_key=session_key)
     if not safe_path:
@@ -3181,6 +3190,12 @@ class BasePlatformAdapter(ABC):
         # Scan a masked copy so example/stored MEDIA paths (code, quotes, JSON values) are never
         # delivered; dedupe on the expanded path so a file referenced twice uploads once.
         scan_content = _mask_media_scan_text(content)
+        # Do not turn model-selected host paths into attachments or silently
+        # remove a refused attachment from the visible response.
+        if MEDIA_TAG_CLEANUP_RE.search(scan_content) or MEDIA_EXTENSIONLESS_TAG_RE.search(scan_content):
+            from gateway.media_policy import local_media_delivery_refusal
+            if reason := local_media_delivery_refusal():
+                return [], f"{cleaned}\n\n⚠️ {reason}".strip()
         # - code blocks / inline code / blockquotes hold prose examples (#35695) - serialized JSON string
         #   values hold stored tool-result text (#34375) Both maskers are offset-preserving (chars ->
         #   spaces) so match offsets stay valid; chaining them masks the union of both protected regions.
@@ -3238,6 +3253,10 @@ class BasePlatformAdapter(ABC):
         for match in path_re.finditer(content):
             if any(s <= match.start() < e for s, e in code_spans):
                 continue
+            from gateway.media_policy import local_media_delivery_refusal
+            if reason := local_media_delivery_refusal():
+                text = content if reason in content else f"{content}\n\n⚠️ {reason}".strip()
+                return [], text
             raw = match.group(0)
             expanded = os.path.expanduser(raw)
             if os.path.isfile(expanded):
@@ -3470,17 +3489,21 @@ class BasePlatformAdapter(ABC):
         if eph_ttl > 0 and result.success and result.message_id:
             self._schedule_ephemeral_delete(event.source.chat_id, result.message_id, eph_ttl)
 
+    @contextlib.contextmanager
     def _media_delivery_scope(self, source: Optional[SessionSource]):
-        """Routed home + terminal policy for post-handler text, media and error delivery;
-        a no-op without a runner or outside multiplexing."""
+        """Routed delivery policy; a failed binding must not adopt the launch profile."""
         resolve = getattr(self.gateway_runner, "_media_delivery_scope_for_source", None)
-        if not callable(resolve) or source is None:
-            return contextlib.nullcontext()
-        try:
-            return resolve(source)
-        except Exception:
-            logger.debug("[%s] Failed to resolve media delivery scope", self.name, exc_info=True)
-            return contextlib.nullcontext()
+        with contextlib.ExitStack() as stack:
+            if callable(resolve) and source is not None:
+                try:
+                    stack.enter_context(resolve(source))
+                except Exception:
+                    from tools.terminal_scope import (
+                        TerminalPolicyRefusal, reset_terminal_scope, set_terminal_scope)
+                    logger.warning("[%s] Failed to resolve media delivery scope", self.name)
+                    token = set_terminal_scope(TerminalPolicyRefusal("Media delivery profile is unavailable"))
+                    stack.callback(reset_terminal_scope, token)
+            yield
 
     def _final_delivery_adapter(self, source: Optional[SessionSource]) -> "BasePlatformAdapter":
         """The runner's CURRENT adapter for a new final-response send: a reconnect can swap the
@@ -4146,6 +4169,12 @@ class BasePlatformAdapter(ABC):
         async def _send_one(path: str, *, is_voice: bool, media_tag: bool) -> SendResult:
             """MEDIA-tag files (``media_tag``) may route to send_voice; bare local files never
             do."""
+            from gateway.media_policy import local_media_delivery_refusal
+            with self._media_delivery_scope(event.source):
+                reason = local_media_delivery_refusal()
+            if reason:
+                await self.send(chat_id=chat_id, content=f"⚠️ {reason}", metadata=metadata)
+                return SendResult(success=False, error=reason)
             ext = Path(path).suffix.lower()
             if media_tag and should_send_media_as_audio(self.platform, ext, is_voice=is_voice):
                 result = await self.send_voice(chat_id=chat_id, audio_path=path, metadata=metadata, is_voice=is_voice)
@@ -4182,14 +4211,35 @@ class BasePlatformAdapter(ABC):
         """Batch-send images; a failure is logged (never raised) so other attachments still go.
         The batch result feeds ``record_delivery`` so media-only turns report their real
         outcome instead of FAILURE."""
-        try:
-            result = await self.send_multiple_images(
-                chat_id=event.source.chat_id, images=images, metadata=metadata, human_delay=human_delay)
-        except Exception as batch_err:
-            logger.warning("[%s] Error batching images: %s", self.name, batch_err, exc_info=True)
-            record_delivery(SendResult(success=False, error=str(batch_err)))
-            return
-        record_delivery(result)
+        from gateway.media_policy import local_media_delivery_refusal
+        from tools.environments.mxc_policy import network_refusal
+        # Each awaited dispatch can outlive its permission. Do not hand an
+        # adapter the unchecked remainder of a model-selected image batch.
+        results = []
+        for image in images:
+            reason = None
+            try:
+                if human_delay > 0:
+                    await asyncio.sleep(human_delay)
+                with self._media_delivery_scope(event.source):
+                    url, _ = image
+                    reason = local_media_delivery_refusal() if url.lower().startswith("file:") else None
+                    if not reason and url.lower().startswith(("http://", "https://")):
+                        reason = network_refusal()
+                    if reason:
+                        results.append(SendResult(success=False, error=reason))
+                        await self.send(chat_id=event.source.chat_id, content=f"⚠️ {reason}", metadata=metadata)
+                    else:
+                        results.append(await self.send_multiple_images(
+                            chat_id=event.source.chat_id, images=[image], metadata=metadata, human_delay=0))
+            except Exception as batch_err:
+                logger.warning("[%s] Error batching images: %s", self.name, batch_err, exc_info=True)
+                results.append(SendResult(success=False, error=str(batch_err)))
+            if reason:
+                break
+        # Preserve the batch contract: one receipt, successful if any image was delivered.
+        record_delivery(next((result for result in results if result.success),
+                             results[-1] if results else SendResult(success=False, error="no images to send")))
 
     async def send_final_ledgered(
         self, event: MessageEvent, session_key: str, text_content: str, metadata: Dict[str, Any], *,

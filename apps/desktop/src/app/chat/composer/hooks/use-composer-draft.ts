@@ -181,7 +181,7 @@ export function useComposerDraft({
   )
 
   const appendExternalText = useCallback(
-    (text: string, mode: ComposerInsertMode) => {
+    (text: string, mode: ComposerInsertMode, focus = true) => {
       const value = text.trim()
 
       if (!value) {
@@ -193,7 +193,7 @@ export function useComposerDraft({
       if (mode === 'prefix') {
         const rest = draftRef.current.trimStart()
 
-        paintDraft(`${value} ${rest}`.trimEnd())
+        paintDraft(`${value} ${rest}`.trimEnd(), focus)
 
         return
       }
@@ -201,7 +201,7 @@ export function useComposerDraft({
       const base = mode === 'inline' ? draftRef.current.trimEnd() : draftRef.current
       const sep = mode === 'inline' ? (base ? ' ' : '') : base && !base.endsWith('\n') ? '\n\n' : ''
 
-      paintDraft(`${base}${sep}${value}`)
+      paintDraft(`${base}${sep}${value}`, focus)
     },
     [paintDraft]
   )
@@ -260,11 +260,18 @@ export function useComposerDraft({
       setFocusRequestId(id => id + 1)
     })
 
-    const offInsert = onComposerInsertRequest(({ mode, target: requested, text }) => {
-      if (requested === target) {
-        appendExternalText(text, mode)
+    const offInsert = onComposerInsertRequest(
+      ({ mode, target: requested, text, sessionId: requestedSession, sessionKey, focus, accept }) => {
+        if (
+          requested === target &&
+          (requestedSession === undefined || requestedSession === (sessionIdRef.current ?? null)) &&
+          (sessionKey === undefined || sessionKey === draftScopeRef.current)
+        ) {
+          appendExternalText(text, mode, focus)
+          accept?.()
+        }
       }
-    })
+    )
 
     return () => {
       offFocus()

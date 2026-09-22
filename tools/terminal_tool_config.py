@@ -105,6 +105,17 @@ def _is_unusable_container_cwd(cwd: str) -> bool:
     return bool(cwd) and (_is_host_cwd(cwd) or not os.path.isabs(cwd))
 
 
+def _is_refused_sandbox_cwd(env_type: str, cwd: str) -> bool:
+    """True if the Windows sandbox refuses *cwd* as a workspace (the user's home, a drive root,
+    Hermes's own files). The sandbox is the container backends' sibling here: a folder recorded
+    while the sandbox was off can be one it must never work in once switched on, so the sites
+    that consume a recorded cwd ask before using it."""
+    if env_type != "mxc" or not cwd:
+        return False
+    from tools.environments import mxc_host
+    return mxc_host.unsafe_workspace_reason(cwd) is not None
+
+
 def _tenv(name: str, default: str = "") -> str:
     """Scope-aware read of a ``TERMINAL_*`` variable. Every terminal setting
     must go through this: under gateway multiplexing the active profile's

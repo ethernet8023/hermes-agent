@@ -151,19 +151,18 @@ def _extract_host_from_urlish(url: str) -> str:
 def check_website_access(url: str, config_path: Optional[Path] = None) -> Optional[Dict[str, str]]:
     """``None`` if the URL is allowed by the blocklist policy, else block metadata (host/rule/source/message).
 
-    Fails open on policy errors (warn + ``None``) so a config typo can't break all web tools — except with
-    an explicit ``config_path`` (tests), where errors propagate.
+    Website-blocklist errors retain warn-and-allow behavior, except with an explicit
+    ``config_path``, where they propagate. Execution-policy errors always refuse the fetch.
 
-    This is the one gate every host-side fetcher passes (page extraction, browser navigation, image
-    and media downloads, skill installs), so the sandbox's "network off" verdict is applied here as
-    well: with the sandbox on and its network off, no URL is fetched on the agent's behalf.
+    Reviewed host fetchers also consult the strict execution policy here. An explicit
+    website-blocklist file cannot override the active profile's sandbox authority.
     """
-    if config_path is None:
-        from tools.environments.mxc_host import OFFLINE_REASON, host_network_withheld
-        if host_network_withheld():
-            logger.info("Blocked URL %s — sandbox network policy is off", url)
-            return {"url": url, "host": _extract_host_from_urlish(url), "rule": "network off",
-                    "source": "sandbox", "message": OFFLINE_REASON}
+    from tools.environments.mxc_policy import network_refusal
+    refusal = network_refusal()
+    if refusal is not None:
+        logger.info("Blocked URL %s — sandbox policy", url)
+        return {"url": url, "host": _extract_host_from_urlish(url), "rule": "sandbox policy",
+                "source": "sandbox", "message": refusal}
     # Fast path: cached policy disabled/empty → no YAML read, no host extraction.
     if config_path is None:
         with _cache_lock:

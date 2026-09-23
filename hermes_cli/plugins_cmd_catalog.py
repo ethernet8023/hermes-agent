@@ -99,14 +99,17 @@ def _install_record(plugin_dir: Path) -> Optional[dict]:
 
 def _write_catalog_block(plugin_dir: Path, record: dict, block: dict) -> dict:
     """Migrate one trusted installer record to the nested catalog contract."""
-    from hermes_cli.plugins_cmd import _read_install_metadata, _write_install_metadata
-    migrated = dict(record)
-    migrated["catalog"] = block
-    migrated.pop("catalog_name", None)
-    migrated.pop("catalog_tier", None)
-    metadata = _read_install_metadata()
-    metadata[plugin_dir.name] = migrated
-    _write_install_metadata(metadata)
+    from hermes_cli.plugins_cmd import _update_install_record
+
+    def migrate(current: Optional[dict]) -> Optional[dict]:
+        if current is None:
+            return None
+        migrated = {**current, "catalog": block}
+        migrated.pop("catalog_name", None)
+        migrated.pop("catalog_tier", None)
+        return migrated
+
+    _update_install_record(plugin_dir.name, migrate)
     return block
 
 

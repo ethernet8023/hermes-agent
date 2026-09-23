@@ -43,6 +43,26 @@ def validate_manifest(source: Path) -> dict:
     return manifest
 
 
+def _apply_metadata_delta(current: dict, old: dict, new: dict) -> dict:
+    """Apply only the records this publication changes (old -> new) to the CURRENT sidecar.
+
+    Installs overlap (the Desktop install card runs its rows a second apart), so another
+    plugin's record may have landed since *old* was read; it is kept, not refused. A record
+    this publication changes must still be exactly what it read, or the change is refused.
+    """
+    merged = dict(current)
+    for name in set(old) | set(new):
+        if old.get(name) == new.get(name):
+            continue
+        if current.get(name) != old.get(name):
+            raise ValueError("Plugin install metadata changed while preparing the update; retry.")
+        if name in new:
+            merged[name] = new[name]
+        else:
+            merged.pop(name, None)
+    return merged
+
+
 class PluginSelection:
     def __init__(self, selection: dict):
         from hermes_yaml import roundtrip_yaml
@@ -105,12 +125,11 @@ class StagedPlugin:
         self.metadata = self.target.parent / ".install-metadata.json"
         self.previous = _bytes(self.metadata)
         current = json.loads(self.previous) if self.previous is not None else {}
-        if current != plugin["old_metadata"]:
-            raise ValueError("Plugin install metadata changed while preparing the update; retry.")
+        self.proposed = (json.dumps(_apply_metadata_delta(current, plugin["old_metadata"], plugin["new_metadata"]),
+                                    indent=2, sort_keys=True) + "\n").encode()
         self.target_digest = tree_digest(self.target) if self.target.exists() else None
         if self.target_digest != plugin["target_digest"]:
             raise ValueError("Plugin files changed while preparing the update; retry.")
-        self.proposed = (json.dumps(plugin["new_metadata"], indent=2, sort_keys=True) + "\n").encode()
         sources = member_sources(enabled_plugin_dirs(installing=self.target))
         self.active = self.target.resolve() in sources
         self.members = {}

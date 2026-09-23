@@ -83,7 +83,9 @@ def stamp(tree: Path, version: str, release_date: str) -> list[Path]:
         _rewrite(path, pattern, replacement, count=1, flags=flags)
         touch(path)
 
-    validate_bootstrap_version(tree, version)
+    # A payload snapshot omits apps/ (INERT_SNAPSHOT_DIRS); it carries no installer to disagree with.
+    if (tree / "apps" / "bootstrap-installer").is_dir():
+        validate_bootstrap_version(tree, version)
     return written
 
 

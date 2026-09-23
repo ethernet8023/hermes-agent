@@ -91,3 +91,17 @@ def test_stamping_writes_the_build_tree_and_leaves_the_source_tree(tmp_path, mon
     from scripts.releases.stamping import validate_bootstrap_version
     with pytest.raises(ValueError, match="Tauri config"):
         validate_bootstrap_version(build, "0.21.5")
+
+
+def test_stamping_a_payload_snapshot_without_apps_stamps_the_runtime(tmp_path):
+    """The bundled payload snapshot drops apps/ (INERT_SNAPSHOT_DIRS), so it has no installer to validate."""
+    import shutil
+
+    from scripts.releases.stamping import stamp
+
+    _tree(tmp_path)
+    shutil.rmtree(tmp_path / "apps")
+
+    stamp(tmp_path, "0.21.5", "2026.9.22")
+
+    assert 'version = "0.21.5"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")

@@ -165,3 +165,42 @@ test('tree and CLI audit real second-read PE bytes and fail closed on absent art
     assert.match(failed.stderr, /wrong-arch.dat/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
+
+// A .NET IL-only assembly: COFF machine 0x14c, CLR header in section .text.
+function dotnetPe(corFlags) {
+  const pe = Buffer.alloc(0x400)
+  mzStub(0x80).copy(pe)
+  pe.writeUInt32LE(0x4550, 0x80)
+  pe.writeUInt16LE(0x014c, 0x84) // machine: i386
+  pe.writeUInt16LE(1, 0x86) // one section
+  pe.writeUInt16LE(0xe0, 0x94) // PE32 optional header size
+  const optional = 0x98
+  pe.writeUInt16LE(0x10b, optional)
+  pe.writeUInt32LE(0x2008, optional + 96 + 14 * 8) // CLR runtime header RVA
+  pe.writeUInt32LE(0x48, optional + 96 + 14 * 8 + 4)
+  const section = optional + 0xe0
+  pe.write('.text', section, 'latin1')
+  pe.writeUInt32LE(0x100, section + 8) // virtual size
+  pe.writeUInt32LE(0x2000, section + 12) // virtual address
+  pe.writeUInt32LE(0x100, section + 16) // raw size
+  pe.writeUInt32LE(0x200, section + 20) // raw pointer
+  pe.writeUInt32LE(0x48, 0x208) // COR20 cb
+  pe.writeUInt32LE(corFlags, 0x208 + 16)
+  return pe
+}
+
+test('an IL-only AnyCPU .NET assembly passes every Windows arch; 32-bit-bound IL and native ia32 do not', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arch-clr-'))
+  try {
+    fs.writeFileSync(path.join(root, 'anycpu.exe'), dotnetPe(0x1))
+    fs.writeFileSync(path.join(root, 'x86-required.exe'), dotnetPe(0x1 | 0x2))
+    fs.writeFileSync(path.join(root, 'x86-preferred.exe'), dotnetPe(0x1 | 0x20000))
+    const native = dotnetPe(0x1)
+    native.fill(0, 0x98 + 96 + 14 * 8, 0x98 + 96 + 15 * 8) // no CLR header: a native i386 PE
+    fs.writeFileSync(path.join(root, 'native-ia32.exe'), native)
+    for (const arch of ['x64', 'arm64']) {
+      const { mismatches } = auditTree(root, arch)
+      assert.deepEqual(mismatches.map(m => m.file).sort(), ['native-ia32.exe', 'x86-preferred.exe', 'x86-required.exe'])
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})

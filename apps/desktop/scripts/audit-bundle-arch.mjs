@@ -114,7 +114,45 @@ export function peArch(machineCode) {
  * not a shrug.
  */
 export function archMatches(arches, targetArch) {
-  return arches.some((a) => a === targetArch || (targetArch === "arm64" && a === "arm64ec"))
+  return arches.some((a) => a === targetArch || a === "anycpu" || (targetArch === "arm64" && a === "arm64ec"))
+}
+
+const COMIMAGE_FLAGS_ILONLY = 0x1
+const COMIMAGE_FLAGS_32BITREQUIRED = 0x2
+const COMIMAGE_FLAGS_32BITPREFERRED = 0x20000
+
+/**
+ * A .NET IL-only AnyCPU assembly carries machine 0x14c (i386) in its COFF
+ * header, yet the CLR JITs it to the host's native arch (x64, arm64). Its
+ * real arch lives in the CLR header flags. `readAt(offset, length)` returns
+ * the file bytes there; returns true only for IL-only, non-32-bit PEs.
+ */
+export function isAnyCpuAssembly(readAt, peOffset) {
+  const coff = readAt(peOffset, 24)
+  if (coff.length < 24) return false
+  const sections = coff.readUInt16LE(6)
+  const optionalSize = coff.readUInt16LE(20)
+  const optional = readAt(peOffset + 24, optionalSize)
+  if (optional.length < optionalSize || optionalSize < 2) return false
+  const dataDirs = { 0x10b: 96, 0x20b: 112 }[optional.readUInt16LE(0)]
+  if (dataDirs === undefined || optionalSize < dataDirs + 15 * 8) return false
+  const clrRva = optional.readUInt32LE(dataDirs + 14 * 8)
+  if (!clrRva) return false
+  const table = readAt(peOffset + 24 + optionalSize, sections * 40)
+  for (let base = 0; base + 40 <= table.length; base += 40) {
+    const virtualSize = table.readUInt32LE(base + 8)
+    const virtualAddress = table.readUInt32LE(base + 12)
+    const rawSize = table.readUInt32LE(base + 16)
+    const rawPointer = table.readUInt32LE(base + 20)
+    if (clrRva >= virtualAddress && clrRva < virtualAddress + Math.max(virtualSize, rawSize)) {
+      const cor = readAt(rawPointer + clrRva - virtualAddress, 20)
+      if (cor.length < 20) return false
+      const flags = cor.readUInt32LE(16)
+      return Boolean(flags & COMIMAGE_FLAGS_ILONLY)
+        && !(flags & COMIMAGE_FLAGS_32BITREQUIRED) && !(flags & COMIMAGE_FLAGS_32BITPREFERRED)
+    }
+  }
+  return false
 }
 
 /**
@@ -145,7 +183,13 @@ function classifyFile(filePath) {
     if (m < 6 || peHead.readUInt32LE(0) !== 0x00004550) {
       return null // MZ without a PE header: DOS-era stub or corrupt — not a shippable binary format we know.
     }
-    return { format: "pe", arches: [peArch(peHead.readUInt16LE(4))] }
+    const readAt = (offset, length) => {
+      const out = Buffer.alloc(length)
+      return out.subarray(0, fs.readSync(fd, out, 0, length, offset))
+    }
+    const arch = peArch(peHead.readUInt16LE(4))
+    if (arch === "ia32" && isAnyCpuAssembly(readAt, sniffed.peHeaderOffset)) return { format: "pe", arches: ["anycpu"] }
+    return { format: "pe", arches: [arch] }
   } finally {
     fs.closeSync(fd)
   }

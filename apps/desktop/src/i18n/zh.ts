@@ -3084,6 +3084,12 @@ export const zh = defineLocale({
     markAllRead: '全部标记为已读'
   },
 
+  handoffTour: {
+    localTitle: '这台电脑可以在本地运行模型',
+    localText: (model: string) =>
+      `${model} 适合你的硬件。免费运行，对话不会离开你的电脑。随时在这里的模型菜单中选择它。`
+  },
+
   composer: {
     message: '消息',
     wakingProfile: profile => `正在唤醒 ${profile}…`,
@@ -3181,6 +3187,11 @@ export const zh = defineLocale({
     editingQueuedInComposer: '正在输入框中编辑排队回合',
     restoredDraftNotice: '已恢复你未发送的消息',
     restoredDraftUndo: '撤销',
+    localSetup: {
+      title: '这可以在你的电脑上运行',
+      text: (model: string) => `${model} 适合这台电脑。免费，对话留在你的电脑上。`,
+      action: '带我看看'
+    },
     queueEdit: '编辑',
     queueSendNext: '下一个',
     queueSteer: '引导 — 立即修正当前回合',
@@ -3786,6 +3797,11 @@ export const zh = defineLocale({
       noModels: '未找到模型',
       editModels: '编辑模型…',
       refreshModels: '刷新模型',
+      localSetup: {
+        title: '本地运行 · 免费、私密',
+        text: (model: string, size: string) => `${model} 适合这台电脑 · 下载 ${size}`,
+        action: '设置'
+      },
       fast: '快速'
     },
     modelOptions: {
@@ -4562,11 +4578,6 @@ export const zh = defineLocale({
         title: '本地引擎有可用更新',
         text: '更新运行本地模型的引擎。正在进行的本地请求可能会中断。',
         action: '立即更新'
-      },
-      'local-setup': {
-        title: '这台电脑可以本地运行模型',
-        text: '你的硬件可以运行本地模型。对话不离开你的电脑，而且完全免费。',
-        action: '立即设置'
       },
       'right-pane': {
         title: '工作面板',

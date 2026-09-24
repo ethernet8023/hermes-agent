@@ -2771,6 +2771,12 @@ export const zhHant = defineLocale({
     }
   },
 
+  handoffTour: {
+    localTitle: '這台電腦可以在本機執行模型',
+    localText: (model: string) =>
+      `${model} 適合你的硬體。免費執行，對話不會離開你的電腦。隨時在這裡的模型選單中選擇它。`
+  },
+
   composer: {
     message: '訊息',
     wakingProfile: profile => `正在喚醒 ${profile}…`,
@@ -2925,6 +2931,11 @@ export const zhHant = defineLocale({
     editingQueuedInComposer: '在輸入框中編輯排隊回合',
     restoredDraftNotice: '已還原你未送出的訊息',
     restoredDraftUndo: '復原',
+    localSetup: {
+      title: '這可以在你的電腦上執行',
+      text: (model: string) => `${model} 適合這台電腦。免費，對話留在你的電腦上。`,
+      action: '帶我看看'
+    },
     queueEdit: '編輯',
     queueSendNext: '下一個',
     queueSteer: '引導 — 立即修正目前回合',
@@ -3434,6 +3445,11 @@ export const zhHant = defineLocale({
       noModels: '找不到模型',
       editModels: '編輯模型…',
       refreshModels: '重新整理模型',
+      localSetup: {
+        title: '本機執行 · 免費、私密',
+        text: (model: string, size: string) => `${model} 適合這台電腦 · 下載 ${size}`,
+        action: '設定'
+      },
       fast: '快速'
     },
     modelOptions: {
@@ -4228,11 +4244,6 @@ export const zhHant = defineLocale({
         title: '本機引擎有可用更新',
         text: '更新執行本機模型的引擎。進行中的本機請求可能會中斷。',
         action: '立即更新'
-      },
-      'local-setup': {
-        title: '這台電腦可以本地執行模型',
-        text: '你的硬體可以執行本地模型。對話不離開你的電腦，而且完全免費。',
-        action: '立即設定'
       },
       'right-pane': {
         title: '工作面板',

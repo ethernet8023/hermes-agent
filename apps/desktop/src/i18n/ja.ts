@@ -2551,6 +2551,12 @@ export const ja = defineLocale({
     }
   },
 
+  handoffTour: {
+    localTitle: 'このマシンはローカルでモデルを実行できます',
+    localText: (model: string) =>
+      `${model} はお使いのハードウェアで動きます。無料で、チャットはこのコンピューターから出ません。いつでもここ、モデルメニューから選べます。`
+  },
+
   composer: {
     message: 'メッセージ',
     wakingProfile: profile => `${profile} を起動中…`,
@@ -2705,6 +2711,11 @@ export const ja = defineLocale({
     editingQueuedInComposer: 'コンポーザーでキュー済みターンを編集中',
     restoredDraftNotice: '未送信のメッセージを復元しました',
     restoredDraftUndo: '元に戻す',
+    localSetup: {
+      title: 'このコンピューターで実行できます',
+      text: (model: string) => `${model} はこのマシンで動きます。無料で、チャットはこのコンピューターから出ません。`,
+      action: '見てみる'
+    },
     queueEdit: '編集',
     queueSendNext: '次に送信',
     queueSteer: 'ステア — 現在のターンを今すぐ修正',
@@ -3236,6 +3247,11 @@ export const ja = defineLocale({
       noModels: 'モデルが見つかりません',
       editModels: 'モデルを編集…',
       refreshModels: 'モデルを更新',
+      localSetup: {
+        title: 'ローカルで実行 · 無料・プライベート',
+        text: (model: string, size: string) => `${model} はこのマシンで動きます · ${size} をダウンロード`,
+        action: '設定する'
+      },
       fast: '高速'
     },
     modelOptions: {
@@ -4073,11 +4089,6 @@ export const ja = defineLocale({
         title: 'ローカルエンジンの更新があります',
         text: 'ローカルモデルを実行するエンジンを更新します。実行中のローカルリクエストが中断される場合があります。',
         action: '今すぐ更新'
-      },
-      'local-setup': {
-        title: 'このマシンはローカルでモデルを実行できます',
-        text: 'お使いのハードウェアでローカルモデルを動かせます。会話はこのコンピュータから出ず、料金もかかりません。',
-        action: 'セットアップ'
       },
       'right-pane': {
         title: '作業用ペイン',

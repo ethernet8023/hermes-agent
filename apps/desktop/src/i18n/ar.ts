@@ -2163,6 +2163,11 @@ export const ar = defineLocale({
       ageMin: 'دقيقة'
     }
   },
+  handoffTour: {
+    localTitle: 'يمكن لهذا الجهاز تشغيل النماذج محليًا',
+    localText: (model: string) =>
+      `${model} يناسب أجهزتك. يعمل مجانًا، ولا تغادر المحادثات جهازك. اختره من هنا، من قائمة النماذج، متى شئت.`
+  },
   composer: {
     message: 'الرسالة',
     wakingProfile: profile => `جار إيقاظ ${profile}`,
@@ -2295,6 +2300,11 @@ export const ar = defineLocale({
     editingQueuedInComposer: 'جار تحرير رسالة في الطابور',
     restoredDraftNotice: 'تمت استعادة رسالتك غير المُرسلة',
     restoredDraftUndo: 'تراجع',
+    localSetup: {
+      title: 'يمكن تشغيل هذا على جهازك',
+      text: (model: string) => `${model} يناسب هذا الجهاز. مجاني، وتبقى المحادثات على جهازك.`,
+      action: 'أرني'
+    },
     queueEdit: 'تحرير الرسالة المجدولة',
     queueSendNext: 'إرسالها تاليا',
     queueSteer: 'توجيه — تصحيح الدور الجاري فورا',
@@ -2793,6 +2803,11 @@ export const ar = defineLocale({
       noModels: 'لا توجد نماذج',
       editModels: 'تحرير النماذج',
       refreshModels: 'تحديث النماذج',
+      localSetup: {
+        title: 'تشغيل محلي · مجاني وخاص',
+        text: (model: string, size: string) => `${model} يناسب هذا الجهاز · تنزيل ${size}`,
+        action: 'إعداد'
+      },
       fast: 'سريع'
     },
     modelOptions: {
@@ -3566,11 +3581,6 @@ export const ar = defineLocale({
         title: 'يتوفر تحديث للمحرك المحلي',
         text: 'حدّث المحرك الذي يشغّل نماذجك المحلية. قد تنقطع الطلبات المحلية الجارية.',
         action: 'التحديث الآن'
-      },
-      'local-setup': {
-        title: 'هذا الجهاز يمكنه تشغيل النماذج محليًا',
-        text: 'عتادك قادر على تشغيل نموذج محلي. تبقى محادثاتك على جهازك ولا تكلف شيئًا.',
-        action: 'إعداد الآن'
       },
       'right-pane': {
         title: 'لوحة العمل',

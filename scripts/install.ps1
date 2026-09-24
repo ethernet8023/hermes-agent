@@ -695,7 +695,6 @@ function Stage-Repository {
         if (Test-Path -LiteralPath $InstallDir) {
             Remove-Item -LiteralPath $InstallDir -Force
         }
-        Log "cloning $RepoUrl ($Branch) into $InstallDir"
         $parent = Split-Path $InstallDir
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
         # Clone into a sibling staging dir and publish only a complete,
@@ -703,6 +702,7 @@ function Stage-Repository {
         # .git behind that the next rerun would try to update.
         $staged = Join-Path $parent ".hermes-clone-$PID-$(Get-Random)"
         $tree = Join-Path $staged "tree"
+        Log "cloning $RepoUrl ($Branch) into $InstallDir (staged at $tree)"
         New-Item -ItemType Directory -Force -Path $staged | Out-Null
         try {
             $cloned = $false

@@ -399,10 +399,10 @@ stage_repository() {
                 fail "$INSTALL_DIR exists and is not a Hermes git checkout. Move it aside, or install elsewhere with --dir <path>."
             fi
         fi
-        log "cloning $REPO_URL ($BRANCH) into $INSTALL_DIR"
         mkdir -p "$(dirname "$INSTALL_DIR")"
         local staged attempt cloned=false
         staged="$(mktemp -d "$(dirname "$INSTALL_DIR")/.hermes-clone-XXXXXX")" || fail "cannot stage clone"
+        log "cloning $REPO_URL ($BRANCH) into $INSTALL_DIR (staged at $staged/tree)"
         for attempt in 1 2 3; do
             # Treeless: every commit and release tag (runtime identity is the
             # nearest reachable release; --commit pins and branch switches

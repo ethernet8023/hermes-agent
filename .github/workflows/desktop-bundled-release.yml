@@ -736,7 +736,7 @@ jobs:
       matrix:
         target:
           - label: win32-arm64
-            runner: windows-latest-32-arm-core
+            runner: windows-11-arm
     env: *win32-env
     steps: *win32-steps
 

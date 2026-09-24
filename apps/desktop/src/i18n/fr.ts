@@ -4246,6 +4246,12 @@ export const frOverrides = {
     editingQueuedInComposer: "Modification du tour en file d'attente dans le compositeur",
     restoredDraftNotice: 'Votre message non envoyé a été restauré',
     restoredDraftUndo: 'Annuler',
+    localSetup: {
+      title: 'Ceci pourrait tourner sur votre ordinateur',
+      text: (model: string) =>
+        `${model} tient sur cette machine. Gratuit, et les conversations restent sur votre ordinateur.`,
+      action: 'Montrez-moi'
+    },
     queueEdit: 'Modifier',
     queueSendNext: 'Suivant',
     queueSteer: 'Diriger — réorienter maintenant le tour en cours',
@@ -4643,6 +4649,9 @@ export const frOverrides = {
     }
   },
   handoffTour: {
+    localTitle: 'Cette machine peut exécuter des modèles en local',
+    localText: (model: string) =>
+      `${model} convient à votre matériel. Il tourne gratuitement et les conversations ne quittent jamais votre ordinateur. Choisissez-le ici, dans le menu des modèles, quand vous voulez.`,
     profileTitle: 'Votre première tâche utilise le profil par défaut',
     profileText:
       "Cette barre change de profil. Celui qui est éclairé est le profil par défaut, où se trouve la session de la tâche. L'autre est le profil de configuration, où se trouve la conversation de bienvenue.",
@@ -4939,6 +4948,11 @@ export const frOverrides = {
       noModels: 'Aucun modèle trouvé',
       editModels: 'Modifier les modèles…',
       refreshModels: 'Actualiser les modèles',
+      localSetup: {
+        title: 'Exécuter en local · gratuit, privé',
+        text: (model: string, size: string) => `${model} tient sur cette machine · téléchargement de ${size}`,
+        action: 'Configurer'
+      },
       fast: 'Rapide'
     },
     modelOptions: {
@@ -6013,11 +6027,6 @@ export const frOverrides = {
         title: 'Une mise à jour du moteur local est disponible',
         text: 'Mettez à jour le moteur qui exécute vos modèles locaux. Les requêtes locales actives peuvent être interrompues.',
         action: 'Mettre à jour maintenant'
-      },
-      'local-setup': {
-        title: 'Cette machine peut exécuter des modèles en local',
-        text: 'Votre matériel peut servir un modèle local. Les conversations restent sur votre ordinateur et ne coûtent rien.',
-        action: 'Configurer'
       },
       'right-pane': {
         title: 'Le volet de travail',

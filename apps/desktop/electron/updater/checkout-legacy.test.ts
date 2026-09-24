@@ -74,24 +74,37 @@ it('offers manual recovery only for a missing source probe, never for a broken p
   }
 })
 
-it.skipIf(process.platform === 'win32')('uses the install-scoped PM launcher rather than a system Python for source checks', async (): Promise<void> => {
-  const root: string = fs.mkdtempSync(path.join(os.tmpdir(), 'pm-source-check-'))
-  const home: string = path.join(root, 'profile')
-  const launcher: string = path.join(root, '.hermes', 'bin', 'hermes')
-  fs.mkdirSync(path.dirname(launcher), { recursive: true })
-  fs.mkdirSync(path.join(root, 'pm'))
-  fs.mkdirSync(home)
-  fs.writeFileSync(launcher, '#!/bin/sh\n[ "$1" = --run-module ] && [ "$2" = hermes_cli.source_check ] || exit 5\nprintf \'%s\\n\' \'{"supported":true,"channel":"stable","behind":-1}\'\n', { mode: 0o755 })
+it.skipIf(process.platform === 'win32')(
+  'uses the install-scoped PM launcher rather than a system Python for source checks',
+  async (): Promise<void> => {
+    const root: string = fs.mkdtempSync(path.join(os.tmpdir(), 'pm-source-check-'))
+    const home: string = path.join(root, 'profile')
+    const launcher: string = path.join(root, '.hermes', 'bin', 'hermes')
+    fs.mkdirSync(path.dirname(launcher), { recursive: true })
+    fs.mkdirSync(path.join(root, 'pm'))
+    fs.mkdirSync(home)
+    fs.writeFileSync(
+      launcher,
+      '#!/bin/sh\n[ "$1" = --run-module ] && [ "$2" = hermes_cli.source_check ] || exit 5\nprintf \'%s\\n\' \'{"supported":true,"channel":"stable","behind":-1}\'\n',
+      { mode: 0o755 }
+    )
 
-  try {
-    const probe = { python: '/nonexistent/system-python', git: 'git', updateRoot: root, hermesHome: home, channel: 'stable' as const }
-    await expect(readSourceUpdate(probe)).resolves.toMatchObject({ supported: true, channel: 'stable', behind: null })
-    fs.rmSync(launcher)
-    await expect(readSourceUpdate(probe)).rejects.toThrow('installation launcher is missing')
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true })
+    try {
+      const probe = {
+        python: '/nonexistent/system-python',
+        git: 'git',
+        updateRoot: root,
+        hermesHome: home,
+        channel: 'stable' as const
+      }
+      await expect(readSourceUpdate(probe)).resolves.toMatchObject({ supported: true, channel: 'stable', behind: null })
+      fs.rmSync(launcher)
+      await expect(readSourceUpdate(probe)).rejects.toThrow('installation launcher is missing')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   }
-})
+)
 
 it.skipIf(process.platform !== 'win32')(
   'runs a PM .cmd source check with quoted paths and refuses a missing launcher',

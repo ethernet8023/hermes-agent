@@ -383,7 +383,7 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
     // The whole agent loop has returned: the end of a task, not a step in one.
     // Only the session on screen counts, which drops subagent mirrors (child ids).
     if (isActiveEvent) {
-      reportLocalSetupTurnComplete({ failed: Boolean(failure), sessionId })
+      reportLocalSetupTurnComplete({ failed: payload?.status !== 'complete', sessionId })
     }
 
     // Structured billing wall forwarded by the gateway (out of credits /

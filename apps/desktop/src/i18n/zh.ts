@@ -3425,6 +3425,19 @@ export const zh = defineLocale({
   },
 
   handoffTour: {
+    profileTitle: '你的第一个任务在默认配置文件中运行',
+
+    profileText:
+      '这条栏用于切换配置文件。现在亮着的是 default，任务会话就在这里。另一个是设置配置文件，欢迎聊天在那里。',
+
+    sessionsTitle: '每个配置文件都有自己的会话',
+
+    sessionsText:
+      '这个列表属于 default 配置文件。“新会话”会在当前选中的配置文件中开始。在栏上切换配置文件，列表也会随之变化。',
+
+    stayTitle: 'Hermes 一键可达',
+
+    stayText: '需要帮忙时，切换到设置配置文件并打开“欢迎使用 Hermes”。它会一直在那里。',
     localTitle: '这台电脑可以在本地运行模型',
     localText: (model: string) =>
       `${model} 适合你的硬件。免费运行，对话不会离开你的电脑。随时在这里的模型菜单中选择它。`

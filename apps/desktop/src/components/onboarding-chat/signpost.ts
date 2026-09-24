@@ -24,7 +24,7 @@ const SESSIONS = '[data-tour="sessions-sidebar"]'
 const MODEL_PILL = '[data-tour="model-pill"]'
 
 /** Eligibility is one status + catalog read, usually already cached. The tour does not wait longer than this. */
-const LOCAL_FIT_WAIT_MS = 2500
+const LOCAL_FIT_WAIT_MS = 1500
 
 /** Waits for a visible node. The profile rail mounts a render or two after the handoff switches profiles, and
  *  the tour engine returns a no-match for a selector that is not in the DOM yet. Returns false on timeout. */
@@ -54,8 +54,13 @@ export async function showHandoffTour(): Promise<void> {
     return
   }
 
-  const [sessionsVisible, localModel] = await Promise.all([waitFor(SESSIONS, 1500), localStepModel()])
-  const localVisible = localModel !== null && (await waitFor(MODEL_PILL, 1500))
+  const [sessionsVisible, localModel, pillVisible] = await Promise.all([
+    waitFor(SESSIONS, 1500),
+    localStepModel(),
+    waitFor(MODEL_PILL, 1500)
+  ])
+
+  const localVisible = localModel !== null && pillVisible
   const copy = (key: string, ...args: unknown[]) => translateNow(`handoffTour.${key}`, ...args)
   // Imported here instead of at the top: this module is reachable from the boot path through the handoff
   // hook, and run-tour.ts keeps driver.js and its stylesheet out of that path.
@@ -83,8 +88,17 @@ export async function showHandoffTour(): Promise<void> {
 
 /** Display name of the model this machine can run, or null when it doesn't qualify or the read is slow. */
 async function localStepModel(): Promise<null | string> {
-  const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), LOCAL_FIT_WAIT_MS))
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), LOCAL_FIT_WAIT_MS)
+  })
+
   const fit = readLocalSetupEligibility().then(({ fit }) => fit?.model.display_name ?? null)
 
-  return Promise.race([fit, timeout])
+  try {
+    return await Promise.race([fit, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
 }

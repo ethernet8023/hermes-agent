@@ -27,13 +27,17 @@ import { atom, computed } from 'nanostores'
 import { getLocalCatalog, getLocalModelsStatus } from '@/hermes'
 import { isOnboardingEnabled } from '@/lib/onboarding-enabled'
 import { Codecs, persistentAtom } from '@/lib/persisted'
+import { readKey } from '@/lib/storage'
 import type { LocalCatalogModel, LocalModelsStatus } from '@/types/hermes'
 
+import { hasSeenIntroReveal } from './intro-reveal'
 import { $localModelsEnabled } from './local-models-flag'
+import { $desktopOnboarding } from './onboarding'
 import { $onboardingGate, type OnboardingPhase } from './onboarding-gate'
 import { $connection } from './session'
+import { $retiredTips } from './tips'
 
-export type LocalSetupOfferState = 'accepted' | 'armed' | 'dismissed' | 'shown' | 'unarmed'
+type LocalSetupOfferState = 'accepted' | 'armed' | 'dismissed' | 'shown' | 'unarmed'
 
 interface OfferRecord {
   armedBy: null | string
@@ -60,17 +64,34 @@ function toStored(record: OfferRecord): Record<string, string> {
   return Object.fromEntries(Object.entries(record).filter((entry): entry is [string, string] => entry[1] !== null))
 }
 
+const STORAGE_KEY = 'hermes.desktop.offers.local-setup.v1'
+
 /** Desktop-global like the tip ledgers: the offer is about this machine, not a profile. */
-const $stored = persistentAtom<Record<string, string>>('hermes.desktop.offers.local-setup.v1', {}, Codecs.stringRecord)
+const $stored = persistentAtom<Record<string, string>>(STORAGE_KEY, {}, Codecs.stringRecord)
 
 export const $localSetupOffer = computed($stored, toRecord)
+
+/** The stored record as another window may have left it. */
+function readStoredRecord(): OfferRecord {
+  const raw = readKey(STORAGE_KEY)
+
+  return raw === null ? EMPTY : toRecord(Codecs.stringRecord.decode(raw))
+}
 
 function setRecord(record: OfferRecord): void {
   $stored.set(toStored(record))
 }
 
+// Another window moved the offer (dismissed it, say): adopt that, so this window
+// neither keeps showing a card the user closed nor writes an older state over it.
+window.addEventListener('storage', event => {
+  if (event.key === STORAGE_KEY) {
+    $stored.set(event.newValue === null ? {} : Codecs.stringRecord.decode(event.newValue))
+  }
+})
+
 /** The recommended catalog row that fits, when this machine qualifies. */
-export interface LocalSetupFit {
+interface LocalSetupFit {
   model: LocalCatalogModel
 }
 
@@ -86,8 +107,10 @@ interface Eligibility {
 export const $localSetupEligibility = atom<Eligibility | null>(null)
 
 let eligibilityRead: Promise<Eligibility> | null = null
+/** Bumped on every invalidation: a read that started before it must not land after it. */
+let eligibilityGeneration = 0
 
-export function pickLocalSetupFit(
+function pickLocalSetupFit(
   connectionMode: null | string,
   status: LocalModelsStatus | null,
   catalog: readonly LocalCatalogModel[] | null
@@ -127,15 +150,24 @@ export function readLocalSetupEligibility(): Promise<Eligibility> {
 
 /** Read again, keeping the current answer on screen until the new one lands. */
 export function refreshLocalSetupEligibility(): Promise<Eligibility> {
-  if (!$localModelsEnabled.get()) {
-    const off = { checkedAt: Date.now(), fit: null, reason: 'local models are off in this build' }
-    $localSetupEligibility.set(off)
+  const mode = $connection.get()?.mode ?? null
 
-    return Promise.resolve(off)
+  // Settled without a request: the flag, a missing connection, or a remote
+  // backend (whose hardware is not this computer's) all answer "no" locally.
+  if (!$localModelsEnabled.get() || mode !== 'local') {
+    const settled = $localModelsEnabled.get()
+      ? pickLocalSetupFit(mode, null, null)
+      : { checkedAt: Date.now(), fit: null, reason: 'local models are off in this build' }
+
+    $localSetupEligibility.set(settled)
+
+    return Promise.resolve(settled)
   }
 
+  const generation = eligibilityGeneration
+
   eligibilityRead ??= Promise.all([getLocalModelsStatus(), getLocalCatalog()])
-    .then(([status, catalog]) => pickLocalSetupFit($connection.get()?.mode ?? null, status, catalog.models))
+    .then(([status, catalog]) => pickLocalSetupFit(mode, status, catalog.models))
     .catch((error: Error) => ({
       checkedAt: Date.now(),
       fit: null,
@@ -143,8 +175,16 @@ export function refreshLocalSetupEligibility(): Promise<Eligibility> {
       transient: true
     }))
     .then(result => {
-      $localSetupEligibility.set(result)
+      if (generation !== eligibilityGeneration) {
+        return result
+      }
+
       eligibilityRead = null
+
+      // A failed re-read keeps a good answer on screen rather than hiding the offer on one bad fetch.
+      if (!(result.transient && $localSetupEligibility.get()?.fit)) {
+        $localSetupEligibility.set(result)
+      }
 
       return result
     })
@@ -152,38 +192,79 @@ export function refreshLocalSetupEligibility(): Promise<Eligibility> {
   return eligibilityRead
 }
 
-/** Drop the cached answer (connection changed; debug reset). */
-export function invalidateLocalSetupEligibility(): void {
+/** Drop the cached answer: the backend it described is gone (connection or profile changed; debug reset). */
+function invalidateLocalSetupEligibility(): void {
+  eligibilityGeneration += 1
   eligibilityRead = null
   $localSetupEligibility.set(null)
 }
 
-$connection.listen(() => invalidateLocalSetupEligibility())
+/** Which backend's machine the cached answer describes. Window-state republishes keep it. */
+function backendIdentity(): string {
+  const connection = $connection.get()
+
+  return connection ? `${connection.mode ?? ''}|${connection.connectionId ?? ''}|${connection.baseUrl}` : ''
+}
+
+let lastBackend = backendIdentity()
+
+$connection.listen(() => {
+  const next = backendIdentity()
+
+  if (next !== lastBackend) {
+    lastBackend = next
+    invalidateLocalSetupEligibility()
+  }
+})
+
+const FINAL_STATES: readonly LocalSetupOfferState[] = ['accepted', 'dismissed']
 
 function transition(state: LocalSetupOfferState, patch: Partial<OfferRecord>): void {
+  // Another window may have closed the offer since this one last read it; a final state stays final.
+  const stored = readStoredRecord()
+
+  if (FINAL_STATES.includes(stored.state)) {
+    $stored.set(toStored(stored))
+
+    return
+  }
+
   setRecord({ ...$localSetupOffer.get(), ...patch, at: new Date().toISOString(), state })
 }
 
+/** The guide will not run for this identity: film seen already, or "choose a provider later". */
+function guideWillNotStart(): boolean {
+  return hasSeenIntroReveal() || $desktopOnboarding.get().firstRunSkipped
+}
+
 /**
- * Guided onboarding ending (either way) arms the offer. A build without guided
- * onboarding arms at boot. With it on, `idle`/`cinematic`/`guided`/`handoff`
- * wait: the card must not land on top of the guide.
+ * Guided onboarding ending (either way) arms the offer, and so does an install
+ * where the guide never runs (flag off, or `idle` with the guide ruled out).
+ * `cinematic`/`guided`/`handoff`, and an `idle` the guide may still leave, wait:
+ * the card must not land on top of the guide.
  */
 function armFromPhase(phase: OnboardingPhase): void {
   if ($localSetupOffer.get().state !== 'unarmed') {
     return
   }
 
-  if (phase === 'done' || phase === 'skipped') {
+  // Someone who closed the old local-setup tip already answered this offer.
+  if ($retiredTips.get().includes('local-setup')) {
+    transition('dismissed', { armedBy: 'retired-tip' })
+  } else if (phase === 'done' || phase === 'skipped') {
     transition('armed', { armedBy: `onboarding:${phase}` })
   } else if (!isOnboardingEnabled()) {
     transition('armed', { armedBy: 'no-guided-onboarding' })
+  } else if (phase === 'idle' && guideWillNotStart()) {
+    transition('armed', { armedBy: 'guide-will-not-start' })
   }
 }
 
 $onboardingGate.subscribe(gate => armFromPhase(gate.phase))
+$desktopOnboarding.listen(() => armFromPhase($onboardingGate.get().phase))
 
-export interface TurnCompleteSignal {
+interface TurnCompleteSignal {
+  /** Anything but a completed turn: errored, interrupted, cancelled. */
   failed: boolean
   sessionId: null | string
 }
@@ -191,8 +272,8 @@ export interface TurnCompleteSignal {
 /**
  * `message.complete` for the session the user is looking at. The whole agent
  * loop has returned at this point (tool calls and interim messages come before
- * it), so this is the end of a task, not a step in one. Errored turns do not
- * count; the caller filters subagent mirrors by only reporting the active session.
+ * it), so this is the end of a task, not a step in one. Turns that did not
+ * complete do not count; the caller only reports the session on screen.
  */
 export function reportLocalSetupTurnComplete({ failed, sessionId }: TurnCompleteSignal): void {
   if (failed || !sessionId || $localSetupOffer.get().state !== 'armed') {
@@ -223,11 +304,11 @@ export const $localSetupCardLive = computed(
 /** The model-menu row stays until setup completes, whatever happened to the card. */
 export const $localSetupRowFit = computed($localSetupEligibility, eligibility => eligibility?.fit ?? null)
 
-/** Asks the model pill that owns the active composer to open its menu, where the row sits on top. */
-export const $localSetupMenuRequest = atom(0)
+/** Asks the pill of one composer (by scope target) to open its menu, where the row sits on top. */
+export const $localSetupMenuRequest = atom<null | { seq: number; target: string }>(null)
 
-export function requestLocalSetupMenu(): void {
-  $localSetupMenuRequest.set($localSetupMenuRequest.get() + 1)
+export function requestLocalSetupMenu(target: string): void {
+  $localSetupMenuRequest.set({ seq: ($localSetupMenuRequest.get()?.seq ?? 0) + 1, target })
 }
 
 // ── Debug handle ────────────────────────────────────────────────────────────
@@ -264,7 +345,7 @@ window.__hermesTips = {
     return result
   },
   reset: () => {
-    setRecord(EMPTY)
+    $stored.set({})
     invalidateLocalSetupEligibility()
     armFromPhase($onboardingGate.get().phase)
   },

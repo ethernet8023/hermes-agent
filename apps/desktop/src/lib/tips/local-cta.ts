@@ -11,6 +11,6 @@ export const LOCAL_TIP_RESHOW_MS = 7 * 24 * 60 * 60_000
 
 /** Due = never shown, or shown long enough ago that repeating it reads as a
  *  reminder rather than a nag. Retirement is the caller's ledger, not ours. */
-export function localSetupDue(now: number, shownAt: number | undefined): boolean {
+export function localTipDue(now: number, shownAt: number | undefined): boolean {
   return shownAt === undefined || now - shownAt >= LOCAL_TIP_RESHOW_MS
 }

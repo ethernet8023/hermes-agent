@@ -14,11 +14,11 @@ import { useI18n } from '@/i18n'
 import { ChevronDown } from '@/lib/icons'
 import { formatModelPillLabel, providerDisplayName } from '@/lib/model-status-label'
 import { cn } from '@/lib/utils'
-import { $localSetupMenuRequest } from '@/store/local-setup-offer'
+import { $localSetupMenuRequest, acceptLocalSetupOffer } from '@/store/local-setup-offer'
 import { $currentModelSource, setModelPickerOpen } from '@/store/session'
 
 import { useComposerModelPillLabel } from './contrib'
-import { getActiveComposer, onComposerModelMenuRequest } from './focus'
+import { onComposerModelMenuRequest } from './focus'
 import { RICH_INPUT_SLOT } from './rich-editor'
 import { useComposerScope } from './scope'
 import type { ChatBarState } from './types'
@@ -115,21 +115,18 @@ export function ModelPill({
     [scope.target, disabled, hasLiveMenu]
   )
 
-  // The local-setup card's "Show me": open this menu, where the offer row sits
-  // on top. Only the pill of the composer the user last used answers, so split
-  // panes don't all open at once. A click is what fired it, never a background event.
+  // The local-setup card's "Show me": open THIS composer's menu (the card names
+  // its own composer), where the offer row sits on top. The offer is accepted
+  // only once a menu actually opened. A click fired it, never a background event.
   useEffect(
     () =>
-      $localSetupMenuRequest.listen(() => {
-        if (disabled || scope.target !== getActiveComposer()) {
+      $localSetupMenuRequest.listen(request => {
+        if (!request || request.target !== scope.target || disabled || !hasLiveMenu) {
           return
         }
 
-        if (hasLiveMenu) {
-          setOpen(true)
-        } else {
-          setModelPickerOpen(true)
-        }
+        acceptLocalSetupOffer()
+        setOpen(true)
       }),
     [scope.target, disabled, hasLiveMenu]
   )

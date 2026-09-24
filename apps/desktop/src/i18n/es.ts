@@ -4228,8 +4228,8 @@ export const esOverrides = {
     restoredDraftNotice: 'Se restauró tu mensaje sin enviar',
     restoredDraftUndo: 'Deshacer',
     localSetup: {
-      title: 'Esto podría ejecutarse en tu ordenador',
-      text: (model: string) => `${model} cabe en este equipo. Gratis, y los chats se quedan en tu ordenador.`,
+      title: 'Esto podría ejecutarse en este equipo',
+      text: (model: string) => `${model} cabe en este equipo. Gratis, y los chats se quedan en este equipo.`,
       action: 'Muéstrame'
     },
     queueEdit: 'Editar',
@@ -4631,7 +4631,7 @@ export const esOverrides = {
   handoffTour: {
     localTitle: 'Este equipo puede ejecutar modelos localmente',
     localText: (model: string) =>
-      `${model} encaja con tu hardware. Funciona gratis y los chats nunca salen de tu ordenador. Elígelo aquí, en el menú de modelos, cuando quieras.`,
+      `${model} encaja con tu hardware. Funciona gratis y los chats nunca salen de este equipo. Elígelo aquí, en el menú de modelos, cuando quieras.`,
     profileTitle: 'Tu primera tarea se ejecuta en el perfil predeterminado',
     profileText:
       'Esta barra cambia de perfil. El que está iluminado ahora es el predeterminado, donde está la sesión de la tarea. El otro es el perfil de configuración, donde está el chat de bienvenida.',

@@ -1,26 +1,25 @@
 import { useStore } from '@nanostores/react'
-import { useContext, useEffect } from 'react'
+import { useEffect } from 'react'
 
-import { Button } from '@/components/ui/button'
+import { SETTINGS_ROUTE } from '@/app/routes'
 import { Codicon } from '@/components/ui/codicon'
-import { DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
+import { DropdownMenuItem, dropdownMenuRow, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
 import { useI18n } from '@/i18n'
+import { cn } from '@/lib/utils'
 import { $localSetupRowFit, acceptLocalSetupOffer, refreshLocalSetupEligibility } from '@/store/local-setup-offer'
-
-import { ModelMenuCloseContext } from './model-catalog-menu'
+import { requestRoute } from '@/store/recovery-requests'
 
 /**
- * "Run locally" at the top of the model menu, for as long as this machine
- * qualifies and nothing is set up. The permanent home of the local-setup
- * offer: the card can be dismissed, this row stays until setup completes.
- * Opening the menu is what reads eligibility, once per connection.
+ * "Run locally" at the top of the composer's model menu, for as long as this
+ * machine qualifies and nothing is set up. The permanent home of the
+ * local-setup offer: the card can be dismissed, this row stays until setup
+ * completes. Every menu open re-reads eligibility (a user action, not a poll),
+ * so finishing setup retires the row. A menu item, so the keyboard reaches it.
  */
 export function LocalSetupMenuRow() {
   const fit = useStore($localSetupRowFit)
-  const closeMenu = useContext(ModelMenuCloseContext)
   const copy = useI18n().t.shell.modelMenu.localSetup
 
-  // Mounts once per menu open (a user action, not a poll): re-read so a finished setup retires the row.
   useEffect(() => {
     void refreshLocalSetupEligibility()
   }, [])
@@ -31,31 +30,23 @@ export function LocalSetupMenuRow() {
 
   return (
     <>
-      <div
-        className="m-1 flex items-center gap-2 rounded-md bg-accent/40 px-2 py-1.5"
+      <DropdownMenuItem
+        className={cn(dropdownMenuRow, 'items-start gap-2 py-1.5')}
         data-slot="model-menu-local-setup"
+        onSelect={() => {
+          acceptLocalSetupOffer()
+          requestRoute(`${SETTINGS_ROUTE}?tab=providers&pview=local`)
+        }}
       >
-        <Codicon className="shrink-0 text-(--ui-accent)" name="chip" size="0.8rem" />
-        <div className="min-w-0 flex-1 text-[0.7rem] leading-snug">
-          <div className="font-medium text-foreground">{copy.title}</div>
-          <div className="truncate text-muted-foreground">
+        <Codicon className="mt-0.5 shrink-0 text-(--ui-accent)" name="chip" size="0.8rem" />
+        <span className="min-w-0 flex-1 leading-snug">
+          <span className="block font-medium text-foreground">{copy.title}</span>
+          <span className="block truncate text-(--ui-text-tertiary)">
             {copy.text(fit.model.display_name, fit.model.size_label)}
-          </div>
-        </div>
-        <Button
-          className="h-6 shrink-0 rounded-md px-2 text-[0.68rem]"
-          onClick={() => {
-            acceptLocalSetupOffer()
-            closeMenu()
-            // Hash route, not useNavigate: this menu also mounts outside the app Router (plugin surfaces).
-            window.location.hash = '#/settings?tab=providers&pview=local'
-          }}
-          type="button"
-          variant="secondary"
-        >
-          {copy.action}
-        </Button>
-      </div>
+          </span>
+        </span>
+        <span className="shrink-0 self-center text-(--ui-accent)">{copy.action}</span>
+      </DropdownMenuItem>
       <DropdownMenuSeparator className="mx-0" />
     </>
   )

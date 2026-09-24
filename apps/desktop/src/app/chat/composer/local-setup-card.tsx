@@ -6,14 +6,15 @@ import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { useI18n } from '@/i18n'
 import {
-  $localSetupCardLive,
   $localSetupEligibility,
   $localSetupOffer,
-  acceptLocalSetupOffer,
   dismissLocalSetupOffer,
   readLocalSetupEligibility,
   requestLocalSetupMenu
 } from '@/store/local-setup-offer'
+import { isHudWindow } from '@/store/windows'
+
+import { useComposerScope } from './scope'
 
 interface LocalSetupCardProps {
   busy: boolean
@@ -23,26 +24,29 @@ interface LocalSetupCardProps {
 /**
  * "This could run on your computer" strip above the input, after the first
  * finished turn once onboarding is over (store/local-setup-offer.ts). The offer
- * is about the machine, not the chat, so it sits in the primary composer (not
- * split tiles) and survives a relaunch until ✕ or setup. Only while that session
- * is idle: an automatic follow-up turn hides it, the next idle brings it back.
- * Offers, never hijacks: no focus move; "Show me" opens the model menu on click.
+ * is about the machine, not the chat, so it sits in the main window's primary
+ * composer (not tiles, not the HUD) and survives a relaunch until x or Show me.
+ * Only while that session is idle: an automatic follow-up turn hides it, the
+ * next idle brings it back. Offers, never hijacks: "Show me" opens this
+ * composer's model menu on click, nothing moves by itself.
  */
 export function LocalSetupCard({ busy, guidedChat }: LocalSetupCardProps) {
   const primary = useSessionView().kind === 'primary'
-  const live = useStore($localSetupCardLive)
+  const { target } = useComposerScope()
   const offer = useStore($localSetupOffer)
-  const fit = useStore($localSetupEligibility)?.fit
+  const eligibility = useStore($localSetupEligibility)
+  const fit = eligibility?.fit
   const { t } = useI18n()
   const copy = t.composer.localSetup
-  // A card shown before a relaunch or reconnect has no eligibility cached yet: read it once for this state.
+
+  // No answer yet (relaunch, or the backend just changed) or a failed one: ask again.
   useEffect(() => {
-    if (offer.state === 'shown') {
+    if (offer.state === 'shown' && (!eligibility || eligibility.transient)) {
       void readLocalSetupEligibility()
     }
-  }, [offer.state])
+  }, [offer.state, eligibility])
 
-  if (!primary || !live || !fit || busy || guidedChat) {
+  if (offer.state !== 'shown' || !fit || !primary || busy || guidedChat || isHudWindow()) {
     return null
   }
 
@@ -60,25 +64,17 @@ export function LocalSetupCard({ busy, guidedChat }: LocalSetupCardProps) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <Button
-          className="h-6 rounded-md px-2 text-[0.68rem]"
-          onClick={() => {
-            acceptLocalSetupOffer()
-            requestLocalSetupMenu()
-          }}
-          type="button"
-          variant="secondary"
-        >
+        <Button onClick={() => requestLocalSetupMenu(target)} size="xs" type="button" variant="secondary">
           {copy.action}
         </Button>
         <Button
           aria-label={t.common.close}
-          className="h-6 rounded-md px-2 text-[0.68rem]"
           onClick={dismissLocalSetupOffer}
+          size="icon-xs"
           type="button"
           variant="ghost"
         >
-          ×
+          <Codicon name="close" size="0.7rem" />
         </Button>
       </div>
     </div>

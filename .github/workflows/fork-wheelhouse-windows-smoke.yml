@@ -29,7 +29,9 @@ jobs:
           python -c 'import platform,sys; assert platform.machine() == "ARM64" and sys.version_info[:2] == (3,14)'
           # Derive the native build ban from the pinned URL sources so a new
           # native dependency cannot silently slip through as an sdist.
-          mapfile -t native < <(python -c 'import tomllib; p=tomllib.load(open("pyproject.toml","rb")); print("\n".join(sorted(n for n,v in p["tool"]["uv"]["sources"].items() if any("/wheelhouse/" in x.get("url","") for x in v))))')
+          # Windows Python writes CRLF to redirected stdout; strip CR before
+          # handing package names to uv (same contract as the OS test selector).
+          mapfile -t native < <(python -c 'import tomllib; p=tomllib.load(open("pyproject.toml","rb")); print("\n".join(sorted(n for n,v in p["tool"]["uv"]["sources"].items() if any("/wheelhouse/" in x.get("url","") for x in v))))' | tr -d '\r')
           test "${#native[@]}" -gt 0
           ban=()
           for package in "${native[@]}"; do ban+=(--no-build-package "$package"); done

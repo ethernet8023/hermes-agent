@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -32,8 +33,6 @@ def verify_side_environment(root: Path) -> None:
 
 
 def verify_repair_path(root: Path) -> None:
-    import tomli_w
-
     recorded = root / "wheel-path-recorded"
     directory = recorded / "wheels"
     directory.mkdir(parents=True)
@@ -44,12 +43,11 @@ def verify_repair_path(root: Path) -> None:
     (recorded / "pyproject.toml").write_text(
         f'[tool.hermes.win-arm64-wheels]\nsmoke = '
         f'{{ filename = "{filename}", sha256 = "{sha}" }}\n', encoding="utf-8")
-    (recorded / "uv.lock").write_text(tomli_w.dumps({
-        "version": 1,
-        "package": [{"name": "smoke", "version": "1.0",
-                     "source": {"registry": str(directory)},
-                     "wheels": [{"path": str(directory / filename)}]}],
-    }), encoding="utf-8")
+    (recorded / "uv.lock").write_text(
+        'version = 1\n\n[[package]]\nname = "smoke"\nversion = "1.0"\n'
+        f'source = {{ registry = {json.dumps(str(directory))} }}\n'
+        f'wheels = [{{ path = {json.dumps(str(directory / filename))} }}]\n',
+        encoding="utf-8")
 
     repaired = root / "wheel-path-repaired"
     shutil.copytree(recorded, repaired)

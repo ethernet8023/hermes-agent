@@ -20,11 +20,6 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
-      - name: Isolate PM state for every consumer step
-        shell: bash
-        run: |
-          echo "HERMES_HOME=$RUNNER_TEMP/pm-fallback-home" >> "$GITHUB_ENV"
-          echo "HERMES_RUNTIME_DIR=$RUNNER_TEMP/pm-fallback-runtime" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-pm
         with:
           toolchain: python
@@ -34,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           python -c 'import platform,sys; print(platform.machine(), sys.version); assert platform.machine() == "ARM64" and sys.version_info[:2] == (3,14)'
-          python -c 'from pm.install import sync_venv; sync_venv(extras=[], explicit=True, plugins=[])'
+          python -c 'from pm.install import sync_venv; sync_venv(extras=[], explicit=True)'
           python -c 'import subprocess; from pm.environments import selected_venv,venv_python; from pm.paths import repo_root; exe=venv_python(selected_venv(repo_root())); subprocess.run([str(exe),"-c","import cryptography,httptools; from cryptography.hazmat.bindings._rust import openssl; print(\"PM native source fallback imports cleanly\")"],check=True)'
       - name: Repair the recorded generation
         shell: bash

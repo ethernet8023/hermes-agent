@@ -37,3 +37,8 @@ jobs:
           set -euo pipefail
           python -c 'from pm.install import sync_venv; sync_venv(repair=True)'
           python -c 'import subprocess; from pm.environments import selected_venv,venv_python; from pm.paths import repo_root; exe=venv_python(selected_venv(repo_root())); subprocess.run([str(exe),"-c","import cryptography,httptools; print(\"PM repaired native sources import cleanly\")"],check=True)'
+      - name: Verify side-environment build and local-wheel repair on native ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.ci.native_fallback_assertions

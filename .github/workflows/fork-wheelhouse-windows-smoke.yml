@@ -1,0 +1,44 @@
+name: Native Windows ARM64 source fallback smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-consumer:
+    if: github.repository == 'ethernet8023/hermes-agent' && github.ref == 'refs/heads/smoke/native-fallback'
+    runs-on: windows-11-arm
+    timeout-minutes: 180
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+      - name: Isolate PM state for every consumer step
+        shell: bash
+        run: |
+          echo "HERMES_HOME=$RUNNER_TEMP/pm-fallback-home" >> "$GITHUB_ENV"
+          echo "HERMES_RUNTIME_DIR=$RUNNER_TEMP/pm-fallback-runtime" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-pm
+        with:
+          toolchain: python
+          cache: 'false'
+      - name: Cold PM source install when every optional wheel is absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -c 'import platform,sys; print(platform.machine(), sys.version); assert platform.machine() == "ARM64" and sys.version_info[:2] == (3,14)'
+          python -c 'from pm.install import sync_venv; sync_venv(extras=[], explicit=True, plugins=[])'
+          python -c 'import subprocess; from pm.environments import selected_venv,venv_python; from pm.paths import repo_root; exe=venv_python(selected_venv(repo_root())); subprocess.run([str(exe),"-c","import cryptography,httptools; from cryptography.hazmat.bindings._rust import openssl; print(\"PM native source fallback imports cleanly\")"],check=True)'
+      - name: Repair the recorded generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -c 'from pm.install import sync_venv; sync_venv(repair=True)'
+          python -c 'import subprocess; from pm.environments import selected_venv,venv_python; from pm.paths import repo_root; exe=venv_python(selected_venv(repo_root())); subprocess.run([str(exe),"-c","import cryptography,httptools; print(\"PM repaired native sources import cleanly\")"],check=True)'
